@@ -1,0 +1,47 @@
+services:
+  directory_server:
+    build:
+      context: ..
+      dockerfile: directory_server/Dockerfile
+    container_name: jm_directory_server
+    environment:
+      - NETWORK=mainnet
+      - HOST=0.0.0.0
+      - PORT=5222
+      - MAX_PEERS=1000
+      - LOG_LEVEL=TRACE
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - tor_network
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: 2
+          memory: 1G
+
+  tor:
+    image: ghcr.io/m0wer/docker-tor:latest
+    container_name: jm_tor
+    user: "1000:1000"
+    volumes:
+      - ./tor/conf:/etc/tor:ro
+      - ./tor/data:/var/lib/tor
+      - ./tor/run:/var/run/tor
+    networks:
+      - tor_network
+      - external
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: 2
+          memory: 300M
+
+networks:
+  tor_network:
+    driver: bridge
+    internal: true
+  external:
+    driver: bridge

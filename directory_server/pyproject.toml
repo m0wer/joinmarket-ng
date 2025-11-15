@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jm-directory-server"
+version = "2.1.0"
+description = "JoinMarket Directory Server"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    {name = "JoinMarket Contributors"}
+]
+license = {text = "MIT"}
+dependencies = [
+    "jmcore",
+    "loguru>=0.7.2",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "stem>=1.8.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.21.0",
+    "ruff>=0.1.0",
+    "mypy>=1.7.0",
+    "psutil>=5.9.0",
+]
+
+[project.scripts]
+jm-directory-server = "directory_server.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.14"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v"
+asyncio_mode = "auto"

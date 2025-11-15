@@ -1,0 +1,83 @@
+name: tests
+
+on:
+  push:
+    paths:
+      - 'jmcore/**'
+      - 'directory_server/**'
+      - '.github/workflows/test.yaml'
+  workflow_call:
+
+jobs:
+  test-jmcore:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+
+      - name: Install jmcore dependencies
+        working-directory: jmcore
+        run: |
+          pip install -e .[dev]
+
+      - name: Run jmcore tests
+        working-directory: jmcore
+        run: pytest --junitxml=junit/test-results.xml --cov=jmcore --cov-report=term-missing --cov-report=xml -v
+
+      - name: Upload jmcore test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: jmcore-pytest-results
+          path: jmcore/junit/test-results.xml
+        if: ${{ always() }}
+
+      - name: Upload jmcore coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: jmcore-coverage
+          path: jmcore/coverage.xml
+        if: ${{ always() }}
+
+  test-directory-server:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+
+      - name: Install jmcore first
+        working-directory: jmcore
+        run: pip install -e .
+
+      - name: Install directory_server dependencies
+        working-directory: directory_server
+        run: pip install -e .[dev]
+
+      - name: Run directory_server tests
+        working-directory: directory_server
+        run: pytest --junitxml=junit/test-results.xml --cov=directory_server --cov-report=term-missing --cov-report=xml -v
+
+      - name: Upload directory_server test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: directory-server-pytest-results
+          path: directory_server/junit/test-results.xml
+        if: ${{ always() }}
+
+      - name: Upload directory_server coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: directory-server-coverage
+          path: directory_server/coverage.xml
+        if: ${{ always() }}
