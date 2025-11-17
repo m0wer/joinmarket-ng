@@ -47,6 +47,15 @@ docker-compose up -d
 
 4. Access the web interface at http://localhost:8000
 
+> **Note**: The `tor/conf/torrc` file must be manually created with the following content:
+> ```
+> SocksPort 0.0.0.0:9050
+> ControlPort 0.0.0.0:9051
+> CookieAuthentication 1
+> DataDirectory /var/lib/tor
+> Log notice stdout
+> ```
+
 ### Manual Installation
 
 1. Install dependencies:
