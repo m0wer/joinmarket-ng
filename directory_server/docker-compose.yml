@@ -10,7 +10,7 @@ services:
       - HOST=0.0.0.0
       - PORT=5222
       - MAX_PEERS=1000
-      - LOG_LEVEL=TRACE
+      - LOG_LEVEL=INFO
       - HEALTH_CHECK_HOST=0.0.0.0
       - HEALTH_CHECK_PORT=8080
     networks:
