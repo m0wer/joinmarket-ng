@@ -64,7 +64,9 @@ function updateDirectoryBreakdown() {
 
     const stats = orderbookData.directory_stats || {};
 
-    Object.entries(stats).forEach(([node, data]) => {
+    const sortedEntries = Object.entries(stats).sort((a, b) => b[1].offer_count - a[1].offer_count);
+
+    sortedEntries.forEach(([node, data]) => {
         const item = document.createElement('div');
         item.className = 'directory-item';
 
