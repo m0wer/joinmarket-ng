@@ -1,0 +1,181 @@
+"""
+Mempool.space API blockchain backend.
+Beginner-friendly backend that requires no setup.
+"""
+
+from __future__ import annotations
+
+import httpx
+from loguru import logger
+
+from jmwallet.backends.base import UTXO, BlockchainBackend, Transaction
+
+
+class MempoolBackend(BlockchainBackend):
+    """
+    Blockchain backend using Mempool.space API.
+    Works with public instance or self-hosted.
+    """
+
+    def __init__(self, base_url: str = "https://mempool.space/api", network: str = "mainnet"):
+        if network == "testnet":
+            base_url = "https://mempool.space/testnet/api"
+        elif network == "signet":
+            base_url = "https://mempool.space/signet/api"
+
+        self.base_url = base_url.rstrip("/")
+        self.network = network
+        self.client = httpx.AsyncClient(timeout=30.0)
+
+    async def get_utxos(self, addresses: list[str]) -> list[UTXO]:
+        utxos: list[UTXO] = []
+        for address in addresses:
+            try:
+                response = await self.client.get(f"{self.base_url}/address/{address}/utxo")
+                response.raise_for_status()
+                data = response.json()
+
+                for utxo_data in data:
+                    utxo = UTXO(
+                        txid=utxo_data["txid"],
+                        vout=utxo_data["vout"],
+                        value=utxo_data["value"],
+                        address=address,
+                        confirmations=utxo_data["status"].get("block_height", 0),
+                        scriptpubkey="",
+                        height=utxo_data["status"].get("block_height"),
+                    )
+                    utxos.append(utxo)
+
+                logger.debug(f"Found {len(data)} UTXOs for address {address}")
+
+            except httpx.HTTPError as e:
+                logger.warning(f"Failed to fetch UTXOs for {address}: {e}")
+                continue
+
+        return utxos
+
+    async def get_address_balance(self, address: str) -> int:
+        try:
+            response = await self.client.get(f"{self.base_url}/address/{address}")
+            response.raise_for_status()
+            data = response.json()
+
+            chain_stats = data.get("chain_stats", {})
+            funded = chain_stats.get("funded_txo_sum", 0)
+            spent = chain_stats.get("spent_txo_sum", 0)
+
+            balance = funded - spent
+            logger.debug(f"Balance for {address}: {balance} sats")
+            return balance
+
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to fetch balance for {address}: {e}")
+            return 0
+
+    async def broadcast_transaction(self, tx_hex: str) -> str:
+        try:
+            response = await self.client.post(f"{self.base_url}/tx", content=tx_hex)
+            response.raise_for_status()
+            txid = response.text.strip()
+            logger.info(f"Broadcast transaction: {txid}")
+            return txid
+
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to broadcast transaction: {e}")
+            raise ValueError(f"Broadcast failed: {e}") from e
+
+    async def get_transaction(self, txid: str) -> Transaction | None:
+        try:
+            response = await self.client.get(f"{self.base_url}/tx/{txid}")
+            response.raise_for_status()
+            data = response.json()
+
+            raw_response = await self.client.get(f"{self.base_url}/tx/{txid}/hex")
+            raw_response.raise_for_status()
+            raw_hex = raw_response.text.strip()
+
+            status = data.get("status", {})
+            confirmed = status.get("confirmed", False)
+            block_height = status.get("block_height") if confirmed else None
+            block_time = status.get("block_time") if confirmed else None
+
+            tip_height = await self.get_block_height()
+            confirmations = 0
+            if block_height:
+                confirmations = tip_height - block_height + 1
+
+            return Transaction(
+                txid=txid,
+                raw=raw_hex,
+                confirmations=confirmations,
+                block_height=block_height,
+                block_time=block_time,
+            )
+
+        except httpx.HTTPError as e:
+            logger.warning(f"Failed to fetch transaction {txid}: {e}")
+            return None
+
+    async def estimate_fee(self, target_blocks: int) -> int:
+        try:
+            response = await self.client.get(f"{self.base_url}/v1/fees/recommended")
+            response.raise_for_status()
+            data = response.json()
+
+            if target_blocks <= 1:
+                fee_rate = data.get("fastestFee", 10)
+            elif target_blocks <= 3:
+                fee_rate = data.get("halfHourFee", 5)
+            elif target_blocks <= 6:
+                fee_rate = data.get("hourFee", 3)
+            else:
+                fee_rate = data.get("minimumFee", 1)
+
+            logger.debug(f"Estimated fee for {target_blocks} blocks: {fee_rate} sat/vB")
+            return int(fee_rate)
+
+        except httpx.HTTPError as e:
+            logger.warning(f"Failed to estimate fee: {e}, using fallback")
+            return 10
+
+    async def get_block_height(self) -> int:
+        try:
+            response = await self.client.get(f"{self.base_url}/blocks/tip/height")
+            response.raise_for_status()
+            height = int(response.text.strip())
+            logger.debug(f"Current block height: {height}")
+            return height
+
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to fetch block height: {e}")
+            raise
+
+    async def get_block_time(self, block_height: int) -> int:
+        try:
+            block_hash = await self.get_block_hash(block_height)
+            response = await self.client.get(f"{self.base_url}/block/{block_hash}")
+            response.raise_for_status()
+            data = response.json()
+            timestamp = data.get("timestamp", 0)
+            logger.debug(f"Block {block_height} timestamp: {timestamp}")
+            return timestamp
+
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to fetch block time for height {block_height}: {e}")
+            raise
+
+    async def get_block_hash(self, block_height: int) -> str:
+        try:
+            response = await self.client.get(f"{self.base_url}/block-height/{block_height}")
+            response.raise_for_status()
+            block_hash = response.text.strip()
+            logger.debug(f"Block hash for height {block_height}: {block_hash}")
+            return block_hash
+
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to fetch block hash for height {block_height}: {e}")
+            raise
+
+    async def close(self) -> None:
+        await self.client.aclose()

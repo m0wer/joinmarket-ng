@@ -12,7 +12,8 @@ COPY jmcore/requirements.txt /app/jmcore/requirements.txt
 RUN pip install --no-cache-dir -r /app/jmcore/requirements.txt
 
 # Copy jmcore source and install as editable
-COPY jmcore /app/jmcore
+COPY jmcore/src /app/jmcore/src
+COPY jmcore/pyproject.toml /app/jmcore/
 RUN pip install --no-cache-dir -e /app/jmcore
 
 # Install directory_server dependencies from locked requirements

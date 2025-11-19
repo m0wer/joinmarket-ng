@@ -1,0 +1,147 @@
+version: '3.8'
+
+services:
+  # Bitcoin Core regtest node
+  bitcoin:
+    image: lncm/bitcoind:v28.0
+    container_name: jm-bitcoin
+    restart: unless-stopped
+    healthcheck:
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      test: ["CMD-SHELL", "bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo"]
+    command:
+      - '-server=1'
+      - '-regtest=1'
+      - '-rpcuser=test'
+      - '-rpcpassword=test'
+      - '-rpcallowip=0.0.0.0/0'
+      - '-rpcbind=0.0.0.0'
+      - '-rpcport=18443'
+      - '-txindex=1'
+      - '-fallbackfee=0.0002'
+      - '-zmqpubrawblock=tcp://0.0.0.0:28332'
+      - '-zmqpubrawtx=tcp://0.0.0.0:28333'
+      - '-debug=1'
+    ports:
+      - "18443:18443"
+      - "18444:18444"
+    volumes:
+      - bitcoin-data:/home/bitcoin/.bitcoin
+      - ./shared:/shared
+    networks:
+      - jm-network
+    labels:
+      ofelia.enabled: "true"
+      ofelia.job-exec.mining.schedule: "@every 10s"
+      ofelia.job-exec.mining.command: |
+        sh -c '
+        set -e
+        export PATH=/usr/local/bin:/usr/bin:/bin
+
+        blockcount=$$(bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getblockcount 2>/dev/null || echo "0")
+
+        # Initial setup - mine to mature coinbase
+        if [ "$$blockcount" -lt 101 ]; then
+          echo "Initial setup: mining block $$blockcount/101"
+          bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test createwallet "test" 2>/dev/null || true
+          addr=$$(bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getnewaddress)
+          bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test generatetoaddress 10 "$$addr"
+          exit 0
+        fi
+
+        # Mine mempool transactions
+        mempool_count=$$(bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getmempoolinfo | jq -r .size 2>/dev/null || echo "0")
+
+        if [ "$$mempool_count" -gt 0 ]; then
+          echo "Mining block with $$mempool_count transactions"
+          addr=$$(bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getnewaddress)
+          bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test generatetoaddress 1 "$$addr"
+        fi
+        '
+
+  # Scheduler for auto-mining
+  ofelia:
+    image: mcuadros/ofelia:latest
+    container_name: jm-ofelia
+    restart: unless-stopped
+    command: daemon --docker
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - bitcoin
+    networks:
+      - jm-network
+
+  # JoinMarket directory server
+  directory:
+    build:
+      context: .
+      dockerfile: directory_server/Dockerfile
+    container_name: jm-directory
+    restart: unless-stopped
+    environment:
+      - NETWORK=regtest
+      - LOG_LEVEL=INFO
+      - PORT=5222
+    ports:
+      - "5222:5222"
+    networks:
+      - jm-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s = socket.socket(); s.connect(('localhost', 5222)); s.close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      bitcoin:
+        condition: service_healthy
+
+  # Orderbook watcher (for monitoring)
+  orderbook-watcher:
+    build:
+      context: .
+      dockerfile: orderbook_watcher/Dockerfile
+    container_name: jm-orderbook-watcher
+    restart: unless-stopped
+    environment:
+      - NETWORK=regtest
+      - LOG_LEVEL=INFO
+      - DIRECTORY_SERVERS=jm-directory:5222
+    ports:
+      - "8080:8080"
+    networks:
+      - jm-network
+    depends_on:
+      directory:
+        condition: service_healthy
+
+  # Maker bot (to be run manually for testing)
+  # maker:
+  #   build:
+  #     context: ./maker
+  #     dockerfile: Dockerfile
+  #   container_name: jm-maker
+  #   environment:
+  #     - MNEMONIC=${MAKER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
+  #     - NETWORK=regtest
+  #     - BACKEND_TYPE=bitcoin_core
+  #     - BITCOIN_RPC_URL=http://jm-bitcoin:18443
+  #     - BITCOIN_RPC_USER=test
+  #     - BITCOIN_RPC_PASSWORD=test
+  #     - DIRECTORY_SERVERS=jm-directory:5222
+  #   networks:
+  #     - jm-network
+  #   depends_on:
+  #     bitcoin:
+  #       condition: service_healthy
+  #     directory:
+  #       condition: service_healthy
+
+volumes:
+  bitcoin-data:
+
+networks:
+  jm-network:
+    driver: bridge

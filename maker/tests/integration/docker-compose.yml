@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  bitcoin:
+    image: lncm/bitcoind:v28.0
+    container_name: jm-bitcoin-test
+    restart: unless-stopped
+    healthcheck:
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      test: ["CMD-SHELL", "bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo"]
+    command:
+      - '-server=1'
+      - '-regtest=1'
+      - '-rpcauth=test:5e8f6ad6f0d0b6883c3e52f3ae3f1f5$$7b2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e'
+      - '-rpcuser=test'
+      - '-rpcpassword=test'
+      - '-rpcallowip=0.0.0.0/0'
+      - '-rpcbind=0.0.0.0'
+      - '-rpcport=18443'
+      - '-txindex=1'
+      - '-fallbackfee=0.0002'
+      - '-zmqpubrawblock=tcp://0.0.0.0:28332'
+      - '-zmqpubrawtx=tcp://0.0.0.0:28333'
+    ports:
+      - "18443:18443"
+      - "18444:18444"
+    volumes:
+      - bitcoin-data:/home/bitcoin/.bitcoin
+      - ./shared:/shared
+    networks:
+      - jm-test
+    labels:
+      ofelia.enabled: "true"
+      ofelia.job-exec.mining.schedule: "@every 10s"
+      ofelia.job-exec.mining.command: |
+        sh -c '
+        set -e
+        export PATH=/usr/local/bin:/usr/bin:/bin
+
+        blockcount=$$(bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getblockcount 2>/dev/null || echo "0")
+
+        if [ "$$blockcount" -lt 101 ]; then
+          echo "Initial setup: mining to mature coinbase (block $$blockcount/101)"
+          bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test createwallet "test" 2>/dev/null || true
+          addr=$$(bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getnewaddress)
+          bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test generatetoaddress 10 "$$addr"
+          exit 0
+        fi
+
+        mempool_count=$$(bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getmempoolinfo | jq -r .size 2>/dev/null || echo "0")
+
+        if [ "$$mempool_count" -gt 0 ]; then
+          echo "Mining block with $$mempool_count transactions"
+          addr=$$(bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getnewaddress)
+          bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test generatetoaddress 1 "$$addr"
+        fi
+        '
+
+  ofelia:
+    image: mcuadros/ofelia:latest
+    container_name: jm-ofelia
+    restart: unless-stopped
+    command: daemon --docker
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - bitcoin
+    networks:
+      - jm-test
+
+  directory:
+    build:
+      context: ../../../directory_server
+      dockerfile: Dockerfile
+    container_name: jm-directory-test
+    restart: unless-stopped
+    environment:
+      - NETWORK=regtest
+      - LOG_LEVEL=DEBUG
+    ports:
+      - "5222:5222"
+    networks:
+      - jm-test
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s = socket.socket(); s.connect(('localhost', 5222)); s.close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  bitcoin-data:
+
+networks:
+  jm-test:
+    driver: bridge
