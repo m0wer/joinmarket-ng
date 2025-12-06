@@ -15,6 +15,7 @@ from jmcore.models import FidelityBond, Offer, OrderBook
 from loguru import logger
 
 from orderbook_watcher.directory_client import DirectoryClient
+from orderbook_watcher.nostr_adapter import NostrWatcherClient
 
 
 class DirectoryNodeStatus:
@@ -87,6 +88,7 @@ class OrderbookAggregator:
         max_retry_attempts: int = 3,
         retry_delay: float = 5.0,
         max_message_size: int = 2097152,
+        nostr_relays: list[str] | None = None,
     ) -> None:
         self.directory_nodes = directory_nodes
         self.network = network
@@ -97,6 +99,11 @@ class OrderbookAggregator:
         self.max_retry_attempts = max_retry_attempts
         self.retry_delay = retry_delay
         self.max_message_size = max_message_size
+        self.nostr_relays = nostr_relays or []
+        self.nostr_client: NostrWatcherClient | None = None
+        if self.nostr_relays:
+            self.nostr_client = NostrWatcherClient(self.nostr_relays)
+
         socks_proxy = f"socks5://{socks_host}:{socks_port}"
         logger.info(f"Configuring MempoolAPI with SOCKS proxy: {socks_proxy}")
         mempool_timeout = 60.0
@@ -169,11 +176,33 @@ class OrderbookAggregator:
         finally:
             await client.close()
 
+    async def fetch_from_nostr(self) -> tuple[list[Offer], list[FidelityBond], str]:
+        if not self.nostr_relays:
+            return [], [], "nostr"
+
+        logger.info(f"Fetching orderbook from Nostr relays: {self.nostr_relays}")
+        try:
+            client = NostrWatcherClient(self.nostr_relays)
+            offers, bonds = await client.fetch_offers()
+
+            for offer in offers:
+                offer.directory_node = "nostr"
+            # Bonds handling if any
+
+            return offers, bonds, "nostr"
+        except Exception as e:
+            logger.error(f"Failed to fetch from Nostr: {e}")
+            return [], [], "nostr"
+
     async def update_orderbook(self) -> OrderBook:
         tasks = [
             self.fetch_from_directory(onion_address, port)
             for onion_address, port in self.directory_nodes
         ]
+
+        # Add Nostr task
+        if self.nostr_relays:
+            tasks.append(self.fetch_from_nostr())
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -286,6 +315,11 @@ class OrderbookAggregator:
 
         self._bond_calculation_task = asyncio.create_task(self._background_bond_calculator())
 
+        if self.nostr_client:
+            logger.info("Starting continuous Nostr listener")
+            task = asyncio.create_task(self.nostr_client.listen_continuously())
+            self.listener_tasks.append(task)
+
         connection_tasks = [
             self._connect_to_node(onion_address, port)
             for onion_address, port in self.directory_nodes
@@ -344,6 +378,16 @@ class OrderbookAggregator:
 
     async def get_live_orderbook(self, calculate_bonds: bool = True) -> OrderBook:
         orderbook = OrderBook(timestamp=datetime.utcnow())
+
+        if self.nostr_client:
+            offers = self.nostr_client.get_current_offers()
+            bonds = self.nostr_client.get_current_bonds()
+            if offers:
+                logger.debug(f"Nostr: {len(offers)} offers, {len(bonds)} bonds")
+                for offer in offers:
+                    offer.directory_node = "nostr"
+                orderbook.add_offers(offers, "nostr")
+                orderbook.add_fidelity_bonds(bonds, "nostr")
 
         for node_id, client in self.clients.items():
             offers = client.get_current_offers()

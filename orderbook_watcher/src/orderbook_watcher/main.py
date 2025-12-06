@@ -35,14 +35,23 @@ async def run_watcher() -> None:
     logger.info(f"Mempool API: {settings.mempool_api_url}")
 
     directory_nodes = settings.get_directory_nodes()
-    if not directory_nodes:
-        logger.error("No directory nodes configured. Set DIRECTORY_NODES environment variable.")
+    nostr_relays = settings.get_nostr_relays()
+
+    if not directory_nodes and not nostr_relays:
+        logger.error("No directory nodes or Nostr relays configured.")
+        logger.error("Set DIRECTORY_NODES environment variable.")
         logger.error("Example: DIRECTORY_NODES=node1.onion:5222,node2.onion:5222")
+        logger.error("Or set NOSTR_RELAYS environment variable.")
+        logger.error("Example: NOSTR_RELAYS=wss://relay.damus.io")
         sys.exit(1)
 
     logger.info(f"Directory nodes: {len(directory_nodes)}")
     for node in directory_nodes:
         logger.info(f"  - {node[0]}:{node[1]}")
+
+    logger.info(f"Nostr relays: {len(nostr_relays)}")
+    for relay in nostr_relays:
+        logger.info(f"  - {relay}")
 
     aggregator = OrderbookAggregator(
         directory_nodes=directory_nodes,
@@ -52,24 +61,24 @@ async def run_watcher() -> None:
         timeout=settings.connection_timeout,
         mempool_api_url=settings.mempool_api_url,
         max_message_size=settings.max_message_size,
+        nostr_relays=settings.get_nostr_relays(),
     )
 
     server = OrderbookServer(settings, aggregator)
 
     loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
 
     def shutdown_handler() -> None:
         logger.info("Received shutdown signal")
-        asyncio.create_task(server.stop())
+        shutdown_event.set()
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, shutdown_handler)
 
     try:
         await server.start()
-
-        while True:
-            await asyncio.sleep(1)
+        await shutdown_event.wait()
     except asyncio.CancelledError:
         logger.info("Watcher cancelled")
     except Exception as e:

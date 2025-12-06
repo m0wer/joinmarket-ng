@@ -1,0 +1,11 @@
+version: '3.8'
+services:
+  nostr-relay:
+    image: scsibug/nostr-rs-relay:latest
+    ports:
+      - "7777:8080"
+    volumes:
+      - nostr-data:/usr/src/app/db
+
+volumes:
+  nostr-data:

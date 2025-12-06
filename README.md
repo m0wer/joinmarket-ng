@@ -72,6 +72,38 @@ Real-time orderbook aggregation and monitoring service:
 - Bond verification and validation
 - Web-based dashboard for market visibility
 
+## Nostr Integration (PoC)
+
+We are experimenting with [Nostr](https://nostr.com/) as a resilient, decentralized transport layer for JoinMarket offers. This Proof of Concept (PoC) allows makers to publish offers to Nostr relays and the Orderbook Watcher to aggregate them.
+
+### Running the PoC
+
+1. **Start a local Nostr relay**:
+   ```bash
+   docker-compose -f docker-compose.nostr.yml up -d
+   ```
+   This starts a relay at `ws://localhost:7777`.
+
+2. **Publish Dummy Offers**:
+   We have provided scripts to publish random offers to the relay.
+   ```bash
+   python scripts/nostr_publish.py
+   ```
+
+3. **Configure Orderbook Watcher**:
+   Update your environment variables to listen to the relay.
+   ```bash
+   export NOSTR_RELAYS=ws://localhost:7777
+   ```
+   Or add it to your `.env` file.
+
+4. **Run the Watcher**:
+   Start the watcher as usual. It will now fetch offers from both the configured directory nodes and the Nostr relays.
+   ```bash
+   cd orderbook_watcher
+   python -m orderbook_watcher.main
+   ```
+
 ## Development Philosophy
 
 - **SOLID Principles**: Clean architecture with clear separation of concerns

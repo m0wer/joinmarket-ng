@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     max_message_size: int = 2097152  # 2MB
     connection_timeout: float = 30.0
 
+    nostr_relays: str = ""
+
     def get_directory_nodes(self) -> list[tuple[str, int]]:
         if not self.directory_nodes:
             return []
@@ -51,6 +53,11 @@ class Settings(BaseSettings):
             else:
                 nodes.append((node, 5222))
         return nodes
+
+    def get_nostr_relays(self) -> list[str]:
+        if not self.nostr_relays:
+            return []
+        return [r.strip() for r in self.nostr_relays.split(",") if r.strip()]
 
 
 def get_settings() -> Settings:
