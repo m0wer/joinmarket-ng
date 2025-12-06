@@ -8,13 +8,17 @@ annotated-types==0.7.0
     # via pydantic
 anyio==4.12.0
     # via httpx
+asn1crypto==1.5.1
+    # via coincurve
 certifi==2025.11.12
     # via
     #   httpcore
     #   httpx
 cffi==2.0.0
-    # via cryptography
-coincurve==21.0.0
+    # via
+    #   coincurve
+    #   cryptography
+coincurve==20.0.0
     # via jmcore (pyproject.toml)
 cryptography==46.0.3
     # via jmcore (pyproject.toml)
