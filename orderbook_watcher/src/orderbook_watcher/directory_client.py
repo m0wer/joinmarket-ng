@@ -88,7 +88,7 @@ class DirectoryClient:
         socks_host: str = "127.0.0.1",
         socks_port: int = 9050,
         timeout: float = 30.0,
-        max_message_size: int = 40000,
+        max_message_size: int = 2097152,
         on_disconnect: Callable[[], None] | None = None,
     ) -> None:
         self.onion_address = onion_address

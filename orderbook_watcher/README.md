@@ -101,7 +101,7 @@ All configuration is done via environment variables:
 | `HTTP_PORT` | HTTP server port | 8000 |
 | `UPDATE_INTERVAL` | Orderbook update interval in seconds | 60 |
 | `LOG_LEVEL` | Logging level (DEBUG/INFO/WARNING/ERROR) | INFO |
-| `MAX_MESSAGE_SIZE` | Maximum message size in bytes | 40000 |
+| `MAX_MESSAGE_SIZE` | Maximum message size in bytes | 2097152 |
 | `CONNECTION_TIMEOUT` | Connection timeout in seconds | 30.0 |
 
 ## Exposing as a Tor Hidden Service
