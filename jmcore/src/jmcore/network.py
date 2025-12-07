@@ -117,6 +117,26 @@ class ConnectionPool:
         return len(self.connections)
 
 
+async def connect_direct(
+    host: str,
+    port: int,
+    max_message_size: int = 2097152,  # 2MB
+    timeout: float = 30.0,
+) -> TCPConnection:
+    """Connect directly via TCP without Tor (for local development/testing)."""
+    try:
+        logger.info(f"Connecting directly to {host}:{port}")
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port, limit=max_message_size),
+            timeout=timeout,
+        )
+        logger.info(f"Connected to {host}:{port}")
+        return TCPConnection(reader, writer, max_message_size)
+    except Exception as e:
+        logger.error(f"Failed to connect to {host}:{port}: {e}")
+        raise ConnectionError(f"Direct connection failed: {e}") from e
+
+
 async def connect_via_tor(
     onion_address: str,
     port: int,

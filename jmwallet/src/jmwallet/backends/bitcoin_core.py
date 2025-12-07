@@ -5,6 +5,8 @@ Uses RPC calls but NOT wallet functionality (no BDB dependency).
 
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 from loguru import logger
 
@@ -30,7 +32,7 @@ class BitcoinCoreBackend(BlockchainBackend):
         self.client = httpx.AsyncClient(timeout=30.0, auth=(rpc_user, rpc_password))
         self._request_id = 0
 
-    async def _rpc_call(self, method: str, params: list | None = None) -> dict:
+    async def _rpc_call(self, method: str, params: list | None = None) -> Any:
         self._request_id += 1
         payload = {
             "jsonrpc": "2.0",

@@ -12,6 +12,7 @@ Tests all components working together:
 import asyncio
 
 import pytest
+import pytest_asyncio
 
 from jmcore.models import NetworkType
 from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
@@ -28,9 +29,6 @@ def bitcoin_backend():
         rpc_user="test",
         rpc_password="test",
     )
-
-
-import pytest_asyncio
 
 
 @pytest_asyncio.fixture
@@ -145,7 +143,6 @@ async def test_maker_bot_initialization(bitcoin_backend, maker_config):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip("Requires directory server running")
 async def test_maker_bot_connect_directory(bitcoin_backend, maker_config):
     """Test maker bot connecting to directory server"""
     wallet = WalletService(
@@ -156,14 +153,30 @@ async def test_maker_bot_connect_directory(bitcoin_backend, maker_config):
 
     bot = MakerBot(wallet, bitcoin_backend, maker_config)
 
-    try:
-        await asyncio.wait_for(bot.start(), timeout=30.0)
+    # Start the bot in the background
+    start_task = asyncio.create_task(bot.start())
 
-        assert len(bot.directory_connections) > 0
-        assert bot.running
+    try:
+        # Wait for connection to establish (wallet sync takes ~2s, connection ~0.5s)
+        await asyncio.sleep(10)
+
+        # Check that bot connected
+        assert len(bot.directory_connections) > 0, (
+            "Should have connected to directory server. "
+            f"Connections: {bot.directory_connections}, Running: {bot.running}"
+        )
+        assert bot.running, "Bot should be running"
 
     finally:
+        # Stop the bot
         await bot.stop()
+        # Cancel the start task if still running
+        start_task.cancel()
+        try:
+            await start_task
+        except asyncio.CancelledError:
+            pass
+        await wallet.close()
 
 
 @pytest.mark.asyncio

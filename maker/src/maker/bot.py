@@ -15,6 +15,7 @@ import json
 from typing import Any
 
 from jmcore.crypto import generate_jm_nick
+from jmcore.models import Offer
 from jmcore.network import TCPConnection, connect_via_tor
 from jmcore.protocol import (
     COMMAND_PREFIX,
@@ -51,7 +52,7 @@ class MakerBot:
 
         self.directory_connections: list[TCPConnection] = []
         self.active_sessions: dict[str, CoinJoinSession] = {}
-        self.current_offers = []
+        self.current_offers: list[Offer] = []
 
         self.running = False
 
@@ -85,10 +86,24 @@ class MakerBot:
             for dir_server in self.config.directory_servers:
                 try:
                     parts = dir_server.split(":")
-                    onion_addr = parts[0]
+                    host = parts[0]
                     port = int(parts[1]) if len(parts) > 1 else 5222
 
-                    connection = await connect_via_tor(onion_addr, port)
+                    # Use direct connection for localhost/local IPs, Tor for onion addresses
+                    if host.endswith(".onion"):
+                        connection = await connect_via_tor(host, port)
+                    elif (
+                        host in ("localhost", "127.0.0.1")
+                        or host.startswith("192.168.")
+                        or host.startswith("10.")
+                    ):
+                        from jmcore.network import connect_direct
+
+                        connection = await connect_direct(host, port)
+                    else:
+                        # For public IPs, use Tor by default
+                        connection = await connect_via_tor(host, port)
+
                     await self._handshake(connection)
                     self.directory_connections.append(connection)
 

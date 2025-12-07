@@ -49,7 +49,7 @@ def get_nums_point(index: int) -> ec.EllipticCurvePublicKey:
 
 def scalar_mult(scalar: int, point: ec.EllipticCurvePublicKey) -> ec.EllipticCurvePublicKey:
     """Multiply EC point by scalar"""
-    scalar_bytes = scalar.to_bytes(32, "big")
+    scalar.to_bytes(32, "big")
     private_key = ec.derive_private_key(scalar, ec.SECP256K1())
 
     return private_key.public_key()
@@ -82,8 +82,8 @@ def point_add(
 
 
 def verify_podle(
-    P: bytes,
-    P2: bytes,
+    p: bytes,
+    p2: bytes,
     sig: bytes,
     e: bytes,
     commitment: bytes,
@@ -96,8 +96,8 @@ def verify_podle(
     without revealing the private key itself.
 
     Args:
-        P: Public key bytes (33 bytes compressed)
-        P2: Commitment public key bytes (33 bytes compressed)
+        p: Public key bytes (33 bytes compressed)
+        p2: Commitment public key bytes (33 bytes compressed)
         sig: Signature s value (32 bytes)
         e: Challenge e value (32 bytes)
         commitment: sha256(P2) commitment (32 bytes)
@@ -107,10 +107,10 @@ def verify_podle(
         (is_valid, error_message)
     """
     try:
-        if len(P) != 33:
-            return False, f"Invalid P length: {len(P)}, expected 33"
-        if len(P2) != 33:
-            return False, f"Invalid P2 length: {len(P2)}, expected 33"
+        if len(p) != 33:
+            return False, f"Invalid P length: {len(p)}, expected 33"
+        if len(p2) != 33:
+            return False, f"Invalid P2 length: {len(p2)}, expected 33"
         if len(sig) != 32:
             return False, f"Invalid sig length: {len(sig)}, expected 32"
         if len(e) != 32:
@@ -118,12 +118,12 @@ def verify_podle(
         if len(commitment) != 32:
             return False, f"Invalid commitment length: {len(commitment)}, expected 32"
 
-        expected_commitment = hashlib.sha256(P2).digest()
+        expected_commitment = hashlib.sha256(p2).digest()
         if commitment != expected_commitment:
             return False, "Commitment does not match H(P2)"
 
-        P_point = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256K1(), P)
-        P2_point = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256K1(), P2)
+        p_point = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256K1(), p)
+        p2_point = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256K1(), p2)
 
         s_int = int.from_bytes(sig, "big")
         e_int = int.from_bytes(e, "big")
@@ -131,7 +131,7 @@ def verify_podle(
         if s_int >= SECP256K1_N or e_int >= SECP256K1_N:
             return False, "Signature values out of range"
 
-        sG = scalar_mult(
+        sg = scalar_mult(
             s_int,
             ec.EllipticCurvePublicKey.from_encoded_point(
                 ec.SECP256K1(),
@@ -141,25 +141,25 @@ def verify_podle(
 
         for index in index_range:
             try:
-                J = get_nums_point(index)
+                j = get_nums_point(index)
 
-                eP = scalar_mult(e_int, P_point)
-                KG = point_add(sG, eP)
+                ep = scalar_mult(e_int, p_point)
+                kg = point_add(sg, ep)
 
-                sJ = scalar_mult(s_int, J)
-                eP2 = scalar_mult(e_int, P2_point)
-                KJ = point_add(sJ, eP2)
+                sj = scalar_mult(s_int, j)
+                ep2 = scalar_mult(e_int, p2_point)
+                kj = point_add(sj, ep2)
 
-                KG_bytes = KG.public_bytes(
+                kg_bytes = kg.public_bytes(
                     encoding=serialization.Encoding.X962,
                     format=serialization.PublicFormat.CompressedPoint,
                 )
-                KJ_bytes = KJ.public_bytes(
+                kj_bytes = kj.public_bytes(
                     encoding=serialization.Encoding.X962,
                     format=serialization.PublicFormat.CompressedPoint,
                 )
 
-                e_check = hashlib.sha256(KG_bytes + KJ_bytes + P + P2).digest()
+                e_check = hashlib.sha256(kg_bytes + kj_bytes + p + p2).digest()
 
                 if e_check == e:
                     logger.debug(f"PoDLE verification successful at index {index}")
@@ -198,8 +198,8 @@ def parse_podle_revelation(revelation: dict[str, Any]) -> dict[str, Any] | None:
                 logger.warning(f"Missing required field in PoDLE revelation: {field}")
                 return None
 
-        P_bytes = bytes.fromhex(revelation["P"])
-        P2_bytes = bytes.fromhex(revelation["P2"])
+        p_bytes = bytes.fromhex(revelation["P"])
+        p2_bytes = bytes.fromhex(revelation["P2"])
         sig_bytes = bytes.fromhex(revelation["sig"])
         e_bytes = bytes.fromhex(revelation["e"])
 
@@ -212,8 +212,8 @@ def parse_podle_revelation(revelation: dict[str, Any]) -> dict[str, Any] | None:
         vout = int(utxo_parts[1])
 
         return {
-            "P": P_bytes,
-            "P2": P2_bytes,
+            "P": p_bytes,
+            "P2": p2_bytes,
             "sig": sig_bytes,
             "e": e_bytes,
             "txid": txid,

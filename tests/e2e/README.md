@@ -69,11 +69,9 @@ key = master.derive('m/84\'/0\'/0\'/0/0')
 print(key.get_address('regtest'))
 "
 
-# Send coins to that address
-docker exec jm-bitcoin bitcoin-cli -regtest -rpcuser=test -rpcpassword=test sendtoaddress <ADDRESS> 1.0
-
-# Mine a block
-docker exec jm-bitcoin bitcoin-cli -regtest -rpcuser=test -rpcpassword=test -generate 1
+# Mine blocks to that address (110 blocks for coinbase maturity)
+# Note: On regtest, mining to an address funds it with the coinbase reward (50 BTC)
+docker exec jm-bitcoin bitcoin-cli -regtest -rpcuser=test -rpcpassword=test generatetoaddress 110 <ADDRESS>
 ```
 
 ## Running Tests
@@ -278,11 +276,9 @@ nc -zv localhost 5222
 ```bash
 # Check if wallet address has funds
 ADDR="bcrt1q..."  # Your address
-docker exec jm-bitcoin bitcoin-cli -regtest -rpcuser=test -rpcpassword=test scantxoutset start "[\"addr($ADDR)\"]"
 
-# Send funds if needed
-docker exec jm-bitcoin bitcoin-cli -regtest -rpcuser=test -rpcpassword=test sendtoaddress $ADDR 1.0
-docker exec jm-bitcoin bitcoin-cli -regtest -rpcuser=test -rpcpassword=test -generate 1
+# Mine directly to the address to fund it (coinbase reward)
+docker exec jm-bitcoin bitcoin-cli -regtest -rpcuser=test -rpcpassword=test generatetoaddress 110 $ADDR
 ```
 
 ### Tests Timing Out

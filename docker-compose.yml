@@ -1,9 +1,8 @@
-version: '3.8'
-
 services:
   # Bitcoin Core regtest node
+  # Using kylemanna/bitcoind:latest which is based on v29.1
   bitcoin:
-    image: lncm/bitcoind:v28.0
+    image: kylemanna/bitcoind:latest
     container_name: jm-bitcoin
     restart: unless-stopped
     healthcheck:
@@ -108,7 +107,7 @@ services:
     environment:
       - NETWORK=regtest
       - LOG_LEVEL=INFO
-      - DIRECTORY_SERVERS=jm-directory:5222
+      - DIRECTORY_NODES=jm-directory:5222
     ports:
       - "8080:8080"
     networks:
@@ -118,26 +117,33 @@ services:
         condition: service_healthy
 
   # Maker bot (to be run manually for testing)
-  # maker:
-  #   build:
-  #     context: ./maker
-  #     dockerfile: Dockerfile
-  #   container_name: jm-maker
-  #   environment:
-  #     - MNEMONIC=${MAKER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
-  #     - NETWORK=regtest
-  #     - BACKEND_TYPE=bitcoin_core
-  #     - BITCOIN_RPC_URL=http://jm-bitcoin:18443
-  #     - BITCOIN_RPC_USER=test
-  #     - BITCOIN_RPC_PASSWORD=test
-  #     - DIRECTORY_SERVERS=jm-directory:5222
-  #   networks:
-  #     - jm-network
-  #   depends_on:
-  #     bitcoin:
-  #       condition: service_healthy
-  #     directory:
-  #       condition: service_healthy
+  maker:
+    build:
+      context: .
+      dockerfile: maker/Dockerfile
+    container_name: jm-maker
+    restart: "no"  # Manual start only
+    environment:
+      - MNEMONIC=${MAKER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
+      - NETWORK=regtest
+      - BACKEND_TYPE=bitcoin_core
+      - BITCOIN_RPC_URL=http://jm-bitcoin:18443
+      - BITCOIN_RPC_USER=test
+      - BITCOIN_RPC_PASSWORD=test
+      - DIRECTORY_SERVERS=jm-directory:5222
+      - LOG_LEVEL=DEBUG
+      - MIN_SIZE=10000
+      - TX_FEE_CONTRIBUTION=500
+      - CJ_FEE_RELATIVE=0.001
+    networks:
+      - jm-network
+    depends_on:
+      bitcoin:
+        condition: service_healthy
+      directory:
+        condition: service_healthy
+    profiles:
+      - maker  # Only start with: docker-compose --profile maker up
 
 volumes:
   bitcoin-data:

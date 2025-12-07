@@ -1,8 +1,6 @@
-version: '3.8'
-
 services:
   bitcoin:
-    image: lncm/bitcoind:v28.0
+    image: kylemanna/bitcoind:latest
     container_name: jm-bitcoin-test
     restart: unless-stopped
     healthcheck:

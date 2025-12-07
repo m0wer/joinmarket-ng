@@ -16,13 +16,13 @@ def hash160(data: bytes) -> bytes:
 
 def bech32_polymod(values: list[int]) -> int:
     """Bech32 checksum polymod"""
-    GEN = [0x3B6A57B2, 0x26508E6D, 0x1EA119FA, 0x3D4233DD, 0x2A1462B3]
+    gen = [0x3B6A57B2, 0x26508E6D, 0x1EA119FA, 0x3D4233DD, 0x2A1462B3]
     chk = 1
     for v in values:
         b = chk >> 25
         chk = (chk & 0x1FFFFFF) << 5 ^ v
         for i in range(5):
-            chk ^= GEN[i] if ((b >> i) & 1) else 0
+            chk ^= gen[i] if ((b >> i) & 1) else 0
     return chk
 
 

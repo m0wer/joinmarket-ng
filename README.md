@@ -24,7 +24,7 @@ We are incrementally implementing JoinMarket components while maintaining protoc
 | 2 | **Directory Server** | ✅ Complete | Peer discovery and message routing relay |
 | 3 | **Orderbook Watcher** | ✅ Complete | Monitor and aggregate CoinJoin orders |
 | 4 | **jmwallet** | ✅ Complete | BIP32/39/84 wallet with pluggable backends (NO BerkeleyDB!) |
-| 5 | **Maker Bot** | 🚧 85% | Yield generator - PoDLE, TX verification done, signing WIP |
+| 5 | **Maker Bot** | ✅ Complete | Yield generator - PoDLE, TX verification, signing, fidelity bonds |
 | 6 | **Taker Bot** | 📋 Planned | CoinJoin participant |
 | 7 | **Protocol Extensions** | 🔮 Future | Nostr relays, [CoinJoinXT](https://www.youtube.com/watch?v=YS0MksuMl9k) + LN |
 
@@ -33,9 +33,9 @@ We are incrementally implementing JoinMarket components while maintaining protoc
 - ✅ Transaction verification (prevents fund loss)
 - ✅ CoinJoin protocol handler
 - ✅ Offer management
-- ⚠️ Transaction signing (placeholder - needs completion)
-- ⚠️ Fidelity bonds (not yet implemented)
-- ⚠️ CLI interface (not yet implemented)
+- ✅ Transaction signing
+- ✅ Fidelity bonds
+- ✅ CLI interface
 
 All components maintain backwards compatibility with the reference implementation.
 

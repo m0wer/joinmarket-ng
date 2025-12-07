@@ -16,7 +16,7 @@ import time
 from enum import Enum
 from typing import Any
 
-from jmcore.models import Offer
+from jmcore.models import NetworkType, Offer
 from jmwallet.backends.base import BlockchainBackend
 from jmwallet.wallet.models import UTXOInfo
 from jmwallet.wallet.service import WalletService
@@ -244,6 +244,9 @@ class CoinJoinSession:
 
             logger.info(f"Received !tx from {self.taker_nick}, verifying...")
 
+            # Convert network string to NetworkType enum
+            network = NetworkType(self.wallet.network)
+
             is_valid, error = verify_unsigned_transaction(
                 tx_hex=tx_hex,
                 our_utxos=self.our_utxos,
@@ -253,6 +256,7 @@ class CoinJoinSession:
                 cjfee=self.offer.cjfee,
                 txfee=self.offer.txfee,
                 offer_type=self.offer.ordertype,
+                network=network,
             )
 
             if not is_valid:
@@ -339,13 +343,11 @@ class CoinJoinSession:
             logger.error(f"Failed to select UTXOs: {e}")
             return {}, "", "", -1
 
-    async def _sign_transaction(self, tx_hex: str) -> list[str]:
+    async def _sign_transaction(self, tx_hex: str) -> list[dict[str, Any]]:
         """Sign our inputs in the transaction."""
         try:
             tx_bytes = bytes.fromhex(tx_hex)
             tx = deserialize_transaction(tx_bytes)
-
-            signatures: list[str] = []
 
             signatures_info = []
 
@@ -379,8 +381,6 @@ class CoinJoinSession:
                 )
 
             return signatures_info
-
-            return signatures
 
         except TransactionSigningError as e:
             logger.error(f"Signing error: {e}")

@@ -256,6 +256,7 @@ jobs:
       always() &&
       needs.test-jmcore.result == 'success' &&
       needs.test-jmwallet.result == 'success'
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -273,9 +274,53 @@ jobs:
           pip install -e directory_server[dev]
           pip install -e orderbook_watcher[dev]
           pip install -e maker[dev]
+          pip install httpx loguru pytest-asyncio
+
+      - name: Start Bitcoin regtest node
+        run: |
+          docker run -d \
+            --name bitcoin-regtest \
+            -p 18443:18443 \
+            kylemanna/bitcoind:latest \
+            -regtest \
+            -server=1 \
+            -rpcuser=test \
+            -rpcpassword=test \
+            -rpcallowip=0.0.0.0/0 \
+            -rpcbind=0.0.0.0 \
+            -rpcport=18443 \
+            -txindex=1 \
+            -fallbackfee=0.0002
+
+          # Wait for Bitcoin to be ready
+          echo "Waiting for Bitcoin node to be ready..."
+          for i in {1..30}; do
+            if docker exec bitcoin-regtest bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo 2>/dev/null; then
+              echo "Bitcoin node is ready"
+              break
+            fi
+            echo "Attempt $i/30..."
+            sleep 2
+          done
+
+          echo "Bitcoin regtest ready (wallet-free mode)"
 
       - name: Run e2e tests
-        run: pytest tests/e2e --junitxml=junit/test-results.xml --cov --cov-report=term-missing --cov-report=xml -v
+        env:
+          BITCOIN_RPC_URL: http://127.0.0.1:18443
+          BITCOIN_RPC_USER: test
+          BITCOIN_RPC_PASSWORD: test
+        run: pytest tests/e2e --junitxml=junit/test-results.xml --cov --cov-report=term-missing --cov-report=xml -v -s
+
+      - name: Show Bitcoin logs on failure
+        if: failure()
+        run: docker logs bitcoin-regtest
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker stop bitcoin-regtest || true
+          docker rm bitcoin-regtest || true
 
       - name: Upload e2e test results
         uses: actions/upload-artifact@v4

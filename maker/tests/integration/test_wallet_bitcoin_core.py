@@ -45,7 +45,10 @@ def bitcoin_backend():
 @pytest.fixture
 def test_wallet(bitcoin_backend):
     """Test wallet"""
-    mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+    mnemonic = (
+        "abandon abandon abandon abandon abandon abandon "
+        "abandon abandon abandon abandon abandon about"
+    )
     return WalletService(
         mnemonic=mnemonic,
         backend=bitcoin_backend,

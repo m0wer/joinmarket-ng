@@ -78,7 +78,7 @@ async def test():
 
     # Fund the address using Bitcoin Core
     # (from another terminal)
-    # docker exec jm-bitcoin-test bitcoin-cli -regtest -rpcuser=test -rpcpassword=test sendtoaddress <addr> 1.0
+    # docker exec jm-bitcoin-test bitcoin-cli -regtest -rpcuser=test -rpcpassword=test generatetoaddress 1 <addr>
 
     # Sync wallet
     await wallet.sync_mixdepth(0)
@@ -96,11 +96,8 @@ asyncio.run(test())
 # Get an address from your wallet
 ADDR="bcrt1q..." # Your wallet address
 
-# Send coins from Bitcoin Core wallet
-docker exec jm-bitcoin-test bitcoin-cli -regtest -rpcuser=test -rpcpassword=test sendtoaddress $ADDR 1.0
-
-# Mine a block to confirm
-docker exec jm-bitcoin-test bitcoin-cli -regtest -rpcuser=test -rpcpassword=test -generate 1
+# Mine blocks to the address (coinbase reward)
+docker exec jm-bitcoin-test bitcoin-cli -regtest -rpcuser=test -rpcpassword=test generatetoaddress 110 $ADDR
 ```
 
 ## Cleanup

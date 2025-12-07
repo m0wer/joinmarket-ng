@@ -163,5 +163,36 @@ def test_profit_calculation():
     assert negative_profit < 0
 
 
+def test_script_to_address_network_hrp():
+    """Test that script_to_address uses correct HRP for each network."""
+    from jmcore.models import NetworkType
+
+    from maker.tx_verification import get_bech32_hrp, script_to_address
+
+    # P2WPKH script: OP_0 <20-byte-hash>
+    # Using known hash for testing
+    witness_program = bytes.fromhex("751e76e8199196d454941c45d1b3a323f1433bd6")
+    p2wpkh_script = bytes([0x00, 0x14]) + witness_program
+
+    # Test HRP mapping
+    assert get_bech32_hrp(NetworkType.MAINNET) == "bc"
+    assert get_bech32_hrp(NetworkType.TESTNET) == "tb"
+    assert get_bech32_hrp(NetworkType.SIGNET) == "tb"
+    assert get_bech32_hrp(NetworkType.REGTEST) == "bcrt"
+
+    # Test address generation for different networks
+    mainnet_addr = script_to_address(p2wpkh_script, NetworkType.MAINNET)
+    testnet_addr = script_to_address(p2wpkh_script, NetworkType.TESTNET)
+    regtest_addr = script_to_address(p2wpkh_script, NetworkType.REGTEST)
+
+    assert mainnet_addr.startswith("bc1")
+    assert testnet_addr.startswith("tb1")
+    assert regtest_addr.startswith("bcrt1")
+
+    # Verify known address (BIP 173 test vector for mainnet)
+    # bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4 is the address for this witness program
+    assert mainnet_addr == "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -11,6 +11,7 @@ from jmwallet.wallet.service import WalletService
 from loguru import logger
 
 from maker.config import MakerConfig
+from maker.fidelity import get_best_fidelity_bond
 
 
 class OfferManager:
@@ -31,6 +32,7 @@ class OfferManager:
         1. Find mixdepth with maximum balance
         2. Calculate available amount (balance - dust - txfee)
         3. Create offer with configured fee structure
+        4. Attach fidelity bond value if available
 
         Returns:
             List of offers (usually just one)
@@ -68,6 +70,16 @@ class OfferManager:
                 cjfee = str(self.config.cj_fee_absolute)
                 min_size = self.config.min_size
 
+            # Get fidelity bond value if available
+            fidelity_bond_value = 0
+            bond = get_best_fidelity_bond(self.wallet)
+            if bond:
+                fidelity_bond_value = bond.bond_value
+                logger.info(
+                    f"Fidelity bond found: {bond.txid}:{bond.vout} "
+                    f"value={bond.value} sats, bond_value={bond.bond_value}"
+                )
+
             offer = Offer(
                 counterparty=self.maker_nick,
                 oid=0,
@@ -76,13 +88,14 @@ class OfferManager:
                 maxsize=max_available,
                 txfee=self.config.tx_fee_contribution,
                 cjfee=cjfee,
-                fidelity_bond_value=0,
+                fidelity_bond_value=fidelity_bond_value,
             )
 
             logger.info(
                 f"Created offer: type={offer.ordertype}, "
                 f"size={min_size}-{max_available}, "
-                f"cjfee={cjfee}, txfee={self.config.tx_fee_contribution}"
+                f"cjfee={cjfee}, txfee={self.config.tx_fee_contribution}, "
+                f"bond_value={fidelity_bond_value}"
             )
 
             return [offer]

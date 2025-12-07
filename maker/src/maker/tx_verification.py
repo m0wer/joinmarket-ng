@@ -19,9 +19,19 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from jmcore.models import OfferType
+from jmcore.models import NetworkType, OfferType
 from jmwallet.wallet.models import UTXOInfo
 from loguru import logger
+
+
+def get_bech32_hrp(network: NetworkType) -> str:
+    """Get bech32 human-readable part for network."""
+    return {
+        NetworkType.MAINNET: "bc",
+        NetworkType.TESTNET: "tb",
+        NetworkType.SIGNET: "tb",
+        NetworkType.REGTEST: "bcrt",
+    }[network]
 
 
 class TransactionVerificationError(Exception):
@@ -57,6 +67,7 @@ def verify_unsigned_transaction(
     cjfee: str | int,
     txfee: int,
     offer_type: OfferType,
+    network: NetworkType = NetworkType.REGTEST,
 ) -> tuple[bool, str]:
     """
     Verify unsigned CoinJoin transaction proposed by taker.
@@ -72,12 +83,13 @@ def verify_unsigned_transaction(
         cjfee: CoinJoin fee (format depends on offer_type)
         txfee: Transaction fee we're contributing (satoshis)
         offer_type: Offer type (absolute or relative fee)
+        network: Network type for address encoding
 
     Returns:
         (is_valid, error_message)
     """
     try:
-        tx = parse_transaction(tx_hex)
+        tx = parse_transaction(tx_hex, network=network)
 
         if tx is None:
             return False, "Failed to parse transaction"
@@ -154,12 +166,18 @@ def verify_unsigned_transaction(
         return False, f"Verification error: {e}"
 
 
-def parse_transaction(tx_hex: str) -> dict[str, Any] | None:
+def parse_transaction(
+    tx_hex: str, network: NetworkType = NetworkType.REGTEST
+) -> dict[str, Any] | None:
     """
     Parse Bitcoin transaction hex.
 
     This is a simplified parser for CoinJoin transactions.
     For production, use a proper Bitcoin library.
+
+    Args:
+        tx_hex: Transaction hex string
+        network: Network type for address encoding
 
     Returns:
         {
@@ -172,15 +190,13 @@ def parse_transaction(tx_hex: str) -> dict[str, Any] | None:
 
         offset = 0
 
-        version = int.from_bytes(tx_bytes[offset : offset + 4], "little")
+        int.from_bytes(tx_bytes[offset : offset + 4], "little")
         offset += 4
 
-        segwit = False
         if tx_bytes[offset] == 0x00:
             marker = tx_bytes[offset]
             flag = tx_bytes[offset + 1]
             if marker == 0x00 and flag == 0x01:
-                segwit = True
                 offset += 2
 
         input_count, offset = read_varint(tx_bytes, offset)
@@ -196,7 +212,7 @@ def parse_transaction(tx_hex: str) -> dict[str, Any] | None:
             script_len, offset = read_varint(tx_bytes, offset)
             offset += script_len
 
-            sequence = int.from_bytes(tx_bytes[offset : offset + 4], "little")
+            int.from_bytes(tx_bytes[offset : offset + 4], "little")
             offset += 4
 
             inputs.append({"txid": txid, "vout": vout})
@@ -212,7 +228,7 @@ def parse_transaction(tx_hex: str) -> dict[str, Any] | None:
             script_pubkey = tx_bytes[offset : offset + script_len]
             offset += script_len
 
-            address = script_to_address(script_pubkey)
+            address = script_to_address(script_pubkey, network)
 
             outputs.append({"value": value, "address": address})
 
@@ -241,12 +257,19 @@ def read_varint(data: bytes, offset: int) -> tuple[int, int]:
         return value, offset + 8
 
 
-def script_to_address(script: bytes) -> str:
+def script_to_address(script: bytes, network: NetworkType = NetworkType.REGTEST) -> str:
     """
     Convert scriptPubKey to address.
 
     Simplified implementation - only handles P2WPKH for now.
     For production, use proper Bitcoin library.
+
+    Args:
+        script: scriptPubKey bytes
+        network: Network type for HRP selection
+
+    Returns:
+        Bech32 address string, or hex if unsupported script type
     """
     if len(script) == 22 and script[0] == 0x00 and script[1] == 0x14:
         from jmwallet.wallet.address import bech32_encode, convertbits
@@ -254,7 +277,7 @@ def script_to_address(script: bytes) -> str:
         witness_program = script[2:]
         data = convertbits(witness_program, 8, 5)
 
-        hrp = "bcrt"
+        hrp = get_bech32_hrp(network)
         address = bech32_encode(hrp, [0] + data)
         return address
 

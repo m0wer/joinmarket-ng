@@ -13,7 +13,6 @@ from loguru import logger
 BITCOIN_RPC_URL = os.getenv("BITCOIN_RPC_URL", "http://127.0.0.1:18443")
 BITCOIN_RPC_USER = os.getenv("BITCOIN_RPC_USER", "test")
 BITCOIN_RPC_PASSWORD = os.getenv("BITCOIN_RPC_PASSWORD", "test")
-BITCOIN_RPC_WALLET = os.getenv("BITCOIN_RPC_WALLET", "jm-e2e-test")
 
 
 class BitcoinRPCError(Exception):
@@ -45,53 +44,52 @@ async def rpc_call(
     return data.get("result")
 
 
-async def ensure_test_wallet() -> str:
-    try:
-        wallets = await rpc_call("listwallets")
-        if BITCOIN_RPC_WALLET in wallets:
-            return BITCOIN_RPC_WALLET
-    except BitcoinRPCError:
-        pass
+async def mine_blocks(blocks: int, address: str) -> None:
+    """
+    Mine blocks to a specific address.
 
-    try:
-        await rpc_call("loadwallet", [BITCOIN_RPC_WALLET])
-    except BitcoinRPCError as exc:
-        error_message = str(exc)
-        if "not found" in error_message.lower():
-            await rpc_call("createwallet", [BITCOIN_RPC_WALLET])
-        elif "already loaded" not in error_message.lower():
-            raise
-
-    return BITCOIN_RPC_WALLET
-
-
-async def get_new_address(wallet: str | None = None) -> str:
-    wallet_name = wallet or await ensure_test_wallet()
-    return await rpc_call("getnewaddress", [], wallet=wallet_name)
-
-
-async def send_to_address(
-    address: str, amount_btc: float, wallet: str | None = None
-) -> str:
-    wallet_name = wallet or await ensure_test_wallet()
-    txid = await rpc_call("sendtoaddress", [address, amount_btc], wallet=wallet_name)
-    logger.info(f"Sent {amount_btc} BTC to {address}, txid={txid}")
-    return txid
-
-
-async def mine_blocks(blocks: int, address: str | None = None) -> None:
-    mining_address = address or await get_new_address()
-    await rpc_call("generatetoaddress", [blocks, mining_address])
+    We avoid using wallet RPC completely - the wallet is external to Bitcoin Core.
+    """
+    await rpc_call("generatetoaddress", [blocks, address])
+    logger.info(f"Mined {blocks} blocks to {address}")
 
 
 async def ensure_wallet_funded(
     target_address: str, amount_btc: float = 1.0, confirmations: int = 1
 ) -> bool:
+    """
+    Fund a wallet address by mining blocks directly to it.
+
+    We avoid wallet RPC completely - Bitcoin Core is just a source of truth,
+    not for managing funds. The wallet is completely external.
+
+    On regtest, each mined block gives 50 BTC reward.
+    We mine 110 blocks for coinbase maturity + confirmations.
+
+    Args:
+        target_address: Address to fund
+        amount_btc: Amount needed (ignored, we just mine blocks)
+        confirmations: Additional confirmations needed
+
+    Returns:
+        True if successful, False otherwise
+    """
     try:
-        await ensure_test_wallet()
-        await send_to_address(target_address, amount_btc)
-        await mine_blocks(max(1, confirmations))
+        # Mine directly to target address
+        # 110 blocks for coinbase maturity + confirmations
+        blocks_to_mine = 110 + confirmations
+        logger.info(f"Mining {blocks_to_mine} blocks directly to {target_address}")
+        await rpc_call("generatetoaddress", [blocks_to_mine, target_address])
+        logger.info(
+            f"Mined {blocks_to_mine} blocks (110 for maturity + {confirmations} confirmations)"
+        )
+        logger.info(
+            f"Funded address with {blocks_to_mine * 50} BTC from coinbase rewards"
+        )
         return True
     except BitcoinRPCError as exc:
-        logger.warning(f"Failed to auto-fund wallet: {exc}")
+        logger.error(f"Failed to auto-fund wallet: {exc}")
+        return False
+    except Exception as exc:
+        logger.error(f"Unexpected error during auto-funding: {exc}")
         return False

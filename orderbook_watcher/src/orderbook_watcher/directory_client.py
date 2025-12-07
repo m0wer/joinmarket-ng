@@ -16,7 +16,7 @@ from typing import Any
 from jmcore.btc_script import mk_freeze_script, redeem_script_to_p2wsh_script
 from jmcore.crypto import generate_jm_nick
 from jmcore.models import FidelityBond, Offer, OfferType
-from jmcore.network import TCPConnection, connect_via_tor
+from jmcore.network import TCPConnection, connect_direct, connect_via_tor
 from jmcore.protocol import (
     COMMAND_PREFIX,
     JM_VERSION,
@@ -114,14 +114,23 @@ class DirectoryClient:
 
     async def connect(self) -> None:
         try:
-            self.connection = await connect_via_tor(
-                self.onion_address,
-                self.port,
-                self.socks_host,
-                self.socks_port,
-                self.max_message_size,
-                self.timeout,
-            )
+            # Use direct TCP for non-onion addresses (local dev/testing)
+            if not self.onion_address.endswith(".onion"):
+                self.connection = await connect_direct(
+                    self.onion_address,
+                    self.port,
+                    self.max_message_size,
+                    self.timeout,
+                )
+            else:
+                self.connection = await connect_via_tor(
+                    self.onion_address,
+                    self.port,
+                    self.socks_host,
+                    self.socks_port,
+                    self.max_message_size,
+                    self.timeout,
+                )
             await self._handshake()
         except Exception as e:
             logger.error(f"Failed to connect to {self.onion_address}:{self.port}: {e}")
