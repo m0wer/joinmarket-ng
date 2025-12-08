@@ -285,26 +285,14 @@ jobs:
           pip install -e taker[dev]
           pip install httpx loguru pytest-asyncio
 
-      - name: Start Bitcoin regtest node
+      - name: Start services with Docker Compose
         run: |
-          docker run -d \
-            --name bitcoin-regtest \
-            -p 18443:18443 \
-            kylemanna/bitcoind:latest \
-            -regtest \
-            -server=1 \
-            -rpcuser=test \
-            -rpcpassword=test \
-            -rpcallowip=0.0.0.0/0 \
-            -rpcbind=0.0.0.0 \
-            -rpcport=18443 \
-            -txindex=1 \
-            -fallbackfee=0.0002
+          docker compose up -d bitcoin directory
 
           # Wait for Bitcoin to be ready
           echo "Waiting for Bitcoin node to be ready..."
           for i in {1..30}; do
-            if docker exec bitcoin-regtest bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo 2>/dev/null; then
+            if docker compose exec bitcoin bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo 2>/dev/null; then
               echo "Bitcoin node is ready"
               break
             fi
@@ -321,15 +309,16 @@ jobs:
           BITCOIN_RPC_PASSWORD: test
         run: pytest tests/e2e --junitxml=junit/test-results.xml --cov --cov-report=term-missing --cov-report=xml -v -s
 
-      - name: Show Bitcoin logs on failure
+      - name: Show logs on failure
         if: failure()
-        run: docker logs bitcoin-regtest
+        run: |
+          docker compose logs bitcoin
+          docker compose logs directory
 
       - name: Cleanup
         if: always()
         run: |
-          docker stop bitcoin-regtest || true
-          docker rm bitcoin-regtest || true
+          docker compose down -v
 
       - name: Upload e2e test results
         uses: actions/upload-artifact@v4

@@ -21,7 +21,7 @@ from jmwallet.wallet.service import WalletService
 from maker.bot import MakerBot
 from maker.config import MakerConfig
 from taker.config import TakerConfig
-from taker.taker import Taker, TakerState
+from taker.taker import Taker
 
 
 @pytest.fixture
@@ -68,6 +68,64 @@ async def funded_wallet(bitcoin_backend):
         yield wallet
     finally:
         await wallet.close()
+
+
+@pytest.fixture(scope="module")
+async def directory_server():
+    """Start directory server process or use existing."""
+    import socket
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+
+    # Check if directory server is already running on port 5222
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        result = sock.connect_ex(("127.0.0.1", 5222))
+        if result == 0:
+            # Port is open, assume directory server is running
+            yield None
+            return
+    finally:
+        sock.close()
+
+    # Determine paths
+    repo_root = Path(__file__).parent.parent.parent
+    ds_path = repo_root / "directory_server"
+
+    # Start process
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "directory_server.main"],
+        cwd=ds_path,
+        env={
+            "PYTHONPATH": str(ds_path / "src")
+            + ":"
+            + str(repo_root / "jmcore" / "src"),
+            "NETWORK": "regtest",
+            "PORT": "5222",
+            "LOG_LEVEL": "DEBUG",
+        },
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    # Wait for startup
+    # We could check the port but a simple sleep is usually enough for local regtest
+    time.sleep(2)
+
+    if proc.poll() is not None:
+        stdout, stderr = proc.communicate()
+        raise RuntimeError(f"Directory server failed to start:\n{stderr.decode()}")
+
+    yield proc
+
+    # Cleanup
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
 
 
 @pytest.fixture
@@ -180,48 +238,6 @@ async def test_maker_bot_initialization(bitcoin_backend, maker_config):
 
 
 @pytest.mark.asyncio
-async def test_maker_bot_connect_directory(bitcoin_backend, maker_config):
-    """Test maker bot connecting to directory server"""
-    wallet = WalletService(
-        mnemonic=maker_config.mnemonic,
-        backend=bitcoin_backend,
-        network="regtest",
-    )
-
-    bot = MakerBot(wallet, bitcoin_backend, maker_config)
-
-    # Start the bot in the background
-    start_task = asyncio.create_task(bot.start())
-
-    try:
-        # Wait for connection to establish (wallet sync takes ~2s, connection ~0.5s)
-        await asyncio.sleep(10)
-
-        # Skip if no directory server is running
-        if not bot.directory_clients:
-            await wallet.close()
-            pytest.skip("Directory server not running")
-
-        # Check that bot connected
-        assert len(bot.directory_clients) > 0, (
-            "Should have connected to directory server. "
-            f"Connections: {bot.directory_clients}, Running: {bot.running}"
-        )
-        assert bot.running, "Bot should be running"
-
-    finally:
-        # Stop the bot
-        await bot.stop()
-        # Cancel the start task if still running
-        start_task.cancel()
-        try:
-            await start_task
-        except asyncio.CancelledError:
-            pass
-        await wallet.close()
-
-
-@pytest.mark.asyncio
 async def test_offer_creation(
     funded_wallet: WalletService, bitcoin_backend, maker_config
 ):
@@ -266,6 +282,45 @@ async def test_system_health_check(bitcoin_backend, mined_chain):
 
     except Exception as e:
         pytest.fail(f"System health check failed: {e}")
+
+
+@pytest.mark.asyncio
+async def test_maker_bot_connect_directory(
+    bitcoin_backend, maker_config, directory_server, funded_wallet
+):
+    """Test maker bot connecting to directory server"""
+    wallet = WalletService(
+        mnemonic=maker_config.mnemonic,
+        backend=bitcoin_backend,
+        network="regtest",
+    )
+
+    bot = MakerBot(wallet, bitcoin_backend, maker_config)
+
+    # Start the bot in the background
+    start_task = asyncio.create_task(bot.start())
+
+    try:
+        # Wait for connection to establish (wallet sync takes ~2s, connection ~0.5s)
+        await asyncio.sleep(10)
+
+        # Check that bot connected
+        assert len(bot.directory_clients) > 0, (
+            "Should have connected to directory server. "
+            f"Connections: {bot.directory_clients}, Running: {bot.running}"
+        )
+        assert bot.running, "Bot should be running"
+
+    finally:
+        # Stop the bot
+        await bot.stop()
+        # Cancel the start task if still running
+        start_task.cancel()
+        try:
+            await start_task
+        except asyncio.CancelledError:
+            pass
+        await wallet.close()
 
 
 # ==============================================================================
@@ -328,13 +383,15 @@ async def test_taker_initialization(bitcoin_backend, taker_config):
     assert len(taker.nick) == 16
 
     # Check initial state
+    from taker.taker import TakerState
+
     assert taker.state == TakerState.IDLE
 
     await wallet.close()
 
 
 @pytest.mark.asyncio
-async def test_taker_connect_directory(bitcoin_backend, taker_config):
+async def test_taker_connect_directory(bitcoin_backend, taker_config, directory_server):
     """Test taker connecting to directory server."""
     wallet = WalletService(
         mnemonic=taker_config.mnemonic,
@@ -353,22 +410,20 @@ async def test_taker_connect_directory(bitcoin_backend, taker_config):
         assert total_balance >= 0, "Wallet should have synced"
 
         # Directory client should have connected
-        # Note: connection count depends on whether directory server is running
         print(f"Taker nick: {taker.nick}")
         print(f"Taker state: {taker.state}")
 
-    except RuntimeError as e:
-        # If directory server is not running, skip test
-        if "Failed to connect" in str(e):
-            pytest.skip("Directory server not running")
-        raise
+        # Check connection status
+        # Taker uses MultiDirectoryClient which stores clients in self.directory_client.clients
+        connected_count = len(taker.directory_client.clients)
+        assert connected_count > 0, "Should be connected to directory"
 
     finally:
         await taker.stop()
 
 
 @pytest.mark.asyncio
-async def test_taker_orderbook_fetch(bitcoin_backend, taker_config):
+async def test_taker_orderbook_fetch(bitcoin_backend, taker_config, directory_server):
     """Test taker fetching orderbook from directory."""
     wallet = WalletService(
         mnemonic=taker_config.mnemonic,
@@ -392,11 +447,6 @@ async def test_taker_orderbook_fetch(bitcoin_backend, taker_config):
 
         # Update orderbook manager
         taker.orderbook_manager.update_offers(offers)
-
-    except RuntimeError as e:
-        if "Failed to connect" in str(e):
-            pytest.skip("Directory server not running")
-        raise
 
     finally:
         await taker.stop()

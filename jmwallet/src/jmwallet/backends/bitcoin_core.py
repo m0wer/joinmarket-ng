@@ -57,20 +57,47 @@ class BitcoinCoreBackend(BlockchainBackend):
 
     async def get_utxos(self, addresses: list[str]) -> list[UTXO]:
         utxos: list[UTXO] = []
+        if not addresses:
+            return utxos
 
-        for address in addresses:
+        # Get tip height once for confirmation calculation
+        try:
+            tip_height = await self.get_block_height()
+        except Exception as e:
+            logger.error(f"Failed to get block height for UTXO scan: {e}")
+            return utxos
+
+        # Process in batches to avoid huge RPC requests
+        batch_size = 100
+        for i in range(0, len(addresses), batch_size):
+            chunk = addresses[i : i + batch_size]
+            descriptors = [f"addr({addr})" for addr in chunk]
+
             try:
-                desc = f"addr({address})"
-                result = await self._rpc_call("scantxoutset", ["start", [desc]])
+                # Scan for all addresses in this chunk at once
+                result = await self._rpc_call("scantxoutset", ["start", descriptors])
 
                 if not result or "unspents" not in result:
                     continue
 
                 for utxo_data in result["unspents"]:
-                    tip_height = await self.get_block_height()
                     confirmations = 0
                     if utxo_data.get("height", 0) > 0:
                         confirmations = tip_height - utxo_data["height"] + 1
+
+                    # Extract address from descriptor "addr(ADDRESS)#checksum" or "addr(ADDRESS)"
+                    desc = utxo_data.get("desc", "")
+                    # Remove checksum if present
+                    if "#" in desc:
+                        desc = desc.split("#")[0]
+
+                    address = ""
+                    if desc.startswith("addr(") and desc.endswith(")"):
+                        address = desc[5:-1]
+                    else:
+                        # Only log warning if we really can't parse it (and it's not empty)
+                        if desc:
+                            logger.warning(f"Failed to parse address from descriptor: '{desc}'")
 
                     utxo = UTXO(
                         txid=utxo_data["txid"],
@@ -83,10 +110,12 @@ class BitcoinCoreBackend(BlockchainBackend):
                     )
                     utxos.append(utxo)
 
-                logger.debug(f"Found {len(result['unspents'])} UTXOs for {address}")
+                logger.debug(
+                    f"Scanned {len(chunk)} addresses, found {len(result['unspents'])} UTXOs"
+                )
 
             except Exception as e:
-                logger.warning(f"Failed to scan UTXOs for {address}: {e}")
+                logger.warning(f"Failed to scan UTXOs for batch starting {chunk[0]}: {e}")
                 continue
 
         return utxos

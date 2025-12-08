@@ -87,7 +87,7 @@ class MakerBot:
 
                     # Create DirectoryClient
                     client = DirectoryClient(
-                        onion_address=host,
+                        host=host,
                         port=port,
                         network=self.config.network.value,
                         nick=self.nick,

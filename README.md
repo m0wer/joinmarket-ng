@@ -218,6 +218,22 @@ python -m piptools compile -Uv requirements.in -o requirements.txt
 
 **Note**: The directory_server uses a `requirements.in` file to properly handle the local jmcore dependency with `-e ../jmcore`. The pinned `requirements.txt` files are used in Docker builds for reproducible deployments.
 
+## Running Tests with Docker Compose
+
+To run the end-to-end tests against a running docker compose stack:
+
+1. Start the services:
+   ```bash
+   docker compose up -d bitcoin directory
+   ```
+
+2. Run the tests:
+   ```bash
+   pytest tests/e2e/test_complete_system.py -v -s
+   ```
+
+The tests will automatically detect the running directory server on port 5222 and use it.
+
 ## License
 
 MIT License. See [LICENSE](./LICENSE) for details.

@@ -66,3 +66,7 @@ class BlockchainBackend(ABC):
     @abstractmethod
     async def get_block_hash(self, block_height: int) -> str:
         """Get block hash for given height"""
+
+    async def close(self) -> None:
+        """Close backend connection"""
+        pass

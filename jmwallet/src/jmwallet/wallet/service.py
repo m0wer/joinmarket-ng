@@ -95,34 +95,54 @@ class WalletService:
             index = 0
 
             while consecutive_empty < self.gap_limit:
-                address = self.get_address(mixdepth, change, index)
+                # Scan in batches of gap_limit size for performance
+                batch_size = self.gap_limit
+                addresses = []
 
-                backend_utxos = await self.backend.get_utxos([address])
+                for i in range(batch_size):
+                    address = self.get_address(mixdepth, change, index + i)
+                    addresses.append(address)
 
-                if backend_utxos:
-                    for utxo in backend_utxos:
-                        path = f"{self.root_path}/{mixdepth}'/{change}/{index}"
-                        utxo_info = UTXOInfo(
-                            txid=utxo.txid,
-                            vout=utxo.vout,
-                            value=utxo.value,
-                            address=address,
-                            confirmations=utxo.confirmations,
-                            scriptpubkey=utxo.scriptpubkey,
-                            path=path,
-                            mixdepth=mixdepth,
-                        )
-                        utxos.append(utxo_info)
+                # Fetch UTXOs for the whole batch
+                backend_utxos = await self.backend.get_utxos(addresses)
 
-                    consecutive_empty = 0
-                else:
-                    consecutive_empty += 1
+                # Group results by address
+                utxos_by_address: dict[str, list] = {addr: [] for addr in addresses}
+                for utxo in backend_utxos:
+                    if utxo.address in utxos_by_address:
+                        utxos_by_address[utxo.address].append(utxo)
 
-                index += 1
+                # Process batch results in order
+                for i, address in enumerate(addresses):
+                    addr_utxos = utxos_by_address[address]
+
+                    if addr_utxos:
+                        consecutive_empty = 0
+                        for utxo in addr_utxos:
+                            path = f"{self.root_path}/{mixdepth}'/{change}/{index + i}"
+                            utxo_info = UTXOInfo(
+                                txid=utxo.txid,
+                                vout=utxo.vout,
+                                value=utxo.value,
+                                address=address,
+                                confirmations=utxo.confirmations,
+                                scriptpubkey=utxo.scriptpubkey,
+                                path=path,
+                                mixdepth=mixdepth,
+                            )
+                            utxos.append(utxo_info)
+                    else:
+                        consecutive_empty += 1
+
+                    if consecutive_empty >= self.gap_limit:
+                        break
+
+                index += batch_size
 
             logger.debug(
                 f"Synced mixdepth {mixdepth} change {change}: "
-                f"scanned {index} addresses, found {len(utxos)} UTXOs"
+                f"scanned ~{index} addresses, found "
+                f"{len([u for u in utxos if u.path.split('/')[-2] == str(change)])} UTXOs"
             )
 
         self.utxo_cache[mixdepth] = utxos
