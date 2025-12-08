@@ -110,8 +110,21 @@ def taker_config():
     )
 
 
+@pytest_asyncio.fixture
+async def mined_chain(bitcoin_backend):
+    """Ensure blockchain has minimum height."""
+    from tests.e2e.rpc_utils import mine_blocks
+
+    height = await bitcoin_backend.get_block_height()
+    if height < 101:
+        # Mine to a fixed valid address (P2WPKH) since node runs wallet-free
+        addr = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080"
+        await mine_blocks(101 - height + 10, addr)
+    return True
+
+
 @pytest.mark.asyncio
-async def test_bitcoin_connection(bitcoin_backend):
+async def test_bitcoin_connection(bitcoin_backend, mined_chain):
     """Test Bitcoin Core connection"""
     height = await bitcoin_backend.get_block_height()
     assert height > 100
@@ -239,7 +252,7 @@ async def test_coin_selection(funded_wallet: WalletService):
 
 
 @pytest.mark.asyncio
-async def test_system_health_check(bitcoin_backend):
+async def test_system_health_check(bitcoin_backend, mined_chain):
     """Test overall system health"""
     try:
         height = await bitcoin_backend.get_block_height()
