@@ -232,38 +232,3 @@ docker-compose --profile taker up taker
 docker-compose --profile taker run taker \
     jm-taker coinjoin --amount 1000000 --destination bcrt1q...
 ```
-
-## Roadmap
-
-- [x] Orderbook management
-- [x] Maker selection algorithms
-- [x] Transaction building
-- [x] PoDLE commitment generation
-- [x] CLI interface
-- [ ] Transaction signing (P2WPKH inputs)
-- [ ] Full CoinJoin protocol flow
-- [ ] Tumbler schedule execution
-- [ ] Protocol/E2E test coverage
-
-## Contributing
-
-1. Follow repo-wide coding standards (AGENTS.md)
-2. Add/extend unit tests for new features
-3. Run formatting + lint:
-   ```bash
-   ruff check src tests
-   ruff format src tests
-   mypy src
-   ```
-4. Document any new protocol behavior
-
-## Security Notes
-
-- Never use test mnemonics on mainnet
-- Always verify maker fee limits
-- PoDLE protects against UTXO probing attacks
-- Transaction verification prevents loss of funds
-
-## License
-
-MIT (see root LICENSE)

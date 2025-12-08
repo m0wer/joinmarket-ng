@@ -75,16 +75,6 @@ pytest tests/integration/test_wallet_bitcoin_core.py -v
 - Rejects negative profit scenarios
 - All logic backed by unit tests
 
-## 🛠️ Roadmap
-
-- [x] PoDLE verification
-- [x] Transaction verification
-- [x] Offer manager + bot skeleton
-- [ ] Transaction signing (P2WPKH inputs)
-- [ ] Fidelity bond support
-- [ ] CLI interface
-- [ ] Protocol/E2E test coverage
-
 ## 🧪 Testing
 
 ```bash
@@ -103,19 +93,3 @@ Root-level `docker-compose.yml` spins up:
 - `orderbook-watcher`
 
 Maker bot can be run alongside via future container or direct CLI.
-
-## 📣 Contribution Guidelines
-
-1. Follow repo-wide coding standards (AGENTS.md)
-2. Add/extend unit tests for critical code
-3. Run formatting + lint:
-   ```bash
-   ruff check src tests
-   ruff format src tests
-   mypy src
-   ```
-4. Document any new protocol behavior
-
-## 📄 License
-
-MIT (see root LICENSE)
