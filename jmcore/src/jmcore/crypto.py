@@ -20,8 +20,6 @@ class CryptoError(Exception):
 
 def base58_encode(data: bytes) -> str:
     num = int.from_bytes(data, "big")
-    if num == 0:
-        return BASE58_ALPHABET[0]
 
     result = ""
     while num > 0:
