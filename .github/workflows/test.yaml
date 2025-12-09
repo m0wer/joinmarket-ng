@@ -75,6 +75,10 @@ jobs:
           python-version: '3.14'
           cache: pip
 
+      - name: Install jmcore first
+        working-directory: jmcore
+        run: pip install -e .
+
       - name: Install jmwallet dependencies
         working-directory: jmwallet
         run: |
