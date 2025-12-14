@@ -98,7 +98,9 @@ Modern Bitcoin wallet library with NO BerkeleyDB dependency:
 
 - BIP32/39/84 hierarchical deterministic wallets
 - JoinMarket mixdepth support (5 isolation levels)
-- Pluggable blockchain backends (Mempool, Bitcoin Core, Electrum)
+- Pluggable blockchain backends:
+  - **Bitcoin Core**: Full node via RPC (most secure, requires running node)
+  - **Neutrino**: Lightweight BIP157/BIP158 SPV client (privacy-preserving, low resource)
 - Works with Bitcoin Core v30+ (no deprecated BDB wallet!)
 
 ### Maker Bot
@@ -157,6 +159,31 @@ docker-compose ps
 docker-compose logs -f
 ```
 
+### Using Neutrino (Lightweight SPV)
+
+For a lightweight setup without running a full Bitcoin node:
+
+```bash
+# Start with Neutrino backend (downloads block filters, ~500MB vs ~500GB for full node)
+docker-compose --profile neutrino up -d
+
+# This starts:
+# - Neutrino server (BIP157/158 compact block filters)
+# - Maker with Neutrino backend
+# - Taker with Neutrino backend
+```
+
+**Benefits of Neutrino:**
+- No full node required (~500MB vs ~500GB storage)
+- Privacy-preserving (downloads filters, not addresses)
+- Low bandwidth usage
+- Fast initial sync (minutes vs days)
+
+**When to use Bitcoin Core instead:**
+- Maximum security (full validation)
+- You already run a full node
+- Production deployments with high value
+
 ### Test Wallet Library
 
 ```python
@@ -180,6 +207,30 @@ wallet = WalletService(
 await wallet.sync_all()
 balance = await wallet.get_total_balance()
 print(f"Balance: {balance:,} sats")
+```
+
+### Using Neutrino Backend
+
+```python
+from jmwallet.backends.neutrino import NeutrinoBackend, NeutrinoConfig
+from jmwallet.wallet.service import WalletService
+
+# Configure Neutrino (connects to lightweight SPV server)
+config = NeutrinoConfig(
+    base_url="http://localhost:8080",
+    network="mainnet"
+)
+backend = NeutrinoBackend(config)
+
+wallet = WalletService(
+    mnemonic="your mnemonic here",
+    backend=backend,
+    network="mainnet"
+)
+
+# Same API as Bitcoin Core backend
+await wallet.sync_all()
+balance = await wallet.get_total_balance()
 ```
 
 ## Getting Started

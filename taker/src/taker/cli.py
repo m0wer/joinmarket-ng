@@ -11,6 +11,7 @@ from pathlib import Path
 import typer
 from jmcore.models import NetworkType
 from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
+from jmwallet.backends.neutrino import NeutrinoBackend
 from jmwallet.wallet.service import WalletService
 from loguru import logger
 
@@ -49,6 +50,9 @@ def coinjoin(
         None, "--mnemonic", envvar="MNEMONIC", help="Wallet mnemonic phrase"
     ),
     network: str = typer.Option("regtest", "--network", help="Bitcoin network"),
+    backend_type: str = typer.Option(
+        "bitcoin_core", "--backend", "-b", help="Backend type: bitcoin_core | neutrino"
+    ),
     rpc_url: str = typer.Option(
         "http://127.0.0.1:18443",
         "--rpc-url",
@@ -60,6 +64,12 @@ def coinjoin(
     ),
     rpc_password: str = typer.Option(
         "test", "--rpc-password", envvar="BITCOIN_RPC_PASSWORD", help="Bitcoin Core RPC password"
+    ),
+    neutrino_url: str = typer.Option(
+        "http://127.0.0.1:8334",
+        "--neutrino-url",
+        envvar="NEUTRINO_URL",
+        help="Neutrino REST API URL",
     ),
     directory_servers: str = typer.Option(
         "localhost:5222",
@@ -89,16 +99,25 @@ def coinjoin(
     # Parse directory servers
     dir_servers = [s.strip() for s in directory_servers.split(",")]
 
+    # Build backend config based on type
+    if backend_type == "neutrino":
+        backend_config = {
+            "neutrino_url": neutrino_url,
+            "network": network,
+        }
+    else:
+        backend_config = {
+            "rpc_url": rpc_url,
+            "rpc_user": rpc_user,
+            "rpc_password": rpc_password,
+        }
+
     # Build config
     config = TakerConfig(
         mnemonic=mnemonic,
         network=network_type,
-        backend_type="bitcoin_core",
-        backend_config={
-            "rpc_url": rpc_url,
-            "rpc_user": rpc_user,
-            "rpc_password": rpc_password,
-        },
+        backend_type=backend_type,
+        backend_config=backend_config,
         directory_servers=dir_servers,
         destination_address=destination,
         amount=amount,
@@ -118,12 +137,24 @@ async def _run_coinjoin(
     counterparties: int,
 ) -> None:
     """Run CoinJoin transaction."""
-    # Create backend
-    backend = BitcoinCoreBackend(
-        rpc_url=config.backend_config["rpc_url"],
-        rpc_user=config.backend_config["rpc_user"],
-        rpc_password=config.backend_config["rpc_password"],
-    )
+    # Create backend based on config
+    if config.backend_type == "neutrino":
+        backend = NeutrinoBackend(
+            neutrino_url=config.backend_config.get("neutrino_url", "http://127.0.0.1:8334"),
+            network=config.network.value,
+        )
+        # Wait for neutrino to sync
+        logger.info("Waiting for neutrino to sync...")
+        synced = await backend.wait_for_sync(timeout=300.0)
+        if not synced:
+            logger.error("Neutrino sync timeout")
+            raise typer.Exit(1)
+    else:
+        backend = BitcoinCoreBackend(
+            rpc_url=config.backend_config["rpc_url"],
+            rpc_user=config.backend_config["rpc_user"],
+            rpc_password=config.backend_config["rpc_password"],
+        )
 
     # Create wallet
     wallet = WalletService(
@@ -164,6 +195,9 @@ def tumble(
         None, "--mnemonic", envvar="MNEMONIC", help="Wallet mnemonic phrase"
     ),
     network: str = typer.Option("regtest", "--network", help="Bitcoin network"),
+    backend_type: str = typer.Option(
+        "bitcoin_core", "--backend", "-b", help="Backend type: bitcoin_core | neutrino"
+    ),
     rpc_url: str = typer.Option(
         "http://127.0.0.1:18443",
         "--rpc-url",
@@ -175,6 +209,12 @@ def tumble(
     ),
     rpc_password: str = typer.Option(
         "test", "--rpc-password", envvar="BITCOIN_RPC_PASSWORD", help="Bitcoin Core RPC password"
+    ),
+    neutrino_url: str = typer.Option(
+        "http://127.0.0.1:8334",
+        "--neutrino-url",
+        envvar="NEUTRINO_URL",
+        help="Neutrino REST API URL",
     ),
     directory_servers: str = typer.Option(
         "localhost:5222",
@@ -219,16 +259,25 @@ def tumble(
     # Parse directory servers
     dir_servers = [s.strip() for s in directory_servers.split(",")]
 
+    # Build backend config based on type
+    if backend_type == "neutrino":
+        backend_config = {
+            "neutrino_url": neutrino_url,
+            "network": network,
+        }
+    else:
+        backend_config = {
+            "rpc_url": rpc_url,
+            "rpc_user": rpc_user,
+            "rpc_password": rpc_password,
+        }
+
     # Build config
     config = TakerConfig(
         mnemonic=mnemonic,
         network=network_type,
-        backend_type="bitcoin_core",
-        backend_config={
-            "rpc_url": rpc_url,
-            "rpc_user": rpc_user,
-            "rpc_password": rpc_password,
-        },
+        backend_type=backend_type,
+        backend_config=backend_config,
         directory_servers=dir_servers,
     )
 
@@ -237,12 +286,24 @@ def tumble(
 
 async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
     """Run tumbler schedule."""
-    # Create backend
-    backend = BitcoinCoreBackend(
-        rpc_url=config.backend_config["rpc_url"],
-        rpc_user=config.backend_config["rpc_user"],
-        rpc_password=config.backend_config["rpc_password"],
-    )
+    # Create backend based on config
+    if config.backend_type == "neutrino":
+        backend = NeutrinoBackend(
+            neutrino_url=config.backend_config.get("neutrino_url", "http://127.0.0.1:8334"),
+            network=config.network.value,
+        )
+        # Wait for neutrino to sync
+        logger.info("Waiting for neutrino to sync...")
+        synced = await backend.wait_for_sync(timeout=300.0)
+        if not synced:
+            logger.error("Neutrino sync timeout")
+            raise typer.Exit(1)
+    else:
+        backend = BitcoinCoreBackend(
+            rpc_url=config.backend_config["rpc_url"],
+            rpc_user=config.backend_config["rpc_user"],
+            rpc_password=config.backend_config["rpc_password"],
+        )
 
     # Create wallet
     wallet = WalletService(
@@ -277,6 +338,9 @@ def wallet_info(
         None, "--mnemonic", envvar="MNEMONIC", help="Wallet mnemonic phrase"
     ),
     network: str = typer.Option("regtest", "--network", help="Bitcoin network"),
+    backend_type: str = typer.Option(
+        "bitcoin_core", "--backend", "-b", help="Backend type: bitcoin_core | neutrino"
+    ),
     rpc_url: str = typer.Option(
         "http://127.0.0.1:18443",
         "--rpc-url",
@@ -288,6 +352,12 @@ def wallet_info(
     ),
     rpc_password: str = typer.Option(
         "test", "--rpc-password", envvar="BITCOIN_RPC_PASSWORD", help="Bitcoin Core RPC password"
+    ),
+    neutrino_url: str = typer.Option(
+        "http://127.0.0.1:8334",
+        "--neutrino-url",
+        envvar="NEUTRINO_URL",
+        help="Neutrino REST API URL",
     ),
     log_level: str = typer.Option("INFO", "--log-level", "-l", help="Log level"),
 ) -> None:
@@ -305,23 +375,47 @@ def wallet_info(
         logger.error(f"Invalid network: {network}")
         raise typer.Exit(1)
 
-    asyncio.run(_show_wallet_info(mnemonic, network_type.value, rpc_url, rpc_user, rpc_password))
+    asyncio.run(
+        _show_wallet_info(
+            mnemonic,
+            network_type.value,
+            backend_type,
+            rpc_url,
+            rpc_user,
+            rpc_password,
+            neutrino_url,
+        )
+    )
 
 
 async def _show_wallet_info(
     mnemonic: str,
     network: str,
+    backend_type: str,
     rpc_url: str,
     rpc_user: str,
     rpc_password: str,
+    neutrino_url: str,
 ) -> None:
     """Show wallet info."""
-    # Create backend
-    backend = BitcoinCoreBackend(
-        rpc_url=rpc_url,
-        rpc_user=rpc_user,
-        rpc_password=rpc_password,
-    )
+    # Create backend based on type
+    if backend_type == "neutrino":
+        backend = NeutrinoBackend(
+            neutrino_url=neutrino_url,
+            network=network,
+        )
+        # Wait for neutrino to sync
+        logger.info("Waiting for neutrino to sync...")
+        synced = await backend.wait_for_sync(timeout=300.0)
+        if not synced:
+            logger.error("Neutrino sync timeout")
+            raise typer.Exit(1)
+    else:
+        backend = BitcoinCoreBackend(
+            rpc_url=rpc_url,
+            rpc_user=rpc_user,
+            rpc_password=rpc_password,
+        )
 
     # Create wallet
     wallet = WalletService(

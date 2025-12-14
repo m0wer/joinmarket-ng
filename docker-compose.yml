@@ -175,8 +175,89 @@ services:
     profiles:
       - taker  # Only start with: docker-compose --profile taker up
 
+  # Neutrino light client (alternative to Bitcoin Core)
+  neutrino:
+    build:
+      context: ./neutrino_server
+      dockerfile: Dockerfile
+    container_name: jm-neutrino
+    restart: unless-stopped
+    environment:
+      - NETWORK=regtest
+      - LISTEN_ADDR=0.0.0.0:8334
+      - DATA_DIR=/data/neutrino
+      - LOG_LEVEL=info
+      - CONNECT_PEERS=jm-bitcoin:18444
+    ports:
+      - "8334:8334"
+    volumes:
+      - neutrino-data:/data/neutrino
+    networks:
+      - jm-network
+    depends_on:
+      bitcoin:
+        condition: service_healthy
+    profiles:
+      - neutrino  # Only start with: docker-compose --profile neutrino up
+
+  # Maker with neutrino backend
+  maker-neutrino:
+    build:
+      context: .
+      dockerfile: maker/Dockerfile
+    container_name: jm-maker-neutrino
+    restart: "no"
+    environment:
+      - MNEMONIC=${MAKER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
+      - NETWORK=regtest
+      - BACKEND_TYPE=neutrino
+      - NEUTRINO_URL=http://jm-neutrino:8334
+      - DIRECTORY_SERVERS=jm-directory:5222
+      - LOG_LEVEL=DEBUG
+      - MIN_SIZE=10000
+      - TX_FEE_CONTRIBUTION=500
+      - CJ_FEE_RELATIVE=0.001
+    networks:
+      - jm-network
+    depends_on:
+      neutrino:
+        condition: service_started
+      directory:
+        condition: service_healthy
+    profiles:
+      - neutrino
+
+  # Taker with neutrino backend
+  taker-neutrino:
+    build:
+      context: .
+      dockerfile: taker/Dockerfile
+    container_name: jm-taker-neutrino
+    restart: "no"
+    environment:
+      - MNEMONIC=${TAKER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
+      - NETWORK=regtest
+      - BACKEND_TYPE=neutrino
+      - NEUTRINO_URL=http://jm-neutrino:8334
+      - DIRECTORY_SERVERS=jm-directory:5222
+      - LOG_LEVEL=DEBUG
+      - COINJOIN_AMOUNT=1000000
+      - MIN_MAKERS=2
+      - MAX_CJ_FEE_REL=0.01
+      - MAX_CJ_FEE_ABS=10000
+    networks:
+      - jm-network
+    depends_on:
+      neutrino:
+        condition: service_started
+      directory:
+        condition: service_healthy
+    profiles:
+      - neutrino
+
 volumes:
   bitcoin-data:
+  neutrino-data:
 
 networks:
   jm-network:

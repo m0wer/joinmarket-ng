@@ -7,7 +7,7 @@ Modern Hierarchical Deterministic (HD) wallet implementation for JoinMarket refa
 ```
 jmwallet/
 ├── src/jmwallet/
-│   ├── backends/         # Blockchain backends (Bitcoin Core, Mempool)
+│   ├── backends/         # Blockchain backends (Bitcoin Core, Neutrino)
 │   ├── wallet/           # BIP32/39/84 implementation
 │   └── __init__.py
 ├── tests/               # Unit tests
@@ -16,7 +16,7 @@ jmwallet/
 
 ## ✨ Features
 
-- **Multi-backend architecture** (Bitcoin Core RPC, Mempool.space API)
+- **Multi-backend architecture** (Bitcoin Core RPC, Neutrino SPV)
 - **No BerkeleyDB dependency** (works with Bitcoin Core v30+)
 - **BIP32/BIP39/BIP84** HD wallet implementation
 - **JoinMarket mixdepth support** (5 isolation levels)
@@ -73,11 +73,51 @@ asyncio.run(main())
 - Uses `scantxoutset` RPC to find UTXOs
 - No need to import addresses into wallet
 - Works with v30+ (descriptor wallets)
+- **Best for:** Maximum security, production deployments
 
-### Mempool Backend
+```python
+from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
+
+backend = BitcoinCoreBackend(
+    rpc_url="http://127.0.0.1:8332",
+    rpc_user="user",
+    rpc_password="password",
+)
+```
+
+### Neutrino Backend (BIP157/158)
+- Lightweight SPV using compact block filters
+- No full node required (~500MB vs ~500GB)
+- Privacy-preserving (downloads filters, not addresses)
+- **Best for:** Beginners, low-resource environments, mobile
+
+```python
+from jmwallet.backends.neutrino import NeutrinoBackend, NeutrinoConfig
+
+config = NeutrinoConfig(
+    base_url="http://localhost:8080",
+    network="mainnet",
+    timeout=30.0
+)
+backend = NeutrinoBackend(config)
+```
+
+**Running the Neutrino server:**
+
+```bash
+# With Docker
+docker-compose --profile neutrino up -d neutrino
+
+# Or build from source (Go required)
+cd neutrino_server
+go build -o neutrinod ./cmd/neutrinod
+./neutrinod --network=mainnet --datadir=./data
+```
+
+### Mempool Backend (Deprecated)
 - Uses Mempool.space API
 - No local node required
-- Great for beginners (tradeoff: privacy)
+- **Note:** Being phased out in favor of Neutrino
 
 (Upcoming: Electrum backend)
 
@@ -103,7 +143,8 @@ ruff check src/ tests/
 | `wallet/service.py` | Wallet operations (balance, UTXOs, mixdepths) |
 | `wallet/signing.py` | P2WPKH transaction signing |
 | `backends/bitcoin_core.py` | Bitcoin Core RPC backend |
-| `backends/mempool.py` | Mempool.space API backend |
+| `backends/neutrino.py` | Neutrino BIP157/158 SPV backend |
+| `backends/mempool.py` | Mempool.space API backend (deprecated) |
 
 ## 🛡️ Security Notes
 

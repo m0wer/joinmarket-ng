@@ -83,6 +83,22 @@ docker exec jm-bitcoin bitcoin-cli -regtest -rpcuser=test -rpcpassword=test gene
 pytest tests/e2e/test_complete_system.py -v -s
 ```
 
+### Run With Different Backends
+
+```bash
+# Default: Bitcoin Core backend
+pytest tests/e2e/ -v
+
+# Explicitly use Bitcoin Core
+pytest tests/e2e/ -v --backend=bitcoin_core
+
+# Use Neutrino backend (requires neutrino server running)
+pytest tests/e2e/ -v --backend=neutrino --neutrino-url=http://127.0.0.1:8334
+
+# Run with both backends (where applicable)
+pytest tests/e2e/ -v --backend=all
+```
+
 ### Run Specific Test
 
 ```bash
@@ -93,6 +109,40 @@ pytest tests/e2e/test_complete_system.py::test_bitcoin_connection -v
 
 ```bash
 pytest tests/e2e/ -v --cov=jmwallet --cov=maker --cov-report=html
+```
+
+## Backend Configuration
+
+### Bitcoin Core (Default)
+
+Uses Bitcoin Core RPC for full node validation:
+
+```bash
+# Environment variables (or defaults)
+export BITCOIN_RPC_URL="http://127.0.0.1:18443"
+export BITCOIN_RPC_USER="test"
+export BITCOIN_RPC_PASSWORD="test"
+
+pytest tests/e2e/ -v --backend=bitcoin_core
+```
+
+### Neutrino (Lightweight)
+
+Uses Neutrino BIP157/158 light client:
+
+```bash
+# Start neutrino server first
+docker-compose --profile neutrino up -d neutrino
+
+# Run tests with neutrino
+export NEUTRINO_URL="http://127.0.0.1:8334"
+pytest tests/e2e/ -v --backend=neutrino
+```
+
+**Note:** Neutrino on regtest requires connecting to the Bitcoin Core node as a peer:
+```bash
+# In docker-compose.yml, neutrino connects to bitcoin:18444
+docker-compose --profile neutrino up -d
 ```
 
 ## Test Scenarios

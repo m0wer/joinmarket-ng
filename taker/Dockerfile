@@ -55,8 +55,8 @@ ENV BITCOIN_RPC_URL=http://localhost:8332
 ENV BITCOIN_RPC_USER=
 ENV BITCOIN_RPC_PASSWORD=
 
-# Mempool API (when using mempool backend)
-ENV MEMPOOL_API_URL=https://mempool.space/api
+# Neutrino settings (when using neutrino backend)
+ENV NEUTRINO_URL=http://localhost:8334
 
 # Directory servers (comma-separated list of host:port)
 ENV DIRECTORY_SERVERS=

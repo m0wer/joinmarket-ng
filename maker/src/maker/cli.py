@@ -9,7 +9,7 @@ import asyncio
 import typer
 from jmcore.models import NetworkType
 from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
-from jmwallet.backends.mempool import MempoolBackend
+from jmwallet.backends.neutrino import NeutrinoBackend
 from jmwallet.wallet.service import WalletService
 from loguru import logger
 
@@ -33,11 +33,13 @@ def create_wallet_service(config: MakerConfig) -> WalletService:
             rpc_user=backend_cfg.get("rpc_user", "test"),
             rpc_password=backend_cfg.get("rpc_password", "test"),
         )
-    elif backend_type == "mempool":
+    elif backend_type == "neutrino":
         backend_cfg = config.backend_config
-        backend = MempoolBackend(
-            base_url=backend_cfg.get("base_url", "https://mempool.space/api"),
+        backend = NeutrinoBackend(
+            neutrino_url=backend_cfg.get("neutrino_url", "http://127.0.0.1:8334"),
             network=config.network.value,
+            connect_peers=backend_cfg.get("connect_peers", []),
+            data_dir=backend_cfg.get("data_dir", "/data/neutrino"),
         )
     else:
         raise typer.BadParameter(f"Unsupported backend: {backend_type}")
@@ -56,10 +58,11 @@ def create_wallet_service(config: MakerConfig) -> WalletService:
 def start(
     mnemonic: str = typer.Option(..., help="BIP39 mnemonic phrase"),
     network: NetworkType = typer.Option(NetworkType.REGTEST, case_sensitive=False),
-    backend_type: str = typer.Option("bitcoin_core", help="Backend type: bitcoin_core | mempool"),
+    backend_type: str = typer.Option("bitcoin_core", help="Backend type: bitcoin_core | neutrino"),
     rpc_url: str | None = typer.Option(None, help="Bitcoin Core RPC URL"),
     rpc_user: str | None = typer.Option(None, help="Bitcoin Core RPC username"),
     rpc_password: str | None = typer.Option(None, help="Bitcoin Core RPC password"),
+    neutrino_url: str | None = typer.Option(None, help="Neutrino REST API URL"),
     min_size: int = typer.Option(100_000, help="Minimum CoinJoin size in sats"),
     cj_fee_relative: str = typer.Option(
         "0.0002", help="Relative coinjoin fee (e.g., 0.0002 = 20bps)"
@@ -78,8 +81,11 @@ def start(
             "rpc_user": rpc_user or "test",
             "rpc_password": rpc_password or "test",
         }
-    elif backend_type == "mempool":
-        backend_config = {"base_url": rpc_url or "https://mempool.space/api"}
+    elif backend_type == "neutrino":
+        backend_config = {
+            "neutrino_url": neutrino_url or "http://127.0.0.1:8334",
+            "network": network.value,
+        }
 
     config = MakerConfig(
         mnemonic=mnemonic,

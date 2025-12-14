@@ -44,7 +44,7 @@ ENV TX_FEE_CONTRIBUTION=1000
 ENV CJ_FEE_RELATIVE=0.0002
 ENV CJ_FEE_ABSOLUTE=500
 ENV OFFER_TYPE=sw0reloffer
-ENV BACKEND_TYPE=mempool
+ENV BACKEND_TYPE=bitcoin_core
 
 # Tor settings (for connecting to directory servers)
 ENV TOR_SOCKS_HOST=127.0.0.1
@@ -55,8 +55,8 @@ ENV BITCOIN_RPC_URL=http://localhost:8332
 ENV BITCOIN_RPC_USER=
 ENV BITCOIN_RPC_PASSWORD=
 
-# Mempool API (when using mempool backend)
-ENV MEMPOOL_API_URL=https://mempool.space/api
+# Neutrino settings (when using neutrino backend)
+ENV NEUTRINO_URL=http://localhost:8334
 
 # Directory servers (comma-separated list of host:port)
 ENV DIRECTORY_SERVERS=
