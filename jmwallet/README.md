@@ -2,7 +2,7 @@
 
 Modern Hierarchical Deterministic (HD) wallet implementation for JoinMarket refactor.
 
-![Status](https://img.shields.io/badge/status-in_development-yellow.svg)
+![Status](https://img.shields.io/badge/status-completed-green.svg)
 
 ```
 jmwallet/

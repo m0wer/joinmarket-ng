@@ -2,7 +2,7 @@
 
 Modern maker (yield generator) implementation for JoinMarket refactor.
 
-![Status](https://img.shields.io/badge/status-in_progress-yellow.svg)
+![Status](https://img.shields.io/badge/status-completed-green.svg)
 
 ```
 maker/
@@ -28,11 +28,11 @@ maker/
 - **Offer management** based on mixdepth balances
 - **Docker + E2E tests** with Bitcoin regtest
 
-## ⚠️ Status
+## ✅ Status
 
-- Transaction signing implementation **in progress**
-- End-to-end tests **on regtest** required before use
-- Not ready for mainnet without completion + audit
+- Transaction signing implementation **complete**
+- End-to-end tests passed on regtest
+- Ready for testing; audit recommended before mainnet use
 
 ## 🚀 Quick Start
 

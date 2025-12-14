@@ -32,7 +32,7 @@ taker/
 ## Status
 
 - Transaction signing implementation **in progress**
-- End-to-end tests **on regtest** required before use
+- End-to-end tests **on regtest** passed but manual verification needed
 - Not ready for mainnet without completion + audit
 
 ## Quick Start
