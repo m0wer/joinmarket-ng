@@ -6,6 +6,13 @@ Modern, clean alternative implementation of [JoinMarket](https://github.com/Join
 
 This project is an alternative implementation of the reference JoinMarket protocol from [joinmarket-clientserver](https://github.com/JoinMarket-Org/joinmarket-clientserver/). The goal is to provide a clean, maintainable, and auditable codebase while maintaining full backwards compatibility with the existing JoinMarket network.
 
+### Key Features
+
+- **No BerkeleyDB Required**: Works with Bitcoin Core v30+ out of the box
+- **Neutrino SPV Support**: Run without a full node using BIP157/158 compact block filters
+- **Privacy-Preserving**: Tor integration, Neutrino filters never reveal your addresses
+- **Modern Stack**: Python 3.14+, Pydantic v2, AsyncIO, Go (for Neutrino server)
+
 ### Goals
 
 - **Clean Code**: Easy to understand, review, and audit
@@ -26,7 +33,8 @@ We are incrementally implementing JoinMarket components while maintaining protoc
 | 4 | **jmwallet** | ✅ Complete | BIP32/39/84 wallet with pluggable backends (NO BerkeleyDB!) |
 | 5 | **Maker Bot** | ✅ Complete | Yield generator - PoDLE, TX verification, signing, fidelity bonds |
 | 6 | **Taker Bot** | 🚧 In Progress | CoinJoin participant |
-| 7 | **Protocol Extensions** | 🔮 Future | Nostr relays, [CoinJoinXT](https://www.youtube.com/watch?v=YS0MksuMl9k) + LN |
+| 7 | **Neutrino Server** | ✅ Complete | Lightweight SPV backend (BIP157/158) |
+| 8 | **Protocol Extensions** | 🔮 Future | Nostr relays, [CoinJoinXT](https://www.youtube.com/watch?v=YS0MksuMl9k) + LN |
 
 **Maker Bot Status (Phase 5):**
 - ✅ PoDLE verification (anti-sybil)
@@ -60,6 +68,9 @@ jm-refactor/
 ├── maker/               # Maker bot (yield generator)
 │   ├── src/maker/       # Bot implementation
 │   └── tests/           # Integration and E2E tests
+├── neutrino_server/     # Lightweight SPV server (Go)
+│   ├── cmd/neutrinod/   # Server entry point
+│   └── internal/        # API and neutrino node wrapper
 └── tests/               # Repository-level E2E tests
 ```
 
@@ -114,6 +125,16 @@ Yield generator / liquidity provider bot:
 - Transaction verification (prevents loss of funds)
 - Fidelity bond support
 
+### Neutrino Server
+
+Lightweight SPV server using BIP157/158 compact block filters:
+
+- **No full node required**: ~500MB storage vs ~500GB for Bitcoin Core
+- **Privacy-preserving**: Downloads filters, not addresses (unlike Bloom filters)
+- **Fast sync**: Minutes instead of days
+- **Written in Go**: Wraps lightninglabs/neutrino library
+- **REST API**: Simple HTTP interface for wallet integration
+
 ## Development Philosophy
 
 - **SOLID Principles**: Clean architecture with clear separation of concerns
@@ -124,7 +145,35 @@ Yield generator / liquidity provider bot:
 - **Testability**: High test coverage with pytest
 - **Code Quality**: Pre-commit hooks with ruff for linting and formatting
 
-See more at [ARCHITECTURE.md](./ARCHITECTURE.md).
+See more at [DOCS.md](./DOCS.md).
+
+## 🌟 Key Innovation: Neutrino SPV Support
+
+Run JoinMarket without a full Bitcoin node! Our Neutrino implementation uses BIP157/158 compact block filters for privacy-preserving light client operation.
+
+```bash
+# Start with Neutrino backend (downloads block filters, ~500MB vs ~500GB for full node)
+docker-compose --profile neutrino up -d
+
+# This starts:
+# - Neutrino server (BIP157/158 compact block filters)
+# - Maker with Neutrino backend
+# - Taker with Neutrino backend
+```
+
+**Why Neutrino over traditional SPV?**
+
+| Feature | Full Node | Bloom Filter SPV | Neutrino SPV |
+|---------|-----------|------------------|--------------|
+| Storage | ~500 GB | ~50 MB | ~500 MB |
+| Initial Sync | Days | Minutes | Minutes |
+| Privacy | Full | **Low** (reveals addresses) | **High** (downloads all filters) |
+| Validation | Full | Headers only | Headers + filters |
+
+**When to use Bitcoin Core instead:**
+- Maximum security (full validation)
+- You already run a full node
+- Production deployments with high value
 
 ## 🎯 Key Innovation: No BerkeleyDB Dependency!
 
@@ -251,8 +300,7 @@ See individual component READMEs for detailed instructions:
 - [Maker Bot](./maker/README.md) - Yield generator
 - [Taker Bot](./taker/README.md) - CoinJoin participant
 - [E2E Tests](./tests/e2e/README.md) - Complete system tests
-- [Protocol & Documentation](./docs/DOCS.md) - JoinMarket messaging protocol
-- [Architecture](./ARCHITECTURE.md) - Design principles and components
+- [Protocol & Architecture Documentation](./DOCS.md) - Full technical documentation
 
 ## Development
 
