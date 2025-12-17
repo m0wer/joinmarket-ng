@@ -10,7 +10,7 @@ RPC_USER="${RPC_USER:-test}"
 RPC_PASSWORD="${RPC_PASSWORD:-test}"
 MINE_INTERVAL="${MINE_INTERVAL:-10}"
 
-CLI="bitcoin-cli -rpcconnect=$RPC_HOST -rpcport=$RPC_PORT -rpcuser=$RPC_USER -rpcpassword=$RPC_PASSWORD"
+CLI="bitcoin-cli -chain=regtest -rpcconnect=$RPC_HOST -rpcport=$RPC_PORT -rpcuser=$RPC_USER -rpcpassword=$RPC_PASSWORD"
 
 echo "Waiting for Bitcoin Core to be ready..."
 until $CLI getblockchaininfo > /dev/null 2>&1; do

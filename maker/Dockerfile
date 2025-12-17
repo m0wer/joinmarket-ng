@@ -66,4 +66,15 @@ ENV DIRECTORY_SERVERS=
 # Wallet mnemonic (REQUIRED - set at runtime!)
 # ENV MNEMONIC=
 
-CMD ["jm-maker", "start"]
+CMD ["sh", "-c", "jm-maker start \
+    --mnemonic \"${MNEMONIC}\" \
+    --network \"${NETWORK}\" \
+    --backend-type \"${BACKEND_TYPE}\" \
+    --rpc-url \"${BITCOIN_RPC_URL}\" \
+    --rpc-user \"${BITCOIN_RPC_USER}\" \
+    --rpc-password \"${BITCOIN_RPC_PASSWORD}\" \
+    --neutrino-url \"${NEUTRINO_URL}\" \
+    --min-size \"${MIN_SIZE}\" \
+    --cj-fee-relative \"${CJ_FEE_RELATIVE}\" \
+    --tx-fee-contribution \"${TX_FEE_CONTRIBUTION}\" \
+    --directory-servers \"${DIRECTORY_SERVERS}\""]

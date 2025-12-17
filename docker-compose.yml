@@ -51,6 +51,7 @@ services:
       - '-zmqpubrawblock=tcp://0.0.0.0:28332'
       - '-zmqpubrawtx=tcp://0.0.0.0:28333'
       - '-debug=1'
+      - '-disablewallet=0'
     ports:
       - "18443:18443"
       - "18444:18444"
@@ -272,8 +273,8 @@ services:
       DIRECTORY_TOR_SERVICE_HOSTS: "5222:jm-directory:5222"
       DIRECTORY_TOR_SERVICE_VERSION: "3"
     volumes:
-      # Use pre-generated keys for deterministic onion address
-      - ./tests/e2e/reference/tor_keys:/var/lib/tor/hidden_service/directory:ro
+      # Use pre-generated keys for deterministic onion address (rw needed for tor daemon)
+      - ./tests/e2e/reference/tor_keys:/var/lib/tor/hidden_service/directory
     networks:
       - jm-network
     depends_on:
