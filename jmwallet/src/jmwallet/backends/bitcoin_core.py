@@ -5,12 +5,18 @@ Uses RPC calls but NOT wallet functionality (no BDB dependency).
 
 from __future__ import annotations
 
+import asyncio
+import random
 from typing import Any
 
 import httpx
 from loguru import logger
 
 from jmwallet.backends.base import UTXO, BlockchainBackend, Transaction
+
+# Maximum retries for scantxoutset when another scan is in progress
+SCAN_MAX_RETRIES = 10
+SCAN_BASE_DELAY = 0.5  # Base delay in seconds for exponential backoff
 
 
 class BitcoinCoreBackend(BlockchainBackend):
@@ -55,6 +61,49 @@ class BitcoinCoreBackend(BlockchainBackend):
             logger.error(f"RPC call failed: {method} - {e}")
             raise
 
+    async def _scantxoutset_with_retry(self, descriptors: list[str]) -> dict[str, Any] | None:
+        """
+        Execute scantxoutset with retry logic for handling concurrent scan conflicts.
+
+        Bitcoin Core only allows one scantxoutset at a time. This method retries with
+        exponential backoff when another scan is in progress.
+
+        Args:
+            descriptors: List of output descriptors to scan for
+
+        Returns:
+            Scan result dict or None if all retries failed
+        """
+        for attempt in range(SCAN_MAX_RETRIES):
+            try:
+                result = await self._rpc_call("scantxoutset", ["start", descriptors])
+                return result
+            except ValueError as e:
+                error_str = str(e)
+                # Check if it's a "scan already in progress" error
+                if "Scan already in progress" in error_str or "code': -8" in error_str:
+                    if attempt < SCAN_MAX_RETRIES - 1:
+                        # Exponential backoff with jitter
+                        delay = SCAN_BASE_DELAY * (2**attempt) + random.uniform(0, 0.5)
+                        logger.debug(
+                            f"Scan in progress, retrying in {delay:.2f}s "
+                            f"(attempt {attempt + 1}/{SCAN_MAX_RETRIES})"
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        logger.warning(
+                            f"Max retries ({SCAN_MAX_RETRIES}) exceeded waiting for scan slot"
+                        )
+                        return None
+                else:
+                    # Other RPC errors should not be retried
+                    raise
+            except Exception:
+                raise
+
+        return None
+
     async def get_utxos(self, addresses: list[str]) -> list[UTXO]:
         utxos: list[UTXO] = []
         if not addresses:
@@ -74,8 +123,8 @@ class BitcoinCoreBackend(BlockchainBackend):
             descriptors = [f"addr({addr})" for addr in chunk]
 
             try:
-                # Scan for all addresses in this chunk at once
-                result = await self._rpc_call("scantxoutset", ["start", descriptors])
+                # Scan for all addresses in this chunk at once (with retry for conflicts)
+                result = await self._scantxoutset_with_retry(descriptors)
 
                 if not result or "unspents" not in result:
                     continue
