@@ -324,9 +324,9 @@ python -m piptools compile -Uv requirements.in -o requirements.txt
 
 **Note**: The directory_server uses a `requirements.in` file to properly handle the local jmcore dependency with `-e ../jmcore`. The pinned `requirements.txt` files are used in Docker builds for reproducible deployments.
 
-## Running Tests with Docker Compose
+## Running Tests
 
-To run the end-to-end tests against a running docker compose stack:
+To run all unit and end-to-end tests with coverage:
 
 1. Start the services:
    ```bash
@@ -335,8 +335,16 @@ To run the end-to-end tests against a running docker compose stack:
 
 2. Run the tests:
    ```bash
-   pytest tests/e2e/test_complete_system.py -v -s
+   pytest -lv \
+     --cov=jmcore \
+     --cov=jmwallet \
+     --cov=directory_server \
+     --cov=orderbook_watcher \
+     --cov=maker \
+     --cov=taker \
+     jmcore orderbook_watcher directory_server jmwallet maker taker tests
    ```
+
 
 The tests will automatically detect the running directory server on port 5222 and use it.
 

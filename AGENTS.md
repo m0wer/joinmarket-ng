@@ -9,7 +9,7 @@ Modern, secure implementation of JoinMarket components using Python 3.14+, Pydan
 - **Privacy**: Tor integration is core architecture.
 
 ## Commands
-- **Test**: `for d in jmcore orderbook_watcher directory_server jmwallet maker taker tests; do pytest -lv $d; done`
+- **Test**: `pytest -lv --cov=jmcore --cov=jmwallet --cov=directory_server --cov=orderbook_watcher --cov=maker --cov=taker jmcore orderbook_watcher directory_server jmwallet maker taker tests`
 - **Lint/Format**: `pre-commit run --all-files` (Recommended).
   - Manual: `ruff check .` / `ruff format .` / `mypy .`
 - **Docker**: `docker-compose up -d` (use `--profile taker` for taker bots).
