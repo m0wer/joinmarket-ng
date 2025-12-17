@@ -407,12 +407,12 @@ jobs:
 
       - name: Start reference test services
         run: |
-          docker compose -f docker-compose.reference.yml up -d --build bitcoin directory tor
+          docker compose -p jm-reference -f docker-compose.reference.yml up -d --build bitcoin directory tor
 
           # Wait for Bitcoin to be ready
           echo "Waiting for Bitcoin node to be ready..."
           for i in {1..60}; do
-            if docker compose -f docker-compose.reference.yml exec -T bitcoin \
+            if docker compose -p jm-reference -f docker-compose.reference.yml exec -T bitcoin \
                 bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo 2>/dev/null; then
               echo "Bitcoin node is ready"
               break
@@ -424,7 +424,7 @@ jobs:
           # Wait for Tor to generate onion address (~30-60 seconds)
           echo "Waiting for Tor hidden service..."
           for i in {1..60}; do
-            ONION=$(docker compose -f docker-compose.reference.yml exec -T tor \
+            ONION=$(docker compose -p jm-reference -f docker-compose.reference.yml exec -T tor \
               cat /var/lib/tor/hidden_service/directory/hostname 2>/dev/null || echo "")
             if [ -n "$ONION" ] && [[ "$ONION" == *.onion ]]; then
               echo "Tor hidden service ready: $ONION"
@@ -443,7 +443,7 @@ jobs:
           fi
 
           # Start makers
-          docker compose -f docker-compose.reference.yml up -d maker1 maker2
+          docker compose -p jm-reference -f docker-compose.reference.yml up -d maker1 maker2
 
           # Wait for makers to connect
           echo "Waiting for makers to connect..."
@@ -451,12 +451,12 @@ jobs:
 
       - name: Start jam-standalone
         run: |
-          docker compose -f docker-compose.reference.yml up -d jam
+          docker compose -p jm-reference -f docker-compose.reference.yml up -d jam
 
           # Wait for jam to be healthy
           echo "Waiting for jam to be healthy..."
           for i in {1..30}; do
-            if docker compose -f docker-compose.reference.yml exec -T jam \
+            if docker compose -p jm-reference -f docker-compose.reference.yml exec -T jam \
                 sh -c "timeout 5 bash -c '</dev/tcp/127.0.0.1/80'" 2>/dev/null; then
               echo "JAM is healthy"
               break
@@ -478,19 +478,19 @@ jobs:
         if: failure()
         run: |
           echo "=== Bitcoin logs ==="
-          docker compose -f docker-compose.reference.yml logs bitcoin --tail=50
+          docker compose -p jm-reference -f docker-compose.reference.yml logs bitcoin --tail=50
           echo "=== Directory logs ==="
-          docker compose -f docker-compose.reference.yml logs directory --tail=50
+          docker compose -p jm-reference -f docker-compose.reference.yml logs directory --tail=50
           echo "=== Maker1 logs ==="
-          docker compose -f docker-compose.reference.yml logs maker1 --tail=50
+          docker compose -p jm-reference -f docker-compose.reference.yml logs maker1 --tail=50
           echo "=== Maker2 logs ==="
-          docker compose -f docker-compose.reference.yml logs maker2 --tail=50
+          docker compose -p jm-reference -f docker-compose.reference.yml logs maker2 --tail=50
           echo "=== JAM logs ==="
-          docker compose -f docker-compose.reference.yml logs jam --tail=100
+          docker compose -p jm-reference -f docker-compose.reference.yml logs jam --tail=100
           echo "=== Tor logs ==="
-          docker compose -f docker-compose.reference.yml logs tor --tail=50
+          docker compose -p jm-reference -f docker-compose.reference.yml logs tor --tail=50
 
       - name: Cleanup
         if: always()
         run: |
-          docker compose -f docker-compose.reference.yml down -v
+          docker compose -p jm-reference -f docker-compose.reference.yml down -v

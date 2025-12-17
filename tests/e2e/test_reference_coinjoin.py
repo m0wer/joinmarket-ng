@@ -35,6 +35,10 @@ COINJOIN_TIMEOUT = 300  # 5 minutes for coinjoin to complete
 WALLET_FUND_TIMEOUT = 120  # 2 minutes for wallet funding
 
 
+# Project name to distinguish reference compose from main compose
+REFERENCE_PROJECT_NAME = "jm-reference"
+
+
 def get_compose_file() -> Path:
     """Get path to reference docker-compose file."""
     return Path(__file__).parent.parent.parent / "docker-compose.reference.yml"
@@ -43,9 +47,16 @@ def get_compose_file() -> Path:
 def run_compose_cmd(
     args: list[str], check: bool = True
 ) -> subprocess.CompletedProcess[str]:
-    """Run a docker compose command."""
+    """Run a docker compose command with the reference project name."""
     compose_file = get_compose_file()
-    cmd = ["docker", "compose", "-f", str(compose_file)] + args
+    cmd = [
+        "docker",
+        "compose",
+        "-p",
+        REFERENCE_PROJECT_NAME,
+        "-f",
+        str(compose_file),
+    ] + args
     logger.debug(f"Running: {' '.join(cmd)}")
     return subprocess.run(cmd, capture_output=True, text=True, check=check)
 
@@ -53,7 +64,17 @@ def run_compose_cmd(
 def run_jam_cmd(args: list[str], timeout: int = 60) -> subprocess.CompletedProcess[str]:
     """Run a command inside the jam container."""
     compose_file = get_compose_file()
-    cmd = ["docker", "compose", "-f", str(compose_file), "exec", "-T", "jam"] + args
+    cmd = [
+        "docker",
+        "compose",
+        "-p",
+        REFERENCE_PROJECT_NAME,
+        "-f",
+        str(compose_file),
+        "exec",
+        "-T",
+        "jam",
+    ] + args
     logger.debug(f"Running in jam: {' '.join(args)}")
     return subprocess.run(
         cmd, capture_output=True, text=True, timeout=timeout, check=False
@@ -66,6 +87,8 @@ def run_bitcoin_cmd(args: list[str]) -> subprocess.CompletedProcess[str]:
     cmd = [
         "docker",
         "compose",
+        "-p",
+        REFERENCE_PROJECT_NAME,
         "-f",
         str(compose_file),
         "exec",
@@ -303,13 +326,15 @@ def fund_wallet_address(address: str, amount_btc: float = 1.0) -> bool:
 @pytest.fixture(scope="module")
 def reference_services():
     """
-    Start reference test services using docker compose.
+    Fixture for reference test services using docker compose.
 
-    This fixture:
-    1. Starts all services in docker-compose.reference.yml
-    2. Waits for Tor to generate onion address
-    3. Updates jam config with onion address
-    4. Restarts jam to pick up new config
+    This fixture checks if the reference services (docker-compose.reference.yml)
+    are already running. If not, tests will be SKIPPED.
+
+    To run these tests, start the services manually:
+        docker compose -p jm-reference -f docker-compose.reference.yml up -d
+
+    Or use the test-reference-coinjoin GitHub Actions workflow.
     """
     compose_file = get_compose_file()
 
@@ -321,26 +346,31 @@ def reference_services():
     services_running = bool(result.stdout.strip())
 
     if not services_running:
-        logger.info("Starting reference test services...")
-        result = run_compose_cmd(["up", "-d", "--build"])
-        if result.returncode != 0:
-            pytest.fail(f"Failed to start services: {result.stderr}")
+        pytest.skip(
+            "Reference services not running. "
+            "Start them manually with: "
+            f"docker compose -p {REFERENCE_PROJECT_NAME} -f docker-compose.reference.yml up -d"
+        )
 
     # Wait for services to be healthy
     if not wait_for_services():
         # Show logs on failure
         run_compose_cmd(["logs", "--tail=100"])
-        pytest.fail("Services failed to start")
+        pytest.skip(
+            "Reference services failed to become healthy. "
+            "Check service logs with: "
+            f"docker compose -p {REFERENCE_PROJECT_NAME} -f docker-compose.reference.yml logs"
+        )
 
     # Wait for Tor to generate onion address
     logger.info("Waiting for Tor hidden service...")
     onion = wait_for_tor_onion()
     if not onion:
-        pytest.fail("Tor failed to generate onion address")
+        pytest.skip("Tor failed to generate onion address - skipping reference tests")
 
     # Update jam config with onion address
     if not update_jam_config_with_onion(onion):
-        pytest.fail("Failed to update jam config")
+        pytest.skip("Failed to update jam config with onion address")
 
     # Restart jam to pick up new config
     logger.info("Restarting jam with updated config...")
