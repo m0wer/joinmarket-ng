@@ -288,9 +288,17 @@ class TestFindFidelityBonds:
         assert bonds == []
 
     def test_wrong_mixdepth_returns_empty(self):
+        mock_utxo = MagicMock()
+        mock_utxo.path = "m/84'/0'/0'/1/0"  # Wrong mixdepth (0, not 4)
+        mock_utxo.value = 100_000_000
+        mock_utxo.confirmations = 1000
+        mock_utxo.address = "bcrt1qtest"
+        mock_utxo.txid = "txid1"
+        mock_utxo.vout = 0
+
         mock_wallet = MagicMock()
         mock_wallet.utxo_cache = {
-            0: {("txid1", 0): MagicMock(path="m/84'/0'/0'/1")},  # Wrong mixdepth
+            0: [mock_utxo],  # In mixdepth 0, not 4
         }
 
         bonds = find_fidelity_bonds(mock_wallet, mixdepth=FIDELITY_BOND_MIXDEPTH)
@@ -298,10 +306,12 @@ class TestFindFidelityBonds:
 
     def test_finds_bond_in_correct_mixdepth(self, test_private_key, test_pubkey):
         mock_utxo = MagicMock()
-        mock_utxo.path = "m/84'/0'/4'/1"  # mixdepth 4, internal
+        mock_utxo.path = "m/84'/0'/4'/1/0"  # mixdepth 4, internal
         mock_utxo.value = 100_000_000
         mock_utxo.confirmations = 1000
         mock_utxo.address = "bcrt1qtest"
+        mock_utxo.txid = "txid123"
+        mock_utxo.vout = 0
 
         mock_key = MagicMock()
         mock_key.get_public_key_bytes.return_value = test_pubkey
@@ -309,7 +319,7 @@ class TestFindFidelityBonds:
 
         mock_wallet = MagicMock()
         mock_wallet.utxo_cache = {
-            FIDELITY_BOND_MIXDEPTH: {("txid123", 0): mock_utxo},
+            FIDELITY_BOND_MIXDEPTH: [mock_utxo],
         }
         mock_wallet.get_key_for_address.return_value = mock_key
 
@@ -323,14 +333,18 @@ class TestFindFidelityBonds:
         assert bonds[0].bond_value == 50000
 
     def test_skips_external_addresses(self):
-        """Only internal addresses (path ends with /1) should be considered."""
+        """Only internal addresses (path ends with /1/index) should be considered."""
         mock_utxo = MagicMock()
-        mock_utxo.path = "m/84'/0'/4'/0"  # External address (not /1)
+        mock_utxo.path = "m/84'/0'/4'/0/0"  # External address (not /1/)
         mock_utxo.value = 100_000_000
+        mock_utxo.confirmations = 1000
+        mock_utxo.address = "bcrt1qtest"
+        mock_utxo.txid = "txid456"
+        mock_utxo.vout = 0
 
         mock_wallet = MagicMock()
         mock_wallet.utxo_cache = {
-            FIDELITY_BOND_MIXDEPTH: {("txid456", 0): mock_utxo},
+            FIDELITY_BOND_MIXDEPTH: [mock_utxo],
         }
 
         bonds = find_fidelity_bonds(mock_wallet)
@@ -349,16 +363,20 @@ class TestGetBestFidelityBond:
 
     def test_returns_highest_bond_value(self, test_private_key, test_pubkey):
         mock_utxo1 = MagicMock()
-        mock_utxo1.path = "m/84'/0'/4'/1"
+        mock_utxo1.path = "m/84'/0'/4'/1/0"
         mock_utxo1.value = 100_000_000
         mock_utxo1.confirmations = 1000
         mock_utxo1.address = "bcrt1qtest1"
+        mock_utxo1.txid = "txid_low"
+        mock_utxo1.vout = 0
 
         mock_utxo2 = MagicMock()
-        mock_utxo2.path = "m/84'/0'/4'/1"
+        mock_utxo2.path = "m/84'/0'/4'/1/1"
         mock_utxo2.value = 200_000_000
         mock_utxo2.confirmations = 2000
         mock_utxo2.address = "bcrt1qtest2"
+        mock_utxo2.txid = "txid_high"
+        mock_utxo2.vout = 1
 
         mock_key = MagicMock()
         mock_key.get_public_key_bytes.return_value = test_pubkey
@@ -366,10 +384,7 @@ class TestGetBestFidelityBond:
 
         mock_wallet = MagicMock()
         mock_wallet.utxo_cache = {
-            FIDELITY_BOND_MIXDEPTH: {
-                ("txid_low", 0): mock_utxo1,
-                ("txid_high", 1): mock_utxo2,
-            },
+            FIDELITY_BOND_MIXDEPTH: [mock_utxo1, mock_utxo2],
         }
         mock_wallet.get_key_for_address.return_value = mock_key
 

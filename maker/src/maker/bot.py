@@ -159,12 +159,13 @@ class MakerBot:
                     logger.error(f"Failed to announce offer: {e}")
 
     def _format_offer_announcement(self, offer) -> str:
-        """Format offer for announcement"""
+        """Format offer for announcement (just the offer content, without nick!PUBLIC! prefix)"""
 
         order_type_str = offer.ordertype.value
 
+        # NOTE: Don't include nick!PUBLIC! prefix here - send_public_message() adds it
         msg = (
-            f"{self.nick}!PUBLIC!{order_type_str} "
+            f"{order_type_str} "
             f"{offer.oid} {offer.minsize} {offer.maxsize} "
             f"{offer.txfee} {offer.cjfee}"
         )
@@ -203,7 +204,7 @@ class MakerBot:
             if msg_type == MessageType.PRIVMSG.value:
                 await self._handle_privmsg(line)
             elif msg_type == MessageType.PUBMSG.value:
-                pass
+                await self._handle_pubmsg(line)
             elif msg_type == MessageType.PEERLIST.value:
                 logger.debug(f"Received peerlist: {line[:50]}...")
             else:
@@ -211,6 +212,29 @@ class MakerBot:
 
         except Exception as e:
             logger.error(f"Failed to handle message: {e}")
+
+    async def _handle_pubmsg(self, line: str) -> None:
+        """Handle public message (e.g., !orderbook request)"""
+        try:
+            parts = line.split(COMMAND_PREFIX)
+            if len(parts) < 3:
+                return
+
+            from_nick = parts[0]
+            to_nick = parts[1]
+            rest = COMMAND_PREFIX.join(parts[2:])
+
+            # Ignore our own messages
+            if from_nick == self.nick:
+                return
+
+            # Respond to !orderbook requests by re-announcing offers
+            if to_nick == "PUBLIC" and rest.strip() == "!orderbook":
+                logger.info(f"Received !orderbook request from {from_nick}, re-announcing offers")
+                await self._announce_offers()
+
+        except Exception as e:
+            logger.error(f"Failed to handle pubmsg: {e}")
 
     async def _handle_privmsg(self, line: str) -> None:
         """Handle private message (CoinJoin protocol)"""
@@ -292,10 +316,21 @@ class MakerBot:
 
             logger.info(f"Received !auth from {taker_nick}, verifying PoDLE...")
 
-            parts = msg.split()
-            commitment = parts[1]
-            revelation_json = parts[2]
-            kphex = parts[3] if len(parts) > 3 else ""
+            # Parse: !auth <commitment> <revelation_json> <kphex>
+            # revelation_json contains spaces, so we need to extract it by finding { and }
+            # Find the JSON object boundaries
+            json_start = msg.find("{")
+            json_end = msg.rfind("}") + 1
+            if json_start == -1 or json_end == 0:
+                logger.error("Invalid !auth format: no JSON found")
+                return
+
+            # Extract parts
+            before_json = msg[:json_start].strip().split()
+            commitment = before_json[1] if len(before_json) > 1 else ""
+            revelation_json = msg[json_start:json_end]
+            after_json = msg[json_end:].strip()
+            kphex = after_json if after_json else ""
 
             revelation = json.loads(revelation_json)
 

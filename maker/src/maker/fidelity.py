@@ -47,40 +47,44 @@ def find_fidelity_bonds(
     """
     bonds: list[FidelityBondInfo] = []
 
-    utxos_by_mixdepth = wallet.utxo_cache
-    utxos = utxos_by_mixdepth.get(mixdepth)
+    utxos = wallet.utxo_cache.get(mixdepth, [])
     if not utxos:
         return bonds
 
-    for (txid, vout), info in utxos.items():
-        path = info.path
-        # Fidelity bonds typically use internal (change) addresses
-        if not path.endswith("/1"):
-            continue
+    for utxo_info in utxos:
+        # Fidelity bonds should only be on internal (change) addresses
+        # Path format: m/84'/coin'/mixdepth'/change/index
+        # change=1 means internal address
+        path_parts = utxo_info.path.split("/")
+        if len(path_parts) >= 5:
+            # Check if this is an internal address (change = 1)
+            change_part = path_parts[-2]  # Second to last is change
+            if change_part != "1":
+                continue  # Skip external addresses
 
         # Get the key for this address
-        key = wallet.get_key_for_address(info.address)
+        key = wallet.get_key_for_address(utxo_info.address)
         pubkey = key.get_public_key_bytes(compressed=True) if key else None
         private_key = key.private_key if key else None
 
         # Note: In production, we'd need to detect actual locktime from the UTXO script
-        # For now, we assume UTXOs in mixdepth 4 with /1 path suffix are timelocked
+        # For now, we assume UTXOs in mixdepth 4 are timelocked
         # The locktime would be extracted from the redeem script
         locktime = 0  # TODO: Extract from script when on-chain validation is added
 
-        confirmation_time = info.confirmations
+        confirmation_time = utxo_info.confirmations
 
         bond_value = calculate_timelocked_fidelity_bond_value(
-            utxo_value=info.value,
+            utxo_value=utxo_info.value,
             confirmation_time=confirmation_time,
             locktime=locktime,
         )
 
         bonds.append(
             FidelityBondInfo(
-                txid=txid,
-                vout=vout,
-                value=info.value,
+                txid=utxo_info.txid,
+                vout=utxo_info.vout,
+                value=utxo_info.value,
                 locktime=locktime,
                 confirmation_time=confirmation_time,
                 bond_value=bond_value,

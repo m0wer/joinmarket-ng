@@ -169,12 +169,8 @@ class CoinJoinSession:
             utxo_txid = parsed_rev["txid"]
             utxo_vout = parsed_rev["vout"]
 
-            utxos = await self.backend.get_utxos([])
-            taker_utxo = None
-            for utxo in utxos:
-                if utxo.txid == utxo_txid and utxo.vout == utxo_vout:
-                    taker_utxo = utxo
-                    break
+            # Verify the taker's UTXO exists on the blockchain
+            taker_utxo = await self.backend.get_utxo(utxo_txid, utxo_vout)
 
             if not taker_utxo:
                 return False, {"error": "Taker's UTXO not found on blockchain"}
@@ -351,7 +347,23 @@ class CoinJoinSession:
 
             signatures_info = []
 
-            for index, ((txid, vout), utxo_info) in enumerate(self.our_utxos.items()):
+            # Build a map of (txid, vout) -> input index for the transaction
+            # Note: txid in tx.inputs is little-endian bytes, need to convert
+            input_index_map: dict[tuple[str, int], int] = {}
+            for idx, tx_input in enumerate(tx.inputs):
+                # Convert little-endian txid bytes to big-endian hex string (RPC format)
+                txid_hex = tx_input.txid_le[::-1].hex()
+                input_index_map[(txid_hex, tx_input.vout)] = idx
+
+            for (txid, vout), utxo_info in self.our_utxos.items():
+                # Find the input index in the transaction
+                utxo_key = (txid, vout)
+                if utxo_key not in input_index_map:
+                    logger.error(f"Our UTXO {txid}:{vout} not found in transaction inputs")
+                    continue
+
+                input_index = input_index_map[utxo_key]
+
                 key = self.wallet.get_key_for_address(utxo_info.address)
                 if not key:
                     raise TransactionSigningError(f"Missing key for address {utxo_info.address}")
@@ -359,10 +371,16 @@ class CoinJoinSession:
                 priv_key = key.private_key
                 pubkey_bytes = key.get_public_key_bytes(compressed=True)
 
+                logger.debug(
+                    f"Signing UTXO {txid}:{vout} at input_index={input_index}, "
+                    f"value={utxo_info.value}, address={utxo_info.address}, "
+                    f"pubkey={pubkey_bytes.hex()[:16]}..."
+                )
+
                 script_code = create_p2wpkh_script_code(pubkey_bytes)
                 signature = sign_p2wpkh_input(
                     tx=tx,
-                    input_index=index,
+                    input_index=input_index,
                     script_code=script_code,
                     value=utxo_info.value,
                     private_key=priv_key,
@@ -379,6 +397,8 @@ class CoinJoinSession:
                         "witness": [item.hex() for item in witness],
                     }
                 )
+
+                logger.debug(f"Signed input {input_index} for UTXO {txid}:{vout}")
 
             return signatures_info
 

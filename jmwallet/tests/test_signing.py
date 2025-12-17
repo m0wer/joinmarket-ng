@@ -130,12 +130,13 @@ class TestScriptCode:
         pubkey = bytes.fromhex("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
         script_code = create_p2wpkh_script_code(pubkey)
 
-        # Script code format: 0x19 0x76 0xa9 0x14 <20-byte-hash> 0x88 0xac (26 bytes)
-        assert len(script_code) == 26
-        assert script_code[0] == 0x19  # script length (25)
-        assert script_code[1] == 0x76  # OP_DUP
-        assert script_code[2] == 0xA9  # OP_HASH160
-        assert script_code[3] == 0x14  # 20 bytes follow
+        # Script code format: 0x76 0xa9 0x14 <20-byte-hash> 0x88 0xac (25 bytes)
+        # Note: BIP 143 says the scriptCode is the bare script without length prefix
+        # The length prefix is added by compute_sighash_segwit via encode_varint
+        assert len(script_code) == 25
+        assert script_code[0] == 0x76  # OP_DUP
+        assert script_code[1] == 0xA9  # OP_HASH160
+        assert script_code[2] == 0x14  # 20 bytes follow
         assert script_code[-2] == 0x88  # OP_EQUALVERIFY
         assert script_code[-1] == 0xAC  # OP_CHECKSIG
 

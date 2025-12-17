@@ -177,5 +177,58 @@ class MempoolBackend(BlockchainBackend):
             logger.error(f"Failed to fetch block hash for height {block_height}: {e}")
             raise
 
+    async def get_utxo(self, txid: str, vout: int) -> UTXO | None:
+        """Get a specific UTXO from the blockchain.
+        Returns None if the UTXO does not exist or has been spent."""
+        try:
+            # Get transaction output info
+            response = await self.client.get(f"{self.base_url}/tx/{txid}/outspend/{vout}")
+            response.raise_for_status()
+            outspend_data = response.json()
+
+            # If it's been spent, return None
+            if outspend_data.get("spent", False):
+                logger.debug(f"UTXO {txid}:{vout} has been spent")
+                return None
+
+            # Get the transaction to get output details
+            tx_response = await self.client.get(f"{self.base_url}/tx/{txid}")
+            tx_response.raise_for_status()
+            tx_data = tx_response.json()
+
+            if vout >= len(tx_data.get("vout", [])):
+                logger.debug(f"UTXO {txid}:{vout} vout index out of range")
+                return None
+
+            output = tx_data["vout"][vout]
+            status = tx_data.get("status", {})
+            confirmed = status.get("confirmed", False)
+            block_height = status.get("block_height") if confirmed else None
+
+            tip_height = await self.get_block_height()
+            confirmations = 0
+            if block_height:
+                confirmations = tip_height - block_height + 1
+
+            return UTXO(
+                txid=txid,
+                vout=vout,
+                value=output.get("value", 0),
+                address=output.get("scriptpubkey_address", ""),
+                confirmations=confirmations,
+                scriptpubkey=output.get("scriptpubkey", ""),
+                height=block_height,
+            )
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                logger.debug(f"UTXO {txid}:{vout} not found")
+                return None
+            logger.error(f"Failed to get UTXO {txid}:{vout}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get UTXO {txid}:{vout}: {e}")
+            return None
+
     async def close(self) -> None:
         await self.client.aclose()

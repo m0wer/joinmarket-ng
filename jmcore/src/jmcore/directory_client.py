@@ -328,11 +328,14 @@ class DirectoryClient:
         bonds: list[FidelityBond] = []
         bond_utxo_set: set[str] = set()
 
+        # NOTE: Peerlist may be empty if all makers use NOT-SERVING-ONION (regtest/local).
+        # We still broadcast !orderbook because makers will respond via the directory.
         if not peers:
-            logger.info(f"No peers found on {self.host}:{self.port}")
-            return offers, bonds
-
-        logger.info(f"Found {len(peers)} peers, broadcasting !orderbook request to PUBLIC...")
+            logger.info(
+                f"Peerlist empty on {self.host}:{self.port} (makers may be NOT-SERVING-ONION)"
+            )
+        else:
+            logger.info(f"Found {len(peers)} peers on {self.host}:{self.port}")
 
         if not self.connection:
             raise DirectoryClientError("Not connected")

@@ -180,15 +180,35 @@ def sign_p2wpkh_input(
     sighash_type: int = 1,
 ) -> bytes:
     sighash = compute_sighash_segwit(tx, input_index, script_code, value, sighash_type)
-    signature = private_key.sign(sighash, ec.ECDSA(hashes.SHA256()))
+
+    # Sign the pre-hashed sighash (it's already SHA256d)
+    # Use Prehashed to prevent the library from hashing again
+    signature = private_key.sign(sighash, ec.ECDSA(utils.Prehashed(hashes.SHA256())))
     r, s = utils.decode_dss_signature(signature)
+
+    # Normalize s to low-S form (BIP 62/BIP 146)
+    # secp256k1 curve order
+    secp256k1_order = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+    secp256k1_half_order = secp256k1_order // 2
+
+    if s > secp256k1_half_order:
+        s = secp256k1_order - s
+
     der_signature = utils.encode_dss_signature(r, s)
     return der_signature + bytes([sighash_type])
 
 
 def create_p2wpkh_script_code(pubkey_bytes: bytes) -> bytes:
+    """Create the scriptCode for P2WPKH signing (BIP 143).
+
+    For P2WPKH, the scriptCode is the P2PKH script:
+    OP_DUP OP_HASH160 <20-byte-pubkeyhash> OP_EQUALVERIFY OP_CHECKSIG
+
+    Returns 25 bytes (without length prefix - the preimage serialization adds that).
+    """
     pubkey_hash = hashlib.new("ripemd160", hashlib.sha256(pubkey_bytes).digest()).digest()
-    return b"\x19\x76\xa9\x14" + pubkey_hash + b"\x88\xac"
+    # OP_DUP OP_HASH160 PUSH20 <pkh> OP_EQUALVERIFY OP_CHECKSIG
+    return b"\x76\xa9\x14" + pubkey_hash + b"\x88\xac"
 
 
 def create_witness_stack(signature: bytes, pubkey_bytes: bytes) -> list[bytes]:

@@ -121,28 +121,65 @@ class MultiDirectoryClient:
             except Exception as e:
                 logger.warning(f"Failed to send privmsg: {e}")
 
+    async def wait_for_responses(
+        self,
+        expected_nicks: list[str],
+        expected_command: str,
+        timeout: float = 60.0,
+    ) -> dict[str, dict[str, Any]]:
+        """Wait for responses from multiple makers at once.
+
+        Returns a dict of nick -> response data for all makers that responded.
+        """
+        responses: dict[str, dict[str, Any]] = {}
+        remaining_nicks = set(expected_nicks)
+        start_time = asyncio.get_event_loop().time()
+
+        while remaining_nicks:
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed >= timeout:
+                logger.warning(f"Timeout waiting for {expected_command} from: {remaining_nicks}")
+                break
+
+            remaining_time = min(5.0, timeout - elapsed)  # Listen in 5s chunks
+
+            for client in self.clients.values():
+                try:
+                    messages = await client.listen_for_messages(duration=remaining_time)
+                    for msg in messages:
+                        line = msg.get("line", "")
+                        # Parse the message to find sender and command
+                        if expected_command not in line:
+                            continue
+
+                        # Match against remaining nicks
+                        for nick in list(remaining_nicks):
+                            if nick in line:
+                                # Extract data after the command
+                                parts = line.split(expected_command, 1)
+                                if len(parts) > 1:
+                                    responses[nick] = {"data": parts[1].strip()}
+                                    remaining_nicks.discard(nick)
+                                    logger.debug(f"Received {expected_command} from {nick}")
+                                break
+                except Exception as e:
+                    logger.debug(f"Error waiting for responses: {e}")
+
+            # Check if we got all responses
+            if not remaining_nicks:
+                break
+
+        return responses
+
     async def wait_for_response(
         self,
         from_nick: str,
         expected_command: str,
         timeout: float = 30.0,
     ) -> dict[str, Any] | None:
-        """Wait for a specific response from a maker."""
-        # Listen on all clients for the response
-        for client in self.clients.values():
-            try:
-                messages = await client.listen_for_messages(duration=timeout)
-                for msg in messages:
-                    line = msg.get("line", "")
-                    # Parse the message to check sender and command
-                    if from_nick in line and expected_command in line:
-                        # Extract data after the command
-                        parts = line.split(expected_command, 1)
-                        if len(parts) > 1:
-                            return {"data": parts[1].strip()}
-            except Exception as e:
-                logger.debug(f"Error waiting for response: {e}")
-        return None
+        """Wait for a specific response from a maker (legacy method)."""
+        responses = await self.wait_for_responses([from_nick], expected_command, timeout)
+        return responses.get(from_nick)
 
 
 class TakerState(str, Enum):
@@ -334,7 +371,9 @@ class Taker:
             self.podle_commitment = generate_podle_for_coinjoin(
                 wallet_utxos=wallet_utxos,
                 cj_amount=self.cj_amount,
-                private_key_getter=lambda addr: self.wallet.get_key_for_address(addr).private_key
+                private_key_getter=lambda addr: self.wallet.get_key_for_address(
+                    addr
+                ).get_private_key_bytes()
                 if self.wallet.get_key_for_address(addr)
                 else None,
                 min_confirmations=self.config.taker_utxo_age,
@@ -422,22 +461,24 @@ class Taker:
             await self.directory_client.send_privmsg(nick, "!fill", fill_data)
             logger.debug(f"Sent !fill to {nick}")
 
-        # Wait for !pubkey responses
+        # Wait for all !pubkey responses at once
         timeout = self.config.maker_timeout_sec
+        expected_nicks = list(self.maker_sessions.keys())
 
+        responses = await self.directory_client.wait_for_responses(
+            expected_nicks=expected_nicks,
+            expected_command="!pubkey",
+            timeout=timeout,
+        )
+
+        # Process responses
         for nick in list(self.maker_sessions.keys()):
-            response = await self.directory_client.wait_for_response(
-                from_nick=nick,
-                expected_command="!pubkey",
-                timeout=timeout,
-            )
-
-            if response:
+            if nick in responses:
                 try:
-                    data = json.loads(response["data"])
+                    data = json.loads(responses[nick]["data"])
                     self.maker_sessions[nick].pubkey = data.get("pubkey", "")
                     self.maker_sessions[nick].responded_fill = True
-                    logger.debug(f"Received !pubkey from {nick}")
+                    logger.debug(f"Processed !pubkey from {nick}")
                 except (json.JSONDecodeError, KeyError):
                     logger.warning(f"Invalid !pubkey response from {nick}")
                     del self.maker_sessions[nick]
@@ -466,25 +507,27 @@ class Taker:
             await self.directory_client.send_privmsg(nick, "!auth", auth_data)
             logger.debug(f"Sent !auth to {nick}")
 
-        # Wait for !ioauth responses
+        # Wait for all !ioauth responses at once
         timeout = self.config.maker_timeout_sec
+        expected_nicks = list(self.maker_sessions.keys())
 
+        responses = await self.directory_client.wait_for_responses(
+            expected_nicks=expected_nicks,
+            expected_command="!ioauth",
+            timeout=timeout,
+        )
+
+        # Process responses
         for nick in list(self.maker_sessions.keys()):
-            response = await self.directory_client.wait_for_response(
-                from_nick=nick,
-                expected_command="!ioauth",
-                timeout=timeout,
-            )
-
-            if response:
+            if nick in responses:
                 try:
-                    data = json.loads(response["data"])
+                    data = json.loads(responses[nick]["data"])
                     session = self.maker_sessions[nick]
                     session.utxos = self._parse_utxos(data.get("utxos", {}))
                     session.cj_address = data.get("cj_addr", "")
                     session.change_address = data.get("change_addr", "")
                     session.responded_auth = True
-                    logger.debug(f"Received !ioauth from {nick} with {len(session.utxos)} UTXOs")
+                    logger.debug(f"Processed !ioauth from {nick} with {len(session.utxos)} UTXOs")
                 except (json.JSONDecodeError, KeyError) as e:
                     logger.warning(f"Invalid !ioauth response from {nick}: {e}")
                     del self.maker_sessions[nick]
@@ -606,24 +649,26 @@ class Taker:
             await self.directory_client.send_privmsg(nick, "!tx", tx_hex)
             logger.debug(f"Sent !tx to {nick}")
 
-        # Wait for !sig responses
+        # Wait for all !sig responses at once
         timeout = self.config.maker_timeout_sec
+        expected_nicks = list(self.maker_sessions.keys())
         signatures: dict[str, list[dict[str, Any]]] = {}
 
-        for nick in list(self.maker_sessions.keys()):
-            response = await self.directory_client.wait_for_response(
-                from_nick=nick,
-                expected_command="!sig",
-                timeout=timeout,
-            )
+        responses = await self.directory_client.wait_for_responses(
+            expected_nicks=expected_nicks,
+            expected_command="!sig",
+            timeout=timeout,
+        )
 
-            if response:
+        # Process responses
+        for nick in list(self.maker_sessions.keys()):
+            if nick in responses:
                 try:
-                    data = json.loads(response["data"])
+                    data = json.loads(responses[nick]["data"])
                     signatures[nick] = data.get("signatures", [])
                     self.maker_sessions[nick].signature = data
                     self.maker_sessions[nick].responded_sig = True
-                    logger.debug(f"Received !sig from {nick}")
+                    logger.debug(f"Processed !sig from {nick}")
                 except (json.JSONDecodeError, KeyError) as e:
                     logger.warning(f"Invalid !sig response from {nick}: {e}")
                     del self.maker_sessions[nick]
@@ -737,7 +782,7 @@ class Taker:
     async def _phase_broadcast(self) -> str:
         """Broadcast the signed transaction."""
         try:
-            txid = await self.backend.broadcast(self.final_tx.hex())
+            txid = await self.backend.broadcast_transaction(self.final_tx.hex())
             return txid
         except Exception as e:
             logger.error(f"Broadcast failed: {e}")

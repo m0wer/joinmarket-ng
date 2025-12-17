@@ -67,6 +67,11 @@ class BlockchainBackend(ABC):
     async def get_block_hash(self, block_height: int) -> str:
         """Get block hash for given height"""
 
+    @abstractmethod
+    async def get_utxo(self, txid: str, vout: int) -> UTXO | None:
+        """Get a specific UTXO from the blockchain UTXO set (gettxout).
+        Returns None if the UTXO does not exist or has been spent."""
+
     async def close(self) -> None:
         """Close backend connection"""
         pass
