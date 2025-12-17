@@ -1,0 +1,223 @@
+# Docker Compose for testing CoinJoin with reference JoinMarket implementation
+#
+# This setup tests compatibility between:
+# - Our directory server + maker bots
+# - Reference JoinMarket taker (jam-standalone)
+#
+# The reference implementation requires Tor for onion messaging, so we:
+# 1. Run a Tor instance that creates a hidden service for our directory
+# 2. Configure jam-standalone to connect to that hidden service
+#
+# Usage:
+#   # Start services
+#   docker compose -f docker-compose.reference.yml up -d
+#
+#   # Get the onion address (wait ~30s for Tor to generate it)
+#   docker compose -f docker-compose.reference.yml exec tor cat /var/lib/tor/hidden_service/directory/hostname
+#
+#   # Update tests/e2e/reference/joinmarket.cfg with the onion address
+#   # Then restart jam to pick up the config
+#   docker compose -f docker-compose.reference.yml restart jam
+#
+#   # Fund wallets and run coinjoin - see tests/e2e/README.md
+
+services:
+  # Bitcoin Core regtest node
+  bitcoin:
+    image: kylemanna/bitcoind:latest
+    container_name: jm-ref-bitcoin
+    restart: unless-stopped
+    healthcheck:
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      test: ["CMD-SHELL", "bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo"]
+    command:
+      - '-server=1'
+      - '-regtest=1'
+      - '-rpcuser=test'
+      - '-rpcpassword=test'
+      - '-rpcallowip=0.0.0.0/0'
+      - '-rpcbind=0.0.0.0'
+      - '-rpcport=18443'
+      - '-txindex=1'
+      - '-fallbackfee=0.0002'
+      - '-zmqpubrawblock=tcp://0.0.0.0:28332'
+      - '-zmqpubrawtx=tcp://0.0.0.0:28333'
+      - '-debug=1'
+    ports:
+      - "28443:18443"
+    volumes:
+      - ref-bitcoin-data:/home/bitcoin/.bitcoin
+    networks:
+      - jm-ref-network
+
+  # Auto-miner for regtest
+  miner:
+    image: kylemanna/bitcoind:latest
+    container_name: jm-ref-miner
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/scripts/regtest-miner.sh"]
+    environment:
+      - RPC_HOST=jm-ref-bitcoin
+      - RPC_PORT=18443
+      - RPC_USER=test
+      - RPC_PASSWORD=test
+      - MINE_INTERVAL=5
+    volumes:
+      - ./scripts:/scripts:ro
+    networks:
+      - jm-ref-network
+    depends_on:
+      bitcoin:
+        condition: service_healthy
+
+  # Our JoinMarket directory server
+  directory:
+    build:
+      context: .
+      dockerfile: directory_server/Dockerfile
+    container_name: jm-ref-directory
+    restart: unless-stopped
+    environment:
+      - NETWORK=regtest
+      - LOG_LEVEL=DEBUG
+      - PORT=5222
+      - HOST=0.0.0.0
+    networks:
+      - jm-ref-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s = socket.socket(); s.connect(('localhost', 5222)); s.close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      bitcoin:
+        condition: service_healthy
+
+  # Tor hidden service for directory server
+  # Creates .onion address that forwards to our directory on port 5222
+  tor:
+    image: goldy/tor-hidden-service:latest
+    container_name: jm-ref-tor
+    restart: unless-stopped
+    environment:
+      # Create hidden service named "directory" forwarding port 5222
+      DIRECTORY_TOR_SERVICE_HOSTS: "5222:jm-ref-directory:5222"
+      DIRECTORY_TOR_SERVICE_VERSION: "3"
+    volumes:
+      - tor-keys:/var/lib/tor/hidden_service
+    networks:
+      - jm-ref-network
+    depends_on:
+      directory:
+        condition: service_healthy
+
+  # Maker bot 1 using our implementation
+  maker1:
+    build:
+      context: .
+      dockerfile: maker/Dockerfile
+    container_name: jm-ref-maker1
+    restart: unless-stopped
+    environment:
+      - MNEMONIC=avoid whisper mesh corn already blur sudden fine planet chicken hover sniff
+      - NETWORK=regtest
+      - BACKEND_TYPE=bitcoin_core
+      - BITCOIN_RPC_URL=http://jm-ref-bitcoin:18443
+      - BITCOIN_RPC_USER=test
+      - BITCOIN_RPC_PASSWORD=test
+      - DIRECTORY_SERVERS=jm-ref-directory:5222
+      - LOG_LEVEL=DEBUG
+      - MIN_SIZE=10000
+      - TX_FEE_CONTRIBUTION=500
+      - CJ_FEE_RELATIVE=0.0003
+    networks:
+      - jm-ref-network
+    depends_on:
+      bitcoin:
+        condition: service_healthy
+      directory:
+        condition: service_healthy
+
+  # Maker bot 2 using our implementation
+  maker2:
+    build:
+      context: .
+      dockerfile: maker/Dockerfile
+    container_name: jm-ref-maker2
+    restart: unless-stopped
+    environment:
+      - MNEMONIC=minute faint grape plate stock mercy tent world space opera apple rocket
+      - NETWORK=regtest
+      - BACKEND_TYPE=bitcoin_core
+      - BITCOIN_RPC_URL=http://jm-ref-bitcoin:18443
+      - BITCOIN_RPC_USER=test
+      - BITCOIN_RPC_PASSWORD=test
+      - DIRECTORY_SERVERS=jm-ref-directory:5222
+      - LOG_LEVEL=DEBUG
+      - MIN_SIZE=10000
+      - TX_FEE_CONTRIBUTION=500
+      - CJ_FEE_RELATIVE=0.00025
+    networks:
+      - jm-ref-network
+    depends_on:
+      bitcoin:
+        condition: service_healthy
+      directory:
+        condition: service_healthy
+
+  # Reference JoinMarket implementation (jam-standalone)
+  # Contains internal Tor daemon for onion messaging
+  jam:
+    image: ghcr.io/joinmarket-webui/jam-standalone:v0.4.0-clientserver-v0.9.11
+    container_name: jm-ref-jam
+    environment:
+      - JM_RPC_HOST=jm-ref-bitcoin
+      - JM_RPC_PORT=18443
+      - JM_RPC_USER=test
+      - JM_RPC_PASSWORD=test
+      - APP_USER=admin
+      - APP_PASSWORD=admin
+      - ENSURE_WALLET=false
+      - REMOVE_LOCK_FILES=true
+      - RESTORE_DEFAULT_CONFIG=false
+      # Generous fee limits for testing
+      - JM_MAX_CJ_FEE_ABS=100000
+      - JM_MAX_CJ_FEE_REL=0.01
+    volumes:
+      - jam-data:/root/.joinmarket
+      # Mount custom config - must be updated with actual .onion address
+      - ./tests/e2e/reference/joinmarket.cfg:/root/.joinmarket/joinmarket.cfg:ro
+      # Mount wallet creation automation script
+      - ./tests/e2e/reference/create_wallet.exp:/scripts/create_wallet.exp:ro
+    networks:
+      - jm-ref-network
+    deploy:
+      resources:
+        limits:
+          cpus: "3"
+          memory: 2G
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "sh", "-c", "timeout 5 bash -c '</dev/tcp/127.0.0.1/80'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      bitcoin:
+        condition: service_healthy
+      directory:
+        condition: service_healthy
+      tor:
+        condition: service_started
+
+volumes:
+  ref-bitcoin-data:
+  tor-keys:
+  jam-data:
+
+networks:
+  jm-ref-network:
+    driver: bridge

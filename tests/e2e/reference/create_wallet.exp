@@ -1,0 +1,97 @@
+#!/usr/bin/expect -f
+#
+# Automates JoinMarket wallet creation for testing purposes
+#
+# Usage: expect create_wallet.exp [password] [wallet_name]
+#
+
+set timeout 120
+set password [lindex $argv 0]
+set wallet_name [lindex $argv 1]
+
+if {$password eq ""} {
+    set password "testpassword123"
+}
+
+if {$wallet_name eq ""} {
+    set wallet_name "test_wallet.jmdat"
+}
+
+# Start wallet-tool.py generate
+spawn python /src/scripts/wallet-tool.py --datadir=/root/.joinmarket generate
+
+# Question: Would you like to use a two-factor mnemonic recovery phrase?
+expect {
+    "two-factor mnemonic" {
+        send "n\r"
+    }
+    timeout {
+        puts "Timeout waiting for two-factor mnemonic question"
+        exit 1
+    }
+}
+
+# Enter passphrase
+expect {
+    -re "(Enter|Input).*passphrase" {
+        send "$password\r"
+    }
+    timeout {
+        puts "Timeout waiting for passphrase prompt"
+        exit 1
+    }
+}
+
+# Re-enter passphrase
+expect {
+    -re "(Reenter|Confirm|Re-enter|repeat).*passphrase" {
+        send "$password\r"
+    }
+    timeout {
+        puts "Timeout waiting for passphrase confirmation"
+        exit 1
+    }
+}
+
+# Wallet file name
+expect {
+    -re "(Input|Enter).*wallet.*file.*name" {
+        send "$wallet_name\r"
+    }
+    timeout {
+        puts "Timeout waiting for wallet file name prompt"
+        exit 1
+    }
+}
+
+# Question: Would you like this wallet to support fidelity bonds?
+expect {
+    "fidelity bonds" {
+        send "n\r"
+    }
+    timeout {
+        puts "Timeout waiting for fidelity bonds question"
+        exit 1
+    }
+}
+
+# Wait for mnemonic display and completion
+expect {
+    "recovery" {
+        # Mnemonic is being displayed, wallet created successfully
+        puts "\n\nWallet created successfully!"
+    }
+    "success" {
+        puts "\n\nWallet created successfully!"
+    }
+    timeout {
+        puts "Timeout waiting for wallet creation completion"
+        exit 1
+    }
+}
+
+# Wait for the process to finish
+expect eof
+
+puts "Wallet creation completed: $wallet_name"
+exit 0

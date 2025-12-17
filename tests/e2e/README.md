@@ -467,3 +467,209 @@ After E2E tests pass:
 
 **Status:** E2E tests ready for regtest ✓
 **Last Updated:** 2025-01-18
+
+---
+
+## Reference Implementation Testing
+
+Tests our components against the reference JoinMarket implementation (jam-standalone).
+
+### Architecture
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                     Reference Implementation Test                   │
+├────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐         │
+│  │   Bitcoin    │◄───│  Directory   │◄───│     Tor      │         │
+│  │   Regtest    │    │   Server     │    │   (Hidden    │         │
+│  └──────────────┘    │  (Our impl)  │    │   Service)   │         │
+│         ▲            └──────────────┘    └──────────────┘         │
+│         │                    ▲                    ▲                 │
+│         │                    │                    │                 │
+│         │            ┌───────┴────────┐          │                 │
+│         │            │                 │          │                 │
+│  ┌──────┴──────┐  ┌─▼──────────┐  ┌──▼────────┐ │                 │
+│  │   Maker 1   │  │  Maker 2   │  │    JAM     │◄┘                 │
+│  │ (Our impl)  │  │ (Our impl) │  │ (Reference │                   │
+│  └─────────────┘  └────────────┘  │   Taker)   │                   │
+│                                    └────────────┘                   │
+│                                                                     │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Prerequisites
+
+- Docker and Docker Compose
+- The jam-standalone image uses an internal Tor daemon
+- Our directory server is exposed via a Tor hidden service
+
+### Setup
+
+#### 1. Start Reference Test Services
+
+```bash
+# From repository root
+docker compose -f docker-compose.reference.yml up -d
+
+# Wait for services to be healthy (~2 minutes for Tor)
+docker compose -f docker-compose.reference.yml ps
+```
+
+#### 2. Get the Tor Hidden Service Address
+
+```bash
+# Wait ~30 seconds for Tor to generate the onion address
+docker compose -f docker-compose.reference.yml exec tor \
+    cat /var/lib/tor/hidden_service/directory/hostname
+```
+
+#### 3. Update JAM Configuration
+
+Edit `tests/e2e/reference/joinmarket.cfg` and replace the `directory_nodes` placeholder:
+
+```ini
+directory_nodes = <your-onion-address>.onion:5222
+```
+
+#### 4. Restart JAM to Pick Up Config
+
+```bash
+docker compose -f docker-compose.reference.yml restart jam
+```
+
+#### 5. Create and Fund JAM Wallet
+
+**Option A: Automated (via expect script)**
+
+The test suite includes an expect script that automates wallet creation:
+
+```bash
+# Run the automated test which handles wallet creation
+pytest tests/e2e/test_reference_coinjoin.py::test_complete_reference_coinjoin -v -s
+
+# Or manually run the expect script inside the container
+docker compose -f docker-compose.reference.yml exec jam \
+    expect /scripts/create_wallet.exp testpassword123 test_wallet.jmdat
+```
+
+**Option B: Manual (interactive prompts)**
+
+```bash
+# Enter jam container
+docker compose -f docker-compose.reference.yml exec jam bash
+
+# Generate wallet (follow interactive prompts)
+python /src/scripts/wallet-tool.py --datadir=/root/.joinmarket generate
+
+# Display wallet and get an address
+python /src/scripts/wallet-tool.py --datadir=/root/.joinmarket \
+    /root/.joinmarket/wallets/wallet.jmdat
+
+# Exit container
+exit
+
+# Fund the wallet (mine blocks to the address)
+docker compose -f docker-compose.reference.yml exec bitcoin \
+    bitcoin-cli -regtest -rpcuser=test -rpcpassword=test \
+    generatetoaddress 111 <wallet-address>
+```
+
+#### 6. Fund Our Maker Wallets
+
+The makers will auto-fund when they start, but you can also fund them manually:
+
+```bash
+# Check maker logs for their addresses
+docker compose -f docker-compose.reference.yml logs maker1 | grep -i address
+docker compose -f docker-compose.reference.yml logs maker2 | grep -i address
+```
+
+### Running the CoinJoin
+
+Once all wallets are funded and connected:
+
+```bash
+# Enter jam container
+docker compose -f docker-compose.reference.yml exec jam bash
+
+# Get a destination address (from mixdepth 1)
+python /src/scripts/wallet-tool.py --datadir=/root/.joinmarket \
+    /root/.joinmarket/wallets/wallet.jmdat
+
+# Run the coinjoin (0.1 BTC, 2 makers, from mixdepth 0)
+python /src/scripts/sendpayment.py --datadir=/root/.joinmarket \
+    -N 2 -m 0 /root/.joinmarket/wallets/wallet.jmdat 0.1btc <destination-address>
+```
+
+### Running Automated Tests
+
+```bash
+# Run all reference implementation tests
+pytest tests/e2e/test_reference_coinjoin.py -v -s --timeout=600
+
+# Run just the service health check
+pytest tests/e2e/test_reference_coinjoin.py::test_services_healthy -v
+
+# Run the complete coinjoin setup test (creates wallet, funds it)
+pytest tests/e2e/test_reference_coinjoin.py::test_complete_reference_coinjoin -v -s
+
+# Run the full coinjoin execution test (skipped by default)
+pytest tests/e2e/test_reference_coinjoin.py::test_execute_reference_coinjoin -v -s --no-skip
+```
+
+### Troubleshooting
+
+#### JAM Can't Connect to Directory
+
+```bash
+# Check Tor hidden service is running
+docker compose -f docker-compose.reference.yml exec tor \
+    cat /var/lib/tor/hidden_service/directory/hostname
+
+# Check JAM logs
+docker compose -f docker-compose.reference.yml logs jam
+
+# Check directory server logs
+docker compose -f docker-compose.reference.yml logs directory
+```
+
+#### Makers Not Showing in Orderbook
+
+```bash
+# Check maker logs
+docker compose -f docker-compose.reference.yml logs maker1
+docker compose -f docker-compose.reference.yml logs maker2
+
+# Check directory server for connected peers
+docker compose -f docker-compose.reference.yml logs directory | grep -i peer
+```
+
+#### Protocol Compatibility Issues
+
+The reference implementation expects:
+- JoinMarket protocol version 5
+- Onion-based messaging (port 5222)
+- Specific message format with `!` prefix commands
+
+Our implementation should be compatible, but check:
+- Message format in directory server logs
+- Protocol version in handshake
+
+### Cleanup
+
+```bash
+# Stop all reference test services
+docker compose -f docker-compose.reference.yml down
+
+# Remove volumes (clears all data)
+docker compose -f docker-compose.reference.yml down -v
+```
+
+### Notes
+
+- The jam-standalone image contains Tor internally
+- Our directory is exposed via Tor hidden service on port 5222
+- This tests real protocol compatibility, not just unit behavior
+- CoinJoin completion typically takes 1-5 minutes

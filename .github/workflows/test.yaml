@@ -379,3 +379,118 @@ jobs:
           name: e2e-coverage
           path: coverage.xml
         if: ${{ always() }}
+
+  # Reference implementation compatibility tests
+  # Tests our components against the reference JoinMarket implementation
+  test-reference-coinjoin:
+    runs-on: ubuntu-latest
+    # This is a longer-running test, only run on main branch or manual trigger
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+
+      - name: Install test dependencies
+        run: |
+          pip install -e jmcore
+          pip install -e jmwallet
+          pip install -e directory_server[dev]
+          pip install -e maker[dev]
+          pip install httpx loguru pytest-asyncio pytest-timeout
+
+      - name: Start reference test services
+        run: |
+          docker compose -f docker-compose.reference.yml up -d --build bitcoin directory tor
+
+          # Wait for Bitcoin to be ready
+          echo "Waiting for Bitcoin node to be ready..."
+          for i in {1..60}; do
+            if docker compose -f docker-compose.reference.yml exec -T bitcoin \
+                bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo 2>/dev/null; then
+              echo "Bitcoin node is ready"
+              break
+            fi
+            echo "Attempt $i/60..."
+            sleep 2
+          done
+
+          # Wait for Tor to generate onion address (~30-60 seconds)
+          echo "Waiting for Tor hidden service..."
+          for i in {1..60}; do
+            ONION=$(docker compose -f docker-compose.reference.yml exec -T tor \
+              cat /var/lib/tor/hidden_service/directory/hostname 2>/dev/null || echo "")
+            if [ -n "$ONION" ] && [[ "$ONION" == *.onion ]]; then
+              echo "Tor hidden service ready: $ONION"
+              break
+            fi
+            echo "Attempt $i/60..."
+            sleep 2
+          done
+
+          # Update joinmarket.cfg with actual onion address
+          if [ -n "$ONION" ]; then
+            sed -i "s/placeholder.onion:5222/${ONION}:5222/" tests/e2e/reference/joinmarket.cfg
+            echo "Updated joinmarket.cfg with onion address"
+          else
+            echo "WARNING: Could not get onion address"
+          fi
+
+          # Start makers
+          docker compose -f docker-compose.reference.yml up -d maker1 maker2
+
+          # Wait for makers to connect
+          echo "Waiting for makers to connect..."
+          sleep 30
+
+      - name: Start jam-standalone
+        run: |
+          docker compose -f docker-compose.reference.yml up -d jam
+
+          # Wait for jam to be healthy
+          echo "Waiting for jam to be healthy..."
+          for i in {1..30}; do
+            if docker compose -f docker-compose.reference.yml exec -T jam \
+                sh -c "timeout 5 bash -c '</dev/tcp/127.0.0.1/80'" 2>/dev/null; then
+              echo "JAM is healthy"
+              break
+            fi
+            echo "Attempt $i/30..."
+            sleep 5
+          done
+
+      - name: Run reference compatibility tests
+        env:
+          BITCOIN_RPC_URL: http://127.0.0.1:28443
+          BITCOIN_RPC_USER: test
+          BITCOIN_RPC_PASSWORD: test
+        run: |
+          pytest tests/e2e/test_reference_coinjoin.py -v -s --timeout=300 \
+            -k "not test_complete_reference_coinjoin"
+
+      - name: Show service logs on failure
+        if: failure()
+        run: |
+          echo "=== Bitcoin logs ==="
+          docker compose -f docker-compose.reference.yml logs bitcoin --tail=50
+          echo "=== Directory logs ==="
+          docker compose -f docker-compose.reference.yml logs directory --tail=50
+          echo "=== Maker1 logs ==="
+          docker compose -f docker-compose.reference.yml logs maker1 --tail=50
+          echo "=== Maker2 logs ==="
+          docker compose -f docker-compose.reference.yml logs maker2 --tail=50
+          echo "=== JAM logs ==="
+          docker compose -f docker-compose.reference.yml logs jam --tail=100
+          echo "=== Tor logs ==="
+          docker compose -f docker-compose.reference.yml logs tor --tail=50
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -f docker-compose.reference.yml down -v

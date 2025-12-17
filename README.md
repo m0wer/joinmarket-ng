@@ -146,6 +146,13 @@ jmwallet: Uses scantxoutset RPC directly (no wallet needed!)
 
 ## Quick Start
 
+> **WARNING: This is experimental software. Use at your own risk!**
+>
+> - **DO NOT use with significant funds** until the software has been extensively audited
+> - **Always start with small amounts** on testnet or regtest before mainnet
+> - **Back up your mnemonic phrase** securely - it's the only way to recover funds
+> - **Use Tor** for all directory server connections on mainnet
+
 ### Run Complete System
 
 ```bash
@@ -242,10 +249,10 @@ See individual component READMEs for detailed instructions:
 - [Directory Server](./directory_server/README.md) - Message relay
 - [Orderbook Watcher](./orderbook_watcher/README.md) - Market monitoring
 - [Maker Bot](./maker/README.md) - Yield generator
+- [Taker Bot](./taker/README.md) - CoinJoin participant
 - [E2E Tests](./tests/e2e/README.md) - Complete system tests
-- [Protocol Spec](./docs/PROTOCOL.md) - JoinMarket messaging protocol
+- [Protocol & Documentation](./docs/DOCS.md) - JoinMarket messaging protocol
 - [Architecture](./ARCHITECTURE.md) - Design principles and components
-- [Status](./docs/STATUS.md) - Implementation progress and roadmap
 
 ## Development
 
@@ -284,6 +291,51 @@ To run the end-to-end tests against a running docker compose stack:
    ```
 
 The tests will automatically detect the running directory server on port 5222 and use it.
+
+## Security Considerations
+
+### Before Using with Real Funds
+
+1. **Backup your mnemonic phrase** - Store it securely offline. This is the ONLY way to recover funds.
+
+2. **Start on testnet/regtest** - Test all operations with test coins before using real bitcoin.
+
+3. **Use Tor** - Always connect to directory servers over Tor on mainnet for privacy.
+
+4. **Verify transaction details** - The maker bot verifies all transactions automatically, but always review logs.
+
+5. **Set conservative fees** - Start with higher maker fees to account for transaction fee fluctuations.
+
+6. **Monitor your bot** - Check logs regularly for any errors or suspicious activity.
+
+### Mainnet Configuration Checklist
+
+```bash
+# Required environment variables for mainnet:
+export NETWORK=mainnet
+export MNEMONIC="your secure 12/24 word mnemonic"  # NEVER commit this!
+export BITCOIN_RPC_URL=http://localhost:8332
+export BITCOIN_RPC_USER=your_rpc_user
+export BITCOIN_RPC_PASSWORD=your_secure_password
+
+# Recommended directory servers (mainnet)
+# Connect via Tor - these are onion addresses
+export DIRECTORY_SERVERS=directory1.onion:5222,directory2.onion:5222
+
+# Enable Tor (required for mainnet privacy)
+export TOR_SOCKS_HOST=127.0.0.1
+export TOR_SOCKS_PORT=9050
+```
+
+### Critical Security Code
+
+The following modules are security-critical and have been designed to prevent loss of funds:
+
+| Module | Purpose | Test Coverage |
+|--------|---------|---------------|
+| `maker/tx_verification.py` | Verifies CoinJoin transactions before signing | 100% |
+| `jmwallet/wallet/signing.py` | Transaction signing | 95% |
+| `jmcore/podle.py` | Anti-sybil proof verification | 90%+ |
 
 ## License
 
