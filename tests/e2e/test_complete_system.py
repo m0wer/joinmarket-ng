@@ -871,6 +871,12 @@ async def test_complete_coinjoin_two_makers(
     """
     from tests.e2e.rpc_utils import ensure_wallet_funded, mine_blocks
 
+    # Ensure coinbase maturity: mine 100 blocks so any existing coinbase UTXOs are spendable
+    # Coinbase outputs require 100 confirmations before they can be spent
+    print("Mining blocks to ensure coinbase maturity...")
+    addr = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080"
+    await mine_blocks(100, addr)
+
     # Create wallets for all participants
     maker1_wallet = WalletService(
         mnemonic=MAKER1_MNEMONIC,
