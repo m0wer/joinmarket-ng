@@ -24,6 +24,7 @@ from loguru import logger
 
 from maker.coinjoin import CoinJoinSession
 from maker.config import MakerConfig
+from maker.fidelity import FidelityBondInfo, create_fidelity_bond_proof, get_best_fidelity_bond
 from maker.offers import OfferManager
 
 
@@ -48,6 +49,7 @@ class MakerBot:
         self.directory_clients: dict[str, DirectoryClient] = {}
         self.active_sessions: dict[str, CoinJoinSession] = {}
         self.current_offers: list[Offer] = []
+        self.fidelity_bond: FidelityBondInfo | None = None
 
         self.running = False
         self.listen_tasks: list[asyncio.Task] = []
@@ -70,6 +72,17 @@ class MakerBot:
 
             total_balance = await self.wallet.get_total_balance()
             logger.info(f"Wallet synced. Total balance: {total_balance:,} sats")
+
+            # Find fidelity bond for proof generation
+            self.fidelity_bond = get_best_fidelity_bond(self.wallet)
+            if self.fidelity_bond:
+                logger.info(
+                    f"Fidelity bond found: {self.fidelity_bond.txid[:16]}..., "
+                    f"value={self.fidelity_bond.value:,} sats, "
+                    f"bond_value={self.fidelity_bond.bond_value:,}"
+                )
+            else:
+                logger.info("No fidelity bond found (offers will have no bond proof)")
 
             logger.info("Creating offers...")
             self.current_offers = await self.offer_manager.create_offers()
@@ -159,7 +172,14 @@ class MakerBot:
                     logger.error(f"Failed to announce offer: {e}")
 
     def _format_offer_announcement(self, offer) -> str:
-        """Format offer for announcement (just the offer content, without nick!PUBLIC! prefix)"""
+        """Format offer for announcement (just the offer content, without nick!PUBLIC! prefix).
+
+        Format: <ordertype> <oid> <minsize> <maxsize> <txfee> <cjfee>[!tbond <proof>]
+
+        If a fidelity bond is available, the bond proof is appended after !tbond.
+        The proof uses the maker's nick as the "taker_nick" for the ownership signature,
+        which gets verified when a taker actually requests the orderbook.
+        """
 
         order_type_str = offer.ordertype.value
 
@@ -169,6 +189,22 @@ class MakerBot:
             f"{offer.oid} {offer.minsize} {offer.maxsize} "
             f"{offer.txfee} {offer.cjfee}"
         )
+
+        # Append fidelity bond proof if available
+        if self.fidelity_bond is not None:
+            # For public broadcast, we use our own nick as the taker_nick.
+            # The ownership signature proves we control the UTXO.
+            # Takers verify this when they parse the orderbook.
+            bond_proof = create_fidelity_bond_proof(
+                bond=self.fidelity_bond,
+                maker_nick=self.nick,
+                taker_nick=self.nick,  # Self-signed for broadcast
+            )
+            if bond_proof:
+                msg += f"!tbond {bond_proof}"
+                logger.debug(
+                    f"Added fidelity bond proof to offer (proof length: {len(bond_proof)})"
+                )
 
         return msg
 

@@ -12,7 +12,10 @@ from jmcore.bond_calc import calculate_timelocked_fidelity_bond_value
 from jmwallet.wallet.service import WalletService
 from loguru import logger
 
-FIDELITY_BOND_MIXDEPTH = 4
+# Fidelity bonds are stored in mixdepth 0, internal branch 2
+# Path format: m/84'/coin'/0'/2/index:locktime
+FIDELITY_BOND_MIXDEPTH = 0
+FIDELITY_BOND_INTERNAL_BRANCH = 2
 CERT_EXPIRY_BLOCKS = 2016 * 52  # ~1 year in blocks
 
 
@@ -28,18 +31,43 @@ class FidelityBondInfo:
     private_key: PrivateKey | None = None
 
 
+def _parse_locktime_from_path(path: str) -> int | None:
+    """
+    Extract locktime from a fidelity bond path.
+
+    Fidelity bond paths have format: m/84'/coin'/0'/2/index:locktime
+    where locktime is Unix timestamp.
+
+    Args:
+        path: BIP32 derivation path
+
+    Returns:
+        Locktime as Unix timestamp, or None if not a fidelity bond path
+    """
+    if ":" not in path:
+        return None
+
+    try:
+        # Split on colon to get locktime
+        locktime_str = path.split(":")[-1]
+        return int(locktime_str)
+    except (ValueError, IndexError):
+        return None
+
+
 def find_fidelity_bonds(
     wallet: WalletService, mixdepth: int = FIDELITY_BOND_MIXDEPTH
 ) -> list[FidelityBondInfo]:
     """
     Find fidelity bonds in the wallet.
 
-    Fidelity bonds are timelocked UTXOs in a specific mixdepth (default 4).
+    Fidelity bonds are timelocked UTXOs in mixdepth 0, internal branch 2.
+    Path format: m/84'/coin'/0'/2/index:locktime
     They use a CLTV script: <locktime> OP_CLTV OP_DROP <pubkey> OP_CHECKSIG
 
     Args:
         wallet: WalletService instance
-        mixdepth: Mixdepth to search for bonds (default 4)
+        mixdepth: Mixdepth to search for bonds (default 0)
 
     Returns:
         List of FidelityBondInfo for each bond found
@@ -51,25 +79,28 @@ def find_fidelity_bonds(
         return bonds
 
     for utxo_info in utxos:
-        # Fidelity bonds should only be on internal (change) addresses
-        # Path format: m/84'/coin'/mixdepth'/change/index
-        # change=1 means internal address
+        # Fidelity bonds are on internal branch 2 with locktime in path
+        # Path format: m/84'/coin'/0'/2/index:locktime
         path_parts = utxo_info.path.split("/")
-        if len(path_parts) >= 5:
-            # Check if this is an internal address (change = 1)
-            change_part = path_parts[-2]  # Second to last is change
-            if change_part != "1":
-                continue  # Skip external addresses
+        if len(path_parts) < 5:
+            continue
+
+        # Check if this is internal branch 2 (fidelity bond branch)
+        # path_parts[-2] is the branch (0=external, 1=internal change, 2=fidelity bonds)
+        branch_part = path_parts[-2]
+        if branch_part != str(FIDELITY_BOND_INTERNAL_BRANCH):
+            continue
+
+        # Extract locktime from path (format: index:locktime)
+        locktime = _parse_locktime_from_path(utxo_info.path)
+        if locktime is None:
+            # Not a timelocked UTXO
+            continue
 
         # Get the key for this address
         key = wallet.get_key_for_address(utxo_info.address)
         pubkey = key.get_public_key_bytes(compressed=True) if key else None
         private_key = key.private_key if key else None
-
-        # Note: In production, we'd need to detect actual locktime from the UTXO script
-        # For now, we assume UTXOs in mixdepth 4 are timelocked
-        # The locktime would be extracted from the redeem script
-        locktime = 0  # TODO: Extract from script when on-chain validation is added
 
         confirmation_time = utxo_info.confirmations
 

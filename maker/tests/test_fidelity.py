@@ -11,9 +11,11 @@ import pytest
 
 from maker.fidelity import (
     CERT_EXPIRY_BLOCKS,
+    FIDELITY_BOND_INTERNAL_BRANCH,
     FIDELITY_BOND_MIXDEPTH,
     FidelityBondInfo,
     _pad_signature,
+    _parse_locktime_from_path,
     _sign_message,
     create_fidelity_bond_proof,
     find_fidelity_bonds,
@@ -53,6 +55,25 @@ class TestFidelityBondInfo:
         )
         assert bond.pubkey == test_pubkey
         assert bond.private_key == test_private_key
+
+
+class TestParseLocktime:
+    """Tests for locktime extraction from path."""
+
+    def test_parse_locktime_valid(self):
+        path = "m/84'/0'/0'/2/0:1748736000"
+        locktime = _parse_locktime_from_path(path)
+        assert locktime == 1748736000
+
+    def test_parse_locktime_no_colon(self):
+        path = "m/84'/0'/0'/1/0"
+        locktime = _parse_locktime_from_path(path)
+        assert locktime is None
+
+    def test_parse_locktime_invalid_value(self):
+        path = "m/84'/0'/0'/2/0:invalid"
+        locktime = _parse_locktime_from_path(path)
+        assert locktime is None
 
 
 class TestPadSignature:
@@ -297,9 +318,10 @@ class TestFindFidelityBonds:
         bonds = find_fidelity_bonds(mock_wallet)
         assert bonds == []
 
-    def test_wrong_mixdepth_returns_empty(self):
+    def test_wrong_branch_returns_empty(self):
+        """UTXOs on branch 1 (regular change) should not be found."""
         mock_utxo = MagicMock()
-        mock_utxo.path = "m/84'/0'/0'/1/0"  # Wrong mixdepth (0, not 4)
+        mock_utxo.path = "m/84'/0'/0'/1/0"  # Branch 1 (change), not 2 (fidelity bonds)
         mock_utxo.value = 100_000_000
         mock_utxo.confirmations = 1000
         mock_utxo.address = "bcrt1qtest"
@@ -308,15 +330,35 @@ class TestFindFidelityBonds:
 
         mock_wallet = MagicMock()
         mock_wallet.utxo_cache = {
-            0: [mock_utxo],  # In mixdepth 0, not 4
+            FIDELITY_BOND_MIXDEPTH: [mock_utxo],
         }
 
-        bonds = find_fidelity_bonds(mock_wallet, mixdepth=FIDELITY_BOND_MIXDEPTH)
+        bonds = find_fidelity_bonds(mock_wallet)
         assert bonds == []
 
-    def test_finds_bond_in_correct_mixdepth(self, test_private_key, test_pubkey):
+    def test_no_locktime_in_path_returns_empty(self):
+        """UTXOs without locktime in path should not be found."""
         mock_utxo = MagicMock()
-        mock_utxo.path = "m/84'/0'/4'/1/0"  # mixdepth 4, internal
+        mock_utxo.path = "m/84'/0'/0'/2/0"  # Branch 2 but no locktime
+        mock_utxo.value = 100_000_000
+        mock_utxo.confirmations = 1000
+        mock_utxo.address = "bcrt1qtest"
+        mock_utxo.txid = "txid1"
+        mock_utxo.vout = 0
+
+        mock_wallet = MagicMock()
+        mock_wallet.utxo_cache = {
+            FIDELITY_BOND_MIXDEPTH: [mock_utxo],
+        }
+
+        bonds = find_fidelity_bonds(mock_wallet)
+        assert bonds == []
+
+    def test_finds_bond_with_correct_path(self, test_private_key, test_pubkey):
+        """Fidelity bonds are on branch 2 with locktime in path."""
+        mock_utxo = MagicMock()
+        # Correct format: mixdepth 0, branch 2, index 0, locktime 1748736000
+        mock_utxo.path = "m/84'/0'/0'/2/0:1748736000"
         mock_utxo.value = 100_000_000
         mock_utxo.confirmations = 1000
         mock_utxo.address = "bcrt1qtest"
@@ -340,12 +382,13 @@ class TestFindFidelityBonds:
         assert bonds[0].txid == "txid123"
         assert bonds[0].vout == 0
         assert bonds[0].value == 100_000_000
+        assert bonds[0].locktime == 1748736000
         assert bonds[0].bond_value == 50000
 
     def test_skips_external_addresses(self):
-        """Only internal addresses (path ends with /1/index) should be considered."""
+        """External addresses (branch 0) should not be considered."""
         mock_utxo = MagicMock()
-        mock_utxo.path = "m/84'/0'/4'/0/0"  # External address (not /1/)
+        mock_utxo.path = "m/84'/0'/0'/0/0:1748736000"  # Branch 0 (external)
         mock_utxo.value = 100_000_000
         mock_utxo.confirmations = 1000
         mock_utxo.address = "bcrt1qtest"
@@ -373,7 +416,7 @@ class TestGetBestFidelityBond:
 
     def test_returns_highest_bond_value(self, test_private_key, test_pubkey):
         mock_utxo1 = MagicMock()
-        mock_utxo1.path = "m/84'/0'/4'/1/0"
+        mock_utxo1.path = "m/84'/0'/0'/2/0:1748736000"  # Branch 2 with locktime
         mock_utxo1.value = 100_000_000
         mock_utxo1.confirmations = 1000
         mock_utxo1.address = "bcrt1qtest1"
@@ -381,7 +424,7 @@ class TestGetBestFidelityBond:
         mock_utxo1.vout = 0
 
         mock_utxo2 = MagicMock()
-        mock_utxo2.path = "m/84'/0'/4'/1/1"
+        mock_utxo2.path = "m/84'/0'/0'/2/1:1780272000"  # Branch 2 with locktime
         mock_utxo2.value = 200_000_000
         mock_utxo2.confirmations = 2000
         mock_utxo2.address = "bcrt1qtest2"
@@ -417,7 +460,12 @@ class TestConstants:
     """Verify module constants are sensible."""
 
     def test_fidelity_bond_mixdepth(self):
-        assert FIDELITY_BOND_MIXDEPTH == 4
+        # Fidelity bonds are stored in mixdepth 0
+        assert FIDELITY_BOND_MIXDEPTH == 0
+
+    def test_fidelity_bond_internal_branch(self):
+        # Fidelity bonds use internal branch 2
+        assert FIDELITY_BOND_INTERNAL_BRANCH == 2
 
     def test_cert_expiry_blocks(self):
         # Should be approximately 1 year in blocks
