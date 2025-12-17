@@ -24,3 +24,8 @@ Modern, secure implementation of JoinMarket components using Python 3.14+, Pydan
 ## Project Structure
 Monorepo with `src/` layout. Root `pytest.ini` handles global tests.
 Components: `jmcore` (Lib), `directory_server`, `jmwallet`, `maker`, `taker`, `orderbook_watcher`.
+
+## References
+
+https://github.com/JoinMarket-Org/joinmarket-clientserver/ -> reference implementation (legacy)
+https://github.com/JoinMarket-Org/JoinMarket-Docs -> protocol documentation
