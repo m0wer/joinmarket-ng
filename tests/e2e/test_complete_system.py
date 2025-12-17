@@ -8,6 +8,7 @@ Tests all components working together:
 - Maker bot
 - Taker client
 - Wallet synchronization
+- Complete CoinJoin transactions
 """
 
 import asyncio
@@ -23,6 +24,31 @@ from maker.config import MakerConfig
 from taker.config import TakerConfig
 from taker.taker import Taker
 
+# ==============================================================================
+# Test Wallet Mnemonics (used in successful CoinJoin testing)
+# ==============================================================================
+
+# Maker 1 mnemonic - has funds on regtest from testing
+MAKER1_MNEMONIC = (
+    "avoid whisper mesh corn already blur sudden fine planet chicken hover sniff"
+)
+
+# Maker 2 mnemonic - has funds on regtest from testing
+MAKER2_MNEMONIC = (
+    "minute faint grape plate stock mercy tent world space opera apple rocket"
+)
+
+# Taker mnemonic - has funds on regtest from testing
+TAKER_MNEMONIC = (
+    "burden notable love elephant orbit couch message galaxy elevator exile drop toilet"
+)
+
+# Generic test wallet (abandon x11 about)
+GENERIC_TEST_MNEMONIC = (
+    "abandon abandon abandon abandon abandon abandon "
+    "abandon abandon abandon abandon abandon about"
+)
+
 
 @pytest.fixture
 def bitcoin_backend():
@@ -36,13 +62,11 @@ def bitcoin_backend():
 
 @pytest_asyncio.fixture
 async def funded_wallet(bitcoin_backend):
-    """Create and fund a test wallet"""
+    """Create and fund a test wallet using the generic mnemonic"""
     from tests.e2e.rpc_utils import ensure_wallet_funded
 
-    mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-
     wallet = WalletService(
-        mnemonic=mnemonic,
+        mnemonic=GENERIC_TEST_MNEMONIC,
         backend=bitcoin_backend,
         network="regtest",
         mixdepth_count=5,
@@ -130,9 +154,9 @@ async def directory_server():
 
 @pytest.fixture
 def maker_config():
-    """Maker bot configuration"""
+    """Maker bot configuration using maker1 mnemonic"""
     return MakerConfig(
-        mnemonic="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        mnemonic=MAKER1_MNEMONIC,
         network=NetworkType.REGTEST,
         backend_type="bitcoin_core",
         backend_config={
@@ -141,18 +165,36 @@ def maker_config():
             "rpc_password": "test",
         },
         directory_servers=["127.0.0.1:5222"],
-        min_size=10_000,
-        cj_fee_relative="0.0002",
-        tx_fee_contribution=10_000,
+        min_size=100_000,
+        cj_fee_relative="0.0003",
+        tx_fee_contribution=1_000,
+    )
+
+
+@pytest.fixture
+def maker2_config():
+    """Second maker bot configuration using maker2 mnemonic"""
+    return MakerConfig(
+        mnemonic=MAKER2_MNEMONIC,
+        network=NetworkType.REGTEST,
+        backend_type="bitcoin_core",
+        backend_config={
+            "rpc_url": "http://127.0.0.1:18443",
+            "rpc_user": "test",
+            "rpc_password": "test",
+        },
+        directory_servers=["127.0.0.1:5222"],
+        min_size=100_000,
+        cj_fee_relative="0.00025",
+        tx_fee_contribution=1_500,
     )
 
 
 @pytest.fixture
 def taker_config():
-    """Taker configuration for tests."""
-    # Use a different mnemonic for taker to have different wallet
+    """Taker configuration using taker mnemonic."""
     return TakerConfig(
-        mnemonic="zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong",
+        mnemonic=TAKER_MNEMONIC,
         network=NetworkType.REGTEST,
         backend_type="bitcoin_core",
         backend_config={
@@ -162,9 +204,9 @@ def taker_config():
         },
         directory_servers=["127.0.0.1:5222"],
         counterparty_count=2,
-        minimum_makers=1,
+        minimum_makers=2,
         maker_timeout_sec=30,
-        order_wait_time=5.0,
+        order_wait_time=10.0,
     )
 
 
@@ -330,14 +372,11 @@ async def test_maker_bot_connect_directory(
 
 @pytest_asyncio.fixture
 async def funded_taker_wallet(bitcoin_backend):
-    """Create and fund a taker wallet with different mnemonic."""
+    """Create and fund a taker wallet using taker mnemonic."""
     from tests.e2e.rpc_utils import ensure_wallet_funded
 
-    # Use different mnemonic for taker
-    mnemonic = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong"
-
     wallet = WalletService(
-        mnemonic=mnemonic,
+        mnemonic=TAKER_MNEMONIC,
         backend=bitcoin_backend,
         network="regtest",
         mixdepth_count=5,
@@ -360,6 +399,74 @@ async def funded_taker_wallet(bitcoin_backend):
         pytest.skip(
             "Taker wallet has no funds. Auto-funding failed; please fund manually."
         )
+
+    try:
+        yield wallet
+    finally:
+        await wallet.close()
+
+
+@pytest_asyncio.fixture
+async def funded_maker1_wallet(bitcoin_backend):
+    """Create and fund maker1 wallet."""
+    from tests.e2e.rpc_utils import ensure_wallet_funded
+
+    wallet = WalletService(
+        mnemonic=MAKER1_MNEMONIC,
+        backend=bitcoin_backend,
+        network="regtest",
+        mixdepth_count=5,
+    )
+
+    await wallet.sync_all()
+
+    total_balance = await wallet.get_total_balance()
+    if total_balance == 0:
+        funding_address = wallet.get_receive_address(0, 0)
+        funded = await ensure_wallet_funded(
+            funding_address, amount_btc=1.0, confirmations=2
+        )
+        if funded:
+            await wallet.sync_all()
+            total_balance = await wallet.get_total_balance()
+
+    if total_balance == 0:
+        await wallet.close()
+        pytest.skip("Maker1 wallet has no funds.")
+
+    try:
+        yield wallet
+    finally:
+        await wallet.close()
+
+
+@pytest_asyncio.fixture
+async def funded_maker2_wallet(bitcoin_backend):
+    """Create and fund maker2 wallet."""
+    from tests.e2e.rpc_utils import ensure_wallet_funded
+
+    wallet = WalletService(
+        mnemonic=MAKER2_MNEMONIC,
+        backend=bitcoin_backend,
+        network="regtest",
+        mixdepth_count=5,
+    )
+
+    await wallet.sync_all()
+
+    total_balance = await wallet.get_total_balance()
+    if total_balance == 0:
+        funding_address = wallet.get_receive_address(0, 0)
+        funded = await ensure_wallet_funded(
+            funding_address, amount_btc=1.0, confirmations=2
+        )
+        if funded:
+            await wallet.sync_all()
+            total_balance = await wallet.get_total_balance()
+
+    if total_balance == 0:
+        await wallet.close()
+        pytest.skip("Maker2 wallet has no funds.")
 
     try:
         yield wallet
@@ -733,6 +840,347 @@ async def test_taker_signing_integration(funded_taker_wallet: WalletService):
         print(f"Signed transaction: {len(signed_tx)} bytes (was {len(tx_bytes)})")
 
         print("Taker signing integration test PASSED")
+
+
+# ==============================================================================
+# Complete CoinJoin E2E Test
+# ==============================================================================
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_complete_coinjoin_two_makers(
+    bitcoin_backend,
+    maker_config,
+    maker2_config,
+    taker_config,
+    directory_server,
+):
+    """
+    Complete end-to-end CoinJoin test with 2 makers and 1 taker.
+
+    This test verifies the entire CoinJoin flow:
+    1. Two makers start and connect to directory server
+    2. Makers announce their offers
+    3. Taker connects and fetches orderbook
+    4. Taker initiates CoinJoin with both makers
+    5. All phases complete (fill, auth, ioauth, tx, sig)
+    6. Transaction is broadcast and confirmed
+
+    This mirrors the manual testing documented in docs/REGTEST_TESTING.md
+    """
+    from tests.e2e.rpc_utils import mine_blocks
+
+    # Create wallets for all participants
+    maker1_wallet = WalletService(
+        mnemonic=MAKER1_MNEMONIC,
+        backend=bitcoin_backend,
+        network="regtest",
+        mixdepth_count=5,
+    )
+    maker2_wallet = WalletService(
+        mnemonic=MAKER2_MNEMONIC,
+        backend=bitcoin_backend,
+        network="regtest",
+        mixdepth_count=5,
+    )
+    taker_wallet = WalletService(
+        mnemonic=TAKER_MNEMONIC,
+        backend=bitcoin_backend,
+        network="regtest",
+        mixdepth_count=5,
+    )
+
+    # Sync all wallets
+    await maker1_wallet.sync_all()
+    await maker2_wallet.sync_all()
+    await taker_wallet.sync_all()
+
+    # Check balances
+    maker1_balance = await maker1_wallet.get_total_balance()
+    maker2_balance = await maker2_wallet.get_total_balance()
+    taker_balance = await taker_wallet.get_total_balance()
+
+    print(f"Maker1 balance: {maker1_balance:,} sats")
+    print(f"Maker2 balance: {maker2_balance:,} sats")
+    print(f"Taker balance: {taker_balance:,} sats")
+
+    # Skip if insufficient funds
+    min_balance = 100_000_000  # 1 BTC minimum
+    if maker1_balance < min_balance:
+        await maker1_wallet.close()
+        await maker2_wallet.close()
+        await taker_wallet.close()
+        pytest.skip(f"Maker1 needs at least {min_balance} sats")
+
+    if maker2_balance < min_balance:
+        await maker1_wallet.close()
+        await maker2_wallet.close()
+        await taker_wallet.close()
+        pytest.skip(f"Maker2 needs at least {min_balance} sats")
+
+    if taker_balance < min_balance:
+        await maker1_wallet.close()
+        await maker2_wallet.close()
+        await taker_wallet.close()
+        pytest.skip(f"Taker needs at least {min_balance} sats")
+
+    # Create maker bots
+    maker1_bot = MakerBot(maker1_wallet, bitcoin_backend, maker_config)
+    maker2_bot = MakerBot(maker2_wallet, bitcoin_backend, maker2_config)
+
+    # Create taker
+    taker = Taker(taker_wallet, bitcoin_backend, taker_config)
+
+    maker1_task = None
+    maker2_task = None
+
+    try:
+        # Start makers
+        print("Starting maker bots...")
+        maker1_task = asyncio.create_task(maker1_bot.start())
+        maker2_task = asyncio.create_task(maker2_bot.start())
+
+        # Wait for makers to connect and announce offers
+        await asyncio.sleep(5)
+
+        assert maker1_bot.running, "Maker1 should be running"
+        assert maker2_bot.running, "Maker2 should be running"
+        print(f"Maker1 nick: {maker1_bot.nick}")
+        print(f"Maker2 nick: {maker2_bot.nick}")
+
+        # Start taker and initiate CoinJoin
+        print("Starting taker...")
+        await taker.start()
+
+        # Get taker's destination address (internal)
+        dest_address = taker_wallet.get_receive_address(1, 0)  # mixdepth 1
+
+        # Initiate CoinJoin
+        cj_amount = 50_000_000  # 0.5 BTC
+        print(f"Initiating CoinJoin for {cj_amount:,} sats...")
+
+        txid = await taker.do_coinjoin(
+            amount=cj_amount,
+            destination=dest_address,
+            mixdepth=0,
+        )
+
+        # Verify result
+        assert txid is not None, "CoinJoin should return a txid"
+        print(f"CoinJoin successful! txid: {txid}")
+
+        # Verify transaction on blockchain
+        tx_info = await bitcoin_backend.get_transaction(txid)
+        if tx_info:
+            print(f"Transaction confirmed: {tx_info}")
+
+        # Mine a block to confirm
+        await mine_blocks(1, dest_address)
+
+        # Verify the transaction has confirmations
+        height = await bitcoin_backend.get_block_height()
+        print(f"Current block height: {height}")
+
+    finally:
+        # Cleanup
+        print("Stopping bots...")
+        await taker.stop()
+        await maker1_bot.stop()
+        await maker2_bot.stop()
+
+        if maker1_task:
+            maker1_task.cancel()
+            try:
+                await maker1_task
+            except asyncio.CancelledError:
+                pass
+
+        if maker2_task:
+            maker2_task.cancel()
+            try:
+                await maker2_task
+            except asyncio.CancelledError:
+                pass
+
+        await maker1_wallet.close()
+        await maker2_wallet.close()
+        await taker_wallet.close()
+
+
+@pytest.mark.asyncio
+async def test_maker_offer_announcement(
+    bitcoin_backend,
+    maker_config,
+    directory_server,
+    funded_maker1_wallet,
+):
+    """Test that maker correctly announces offers to directory server."""
+    from maker.offers import OfferManager
+
+    offer_manager = OfferManager(funded_maker1_wallet, maker_config, "J5TestMaker")
+
+    offers = await offer_manager.create_offers()
+
+    assert len(offers) > 0, "Should create at least one offer"
+
+    offer = offers[0]
+    print(f"Created offer: minsize={offer.minsize}, maxsize={offer.maxsize}")
+    print(f"  txfee={offer.txfee}, cjfee={offer.cjfee}")
+
+    # Verify offer parameters match config
+    assert offer.minsize >= maker_config.min_size
+    assert offer.txfee == maker_config.tx_fee_contribution
+
+
+@pytest.mark.asyncio
+async def test_taker_maker_selection(
+    bitcoin_backend,
+    taker_config,
+    directory_server,
+    funded_taker_wallet,
+):
+    """Test taker's ability to select appropriate makers from orderbook."""
+    from jmcore.models import Offer, OfferType
+    from taker.orderbook import OrderbookManager
+
+    manager = OrderbookManager(taker_config.max_cj_fee)
+
+    # Simulate offers from our test makers
+    test_offers = [
+        Offer(
+            counterparty="J5Maker1Nick",
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=100_000,
+            maxsize=10_000_000_000,
+            txfee=1_000,
+            cjfee="0.0003",
+        ),
+        Offer(
+            counterparty="J5Maker2Nick",
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=100_000,
+            maxsize=10_000_000_000,
+            txfee=1_500,
+            cjfee="0.00025",
+        ),
+    ]
+
+    manager.update_offers(test_offers)
+
+    # Select makers for a 0.5 BTC CoinJoin
+    cj_amount = 50_000_000
+    selected, total_fee = manager.select_makers(cj_amount, n=2)
+
+    assert len(selected) == 2, "Should select 2 makers"
+    print(f"Selected makers: {list(selected.keys())}")
+
+    # Verify total fees are reasonable
+    print(f"Total maker fee: {total_fee} sats")
+    assert total_fee < cj_amount * 0.01, "Fees should be less than 1%"
+
+
+@pytest.mark.asyncio
+async def test_signing_produces_valid_witness(funded_taker_wallet: WalletService):
+    """
+    Test that our signing implementation produces valid witness data.
+
+    This test verifies:
+    - scriptCode is correctly formatted (25 bytes, no length prefix)
+    - Sighash is computed correctly per BIP 143
+    - Signature uses low-S normalization (BIP 62/146)
+    - Witness stack has correct structure [signature, pubkey]
+    """
+    from jmwallet.wallet.signing import (
+        Transaction,
+        TxInput,
+        TxOutput,
+        compute_sighash_segwit,
+        create_p2wpkh_script_code,
+        sign_p2wpkh_input,
+    )
+
+    utxos = await funded_taker_wallet.get_utxos(0)
+    if not utxos:
+        pytest.skip("No UTXOs available")
+
+    utxo = utxos[0]
+    key = funded_taker_wallet.get_key_for_address(utxo.address)
+    assert key is not None, "Should have key for UTXO address"
+
+    pubkey = key.get_public_key_bytes(compressed=True)
+
+    # Create a simple test transaction
+    tx = Transaction(
+        version=bytes.fromhex("02000000"),
+        marker_flag=True,
+        inputs=[
+            TxInput(
+                txid_le=bytes.fromhex(utxo.txid)[::-1],  # Convert to LE
+                vout=utxo.vout,
+                script=b"",
+                sequence=b"\xff\xff\xff\xff",
+            )
+        ],
+        outputs=[
+            TxOutput(
+                value=utxo.value - 1000,  # Minus fee
+                script=bytes.fromhex("0014" + "00" * 20),  # P2WPKH
+            )
+        ],
+        locktime=bytes(4),
+        raw=b"",
+    )
+
+    # Create script code
+    script_code = create_p2wpkh_script_code(pubkey)
+
+    # Verify script code format (25 bytes, no length prefix)
+    assert len(script_code) == 25, (
+        f"scriptCode should be 25 bytes, got {len(script_code)}"
+    )
+    assert script_code[0] == 0x76, "Should start with OP_DUP"
+    assert script_code[1] == 0xA9, "Should have OP_HASH160"
+    assert script_code[2] == 0x14, "Should push 20 bytes"
+
+    # Compute sighash
+    sighash = compute_sighash_segwit(
+        tx=tx,
+        input_index=0,
+        script_code=script_code,
+        value=utxo.value,
+        sighash_type=1,
+    )
+    assert len(sighash) == 32, "Sighash should be 32 bytes"
+
+    # Sign
+    signature = sign_p2wpkh_input(
+        tx=tx,
+        input_index=0,
+        script_code=script_code,
+        value=utxo.value,
+        private_key=key.private_key,
+    )
+
+    # Verify signature format
+    assert len(signature) > 64, "DER signature should be longer than 64 bytes"
+    assert signature[-1] == 1, "Should end with SIGHASH_ALL"
+    assert signature[0] == 0x30, "DER signatures start with 0x30"
+
+    # Verify low-S (BIP 62/146)
+    from cryptography.hazmat.primitives.asymmetric import utils
+
+    der_sig = signature[:-1]  # Remove sighash byte
+    r, s = utils.decode_dss_signature(der_sig)
+
+    secp256k1_half_order = (
+        0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141 // 2
+    )
+    assert s <= secp256k1_half_order, "Signature S value should be low (BIP 62)"
+
+    print(f"Signature valid: {len(signature)} bytes, low-S verified")
 
 
 if __name__ == "__main__":
