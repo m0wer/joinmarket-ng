@@ -7,6 +7,14 @@ FROM python:${PYTHON_VERSION}-slim AS base
 
 WORKDIR /app
 
+# Install system dependencies for building coincurve
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libffi-dev \
+    git \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install jmcore dependencies first (cached layer)
 COPY jmcore/requirements.txt /app/jmcore/requirements.txt
 RUN pip install --no-cache-dir -r /app/jmcore/requirements.txt
