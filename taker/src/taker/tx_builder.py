@@ -283,26 +283,39 @@ class CoinJoinTxBuilder:
         Returns:
             Signed transaction bytes
         """
+        from loguru import logger
+
         # Parse unsigned tx
         version, marker, flag, inputs, outputs, witnesses, locktime = self._parse_tx(tx_bytes)
+
+        logger.debug(f"add_signatures: {len(inputs)} inputs, {len(outputs)} outputs")
+        logger.debug(f"input_owners: {metadata.get('input_owners', [])}")
+        logger.debug(f"signatures keys: {list(signatures.keys())}")
 
         # Build witness data
         new_witnesses: list[list[bytes]] = []
         input_owners = metadata["input_owners"]
 
         for i, owner in enumerate(input_owners):
+            inp = inputs[i]
+            logger.debug(
+                f"Input {i}: owner={owner}, txid={inp['txid'][:16]}..., vout={inp['vout']}"
+            )
+
             if owner in signatures:
                 # Find matching signature
                 for sig_info in signatures[owner]:
-                    inp = inputs[i]
                     if sig_info.get("txid") == inp["txid"] and sig_info.get("vout") == inp["vout"]:
                         witness = sig_info.get("witness", [])
                         new_witnesses.append([bytes.fromhex(w) for w in witness])
+                        logger.debug(f"  -> Found matching signature, witness len={len(witness)}")
                         break
                 else:
                     new_witnesses.append([])
+                    logger.warning(f"  -> No matching signature found for {owner}")
             else:
                 new_witnesses.append([])
+                logger.warning(f"  -> Owner {owner} not in signatures dict")
 
         # Reserialize with witnesses
         return self._serialize_with_witnesses(version, inputs, outputs, new_witnesses, locktime)

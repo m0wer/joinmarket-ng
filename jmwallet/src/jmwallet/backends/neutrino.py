@@ -364,6 +364,45 @@ class NeutrinoBackend(BlockchainBackend):
             logger.error(f"Failed to fetch block hash for height {block_height}: {e}")
             raise
 
+    async def get_utxo(self, txid: str, vout: int) -> UTXO | None:
+        """Get a specific UTXO from the blockchain.
+        Returns None if the UTXO does not exist or has been spent."""
+        try:
+            result = await self._api_call(
+                "GET",
+                f"v1/utxo/{txid}/{vout}",
+            )
+
+            if not result or result.get("spent", False):
+                logger.debug(f"UTXO {txid}:{vout} not found or spent")
+                return None
+
+            tip_height = await self.get_block_height()
+            height = result.get("height", 0)
+            confirmations = 0
+            if height > 0:
+                confirmations = tip_height - height + 1
+
+            return UTXO(
+                txid=txid,
+                vout=vout,
+                value=result.get("value", 0),
+                address=result.get("address", ""),
+                confirmations=confirmations,
+                scriptpubkey=result.get("scriptpubkey", ""),
+                height=height if height > 0 else None,
+            )
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                logger.debug(f"UTXO {txid}:{vout} not found")
+                return None
+            logger.error(f"Failed to get UTXO {txid}:{vout}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get UTXO {txid}:{vout}: {e}")
+            return None
+
     async def get_filter_header(self, block_height: int) -> str:
         """
         Get compact block filter header for given height.

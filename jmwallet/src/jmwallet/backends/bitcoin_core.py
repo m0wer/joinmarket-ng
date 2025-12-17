@@ -216,5 +216,46 @@ class BitcoinCoreBackend(BlockchainBackend):
             logger.error(f"Failed to fetch block hash for height {block_height}: {e}")
             raise
 
+    async def get_utxo(self, txid: str, vout: int) -> UTXO | None:
+        """Get a specific UTXO from the blockchain UTXO set using gettxout.
+        Returns None if the UTXO does not exist or has been spent."""
+        try:
+            # gettxout returns None if UTXO doesn't exist or is spent
+            result = await self._rpc_call("gettxout", [txid, vout, True])
+
+            if result is None:
+                logger.debug(f"UTXO {txid}:{vout} not found in UTXO set")
+                return None
+
+            # Get tip height for confirmation calculation
+            tip_height = await self.get_block_height()
+
+            confirmations = result.get("confirmations", 0)
+            value = int(result.get("value", 0) * 100_000_000)  # BTC to sats
+
+            # Extract address from scriptPubKey
+            script_pub_key = result.get("scriptPubKey", {})
+            address = script_pub_key.get("address", "")
+            scriptpubkey = script_pub_key.get("hex", "")
+
+            # Calculate height from confirmations
+            height = None
+            if confirmations > 0:
+                height = tip_height - confirmations + 1
+
+            return UTXO(
+                txid=txid,
+                vout=vout,
+                value=value,
+                address=address,
+                confirmations=confirmations,
+                scriptpubkey=scriptpubkey,
+                height=height,
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to get UTXO {txid}:{vout}: {e}")
+            return None
+
     async def close(self) -> None:
         await self.client.aclose()

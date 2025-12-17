@@ -44,11 +44,26 @@ def bitcoin_backend():
 
 @pytest.fixture
 def test_wallet(bitcoin_backend):
-    """Test wallet"""
+    """Test wallet with a unique mnemonic to avoid state from other tests"""
+    # Use a unique mnemonic that won't have any coins from previous tests
     mnemonic = (
         "abandon abandon abandon abandon abandon abandon "
         "abandon abandon abandon abandon abandon about"
     )
+    return WalletService(
+        mnemonic=mnemonic,
+        backend=bitcoin_backend,
+        network="regtest",
+        mixdepth_count=5,
+        gap_limit=20,
+    )
+
+
+@pytest.fixture
+def fresh_wallet(bitcoin_backend):
+    """A wallet with a fresh mnemonic that definitely has no coins"""
+    # Use a random-looking mnemonic that won't have received any coins
+    mnemonic = "plastic very simple endless autumn example spread casino leopard torch kitchen"
     return WalletService(
         mnemonic=mnemonic,
         backend=bitcoin_backend,
@@ -89,10 +104,10 @@ async def test_wallet_address_generation(test_wallet):
 
 
 @pytest.mark.asyncio
-async def test_wallet_balance_zero(test_wallet):
-    """Test balance of empty wallet"""
-    await test_wallet.sync_mixdepth(0)
-    balance = await test_wallet.get_balance(0)
+async def test_wallet_balance_zero(fresh_wallet):
+    """Test balance of empty wallet using fresh mnemonic"""
+    await fresh_wallet.sync_mixdepth(0)
+    balance = await fresh_wallet.get_balance(0)
 
     assert balance == 0
 

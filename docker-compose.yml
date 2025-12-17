@@ -109,7 +109,7 @@ services:
       - LOG_LEVEL=INFO
       - DIRECTORY_NODES=jm-directory:5222
     ports:
-      - "8080:8080"
+      - "8080:8000"
     networks:
       - jm-network
     depends_on:

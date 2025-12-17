@@ -160,10 +160,16 @@ class MessageRouter:
             return
 
         from_nick, to_nick, rest = parsed
+        logger.info(f"PRIVMSG routing: {from_nick} -> {to_nick} (rest: {rest[:50]}...)")
 
         to_peer = self.peer_registry.get_by_nick(to_nick)
         if not to_peer:
-            logger.trace(f"Target peer not found: {to_nick}")
+            logger.warning(f"Target peer not found: {to_nick}")
+            # Log all registered peers for debugging
+            all_peers = list(self.peer_registry._peers.keys())
+            logger.info(f"Registered peer keys: {all_peers}")
+            nick_map = dict(self.peer_registry._nick_to_key)
+            logger.info(f"Nick to key map: {nick_map}")
             return
 
         from_peer = self.peer_registry.get_by_key(from_key)
@@ -177,8 +183,9 @@ class MessageRouter:
                 if to_peer.location_string == "NOT-SERVING-ONION"
                 else to_peer.location_string
             )
+            logger.info(f"Sending to peer_key: {to_peer_key}")
             await self.send_callback(to_peer_key, envelope.to_bytes())
-            logger.trace(f"Routed private message: {from_nick} -> {to_nick}")
+            logger.info(f"Successfully routed private message: {from_nick} -> {to_nick}")
 
             await self._send_peer_location(to_peer_key, from_peer)
         except Exception as e:
@@ -211,11 +218,13 @@ class MessageRouter:
     async def send_peerlist(self, to_key: str, network: NetworkType) -> None:
         logger.trace(f"send_peerlist called for {to_key}, network={network}")
         peers = self.peer_registry.get_peerlist_for_network(network)
-        if not peers:
-            return
 
-        entries = [create_peerlist_entry(nick, loc) for nick, loc in peers]
-        peerlist_msg = ",".join(entries)
+        # Always send a response, even if empty - clients wait for PEERLIST response
+        if not peers:
+            peerlist_msg = ""
+        else:
+            entries = [create_peerlist_entry(nick, loc) for nick, loc in peers]
+            peerlist_msg = ",".join(entries)
 
         envelope = MessageEnvelope(message_type=MessageType.PEERLIST, payload=peerlist_msg)
 
