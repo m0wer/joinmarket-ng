@@ -4,7 +4,10 @@ WORKDIR /app
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    gcc \
+    build-essential \
+    libffi-dev \
+    git \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 COPY jmcore/requirements.txt /app/jmcore/

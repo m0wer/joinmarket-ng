@@ -6,6 +6,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libffi-dev \
+    git \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 # Install jmcore dependencies first (cached layer)
