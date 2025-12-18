@@ -11,6 +11,7 @@ RPC_PASSWORD="${RPC_PASSWORD:-test}"
 MINE_INTERVAL="${MINE_INTERVAL:-10}"
 
 CLI="bitcoin-cli -chain=regtest -rpcconnect=$RPC_HOST -rpcport=$RPC_PORT -rpcuser=$RPC_USER -rpcpassword=$RPC_PASSWORD"
+CLI_MINER="$CLI -rpcwallet=miner"
 
 echo "Waiting for Bitcoin Core to be ready..."
 until $CLI getblockchaininfo > /dev/null 2>&1; do
@@ -18,7 +19,7 @@ until $CLI getblockchaininfo > /dev/null 2>&1; do
 done
 echo "Bitcoin Core is ready"
 
-# Create wallet if needed
+# Create miner wallet (descriptor wallet for modern Bitcoin Core)
 $CLI createwallet "miner" 2>/dev/null || true
 $CLI loadwallet "miner" 2>/dev/null || true
 
@@ -28,7 +29,7 @@ while true; do
     # Initial setup - mine to mature coinbase (101 blocks needed)
     if [ "$blockcount" -lt 101 ]; then
         echo "Initial setup: mining blocks to mature coinbase ($blockcount/101)"
-        addr=$($CLI getnewaddress)
+        addr=$($CLI_MINER getnewaddress)
         $CLI generatetoaddress 10 "$addr"
         sleep 1
         continue
@@ -39,7 +40,7 @@ while true; do
 
     if [ "$mempool_count" -gt 0 ]; then
         echo "Mining block with $mempool_count mempool transactions"
-        addr=$($CLI getnewaddress)
+        addr=$($CLI_MINER getnewaddress)
         $CLI generatetoaddress 1 "$addr"
     fi
 

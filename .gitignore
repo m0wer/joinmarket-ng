@@ -58,3 +58,6 @@ Thumbs.db
 
 # Application specific
 tor/
+# Allow test tor configuration (but not runtime files)
+!tests/e2e/reference/tor/
+tests/e2e/reference/tor/run/

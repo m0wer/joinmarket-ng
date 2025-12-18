@@ -28,7 +28,8 @@ services:
   # Core Services (always available)
   # ============================================================================
 
-  # Bitcoin Core regtest node
+  # Bitcoin Core regtest node (main node for our implementation)
+  # Uses latest Bitcoin Core (v30+) with descriptor wallets
   bitcoin:
     image: kylemanna/bitcoind:latest
     container_name: jm-bitcoin
@@ -46,6 +47,7 @@ services:
       - '-rpcallowip=0.0.0.0/0'
       - '-rpcbind=0.0.0.0'
       - '-rpcport=18443'
+      - '-port=18444'
       - '-txindex=1'
       - '-fallbackfee=0.0002'
       - '-zmqpubrawblock=tcp://0.0.0.0:28332'
@@ -262,24 +264,108 @@ services:
   # For compatibility testing with upstream JAM
   # ============================================================================
 
+  # Bitcoin Core node specifically for JAM (requires legacy wallets)
+  # Uses v28.0 with -deprecatedrpc=create_bdb for legacy wallet support
+  # Peers with the main bitcoin node to share the same blockchain
+  bitcoin-jam:
+    image: lncm/bitcoind:v28.0
+    container_name: jm-bitcoin-jam
+    restart: unless-stopped
+    healthcheck:
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      test: ["CMD-SHELL", "bitcoin-cli -chain=regtest -rpcport=18445 -rpcuser=test -rpcpassword=test getblockchaininfo"]
+    command:
+      - '-server=1'
+      - '-regtest=1'
+      - '-rpcuser=test'
+      - '-rpcpassword=test'
+      - '-rpcallowip=0.0.0.0/0'
+      - '-rpcbind=0.0.0.0'
+      - '-rpcport=18445'
+      - '-bind=0.0.0.0:18446'
+      - '-txindex=1'
+      - '-fallbackfee=0.0002'
+      - '-debug=1'
+      - '-disablewallet=0'
+      - '-deprecatedrpc=create_bdb'
+      # Connect to main bitcoin node as peer
+      - '-addnode=jm-bitcoin:18444'
+    ports:
+      - "18445:18445"
+      - "18446:18446"
+    volumes:
+      - bitcoin-jam-data:/data/.bitcoin
+    networks:
+      - jm-network
+    depends_on:
+      bitcoin:
+        condition: service_healthy
+    profiles:
+      - reference
+      - all
+
+  # Miner for bitcoin-jam node (creates legacy wallet and mines)
+  miner-jam:
+    image: lncm/bitcoind:v28.0
+    container_name: jm-miner-jam
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/scripts/regtest-miner-jam.sh"]
+    environment:
+      - RPC_HOST=jm-bitcoin-jam
+      - RPC_PORT=18445
+      - RPC_USER=test
+      - RPC_PASSWORD=test
+    volumes:
+      - ./scripts:/scripts:ro
+    networks:
+      - jm-network
+    depends_on:
+      bitcoin-jam:
+        condition: service_healthy
+    profiles:
+      - reference
+      - all
+
   # Tor hidden service for directory server (exposes directory via .onion)
   # Uses pre-generated keys for deterministic onion address
+  # Init container copies keys to a Docker volume with correct ownership
+  tor-init:
+    image: busybox:latest
+    container_name: jm-tor-init
+    command: >
+      sh -c "
+        mkdir -p /var/lib/tor/directory &&
+        cp -f /source-keys/hs_ed25519_secret_key /var/lib/tor/directory/ &&
+        cp -f /source-keys/hs_ed25519_public_key /var/lib/tor/directory/ &&
+        cp -f /source-keys/hostname /var/lib/tor/directory/ &&
+        chown -R 1000:1000 /var/lib/tor &&
+        chmod 700 /var/lib/tor/directory &&
+        chmod 600 /var/lib/tor/directory/* &&
+        echo 'Tor keys copied successfully'
+      "
+    volumes:
+      - ./tests/e2e/reference/tor/data/directory:/source-keys:ro
+      - tor-data:/var/lib/tor
+    profiles:
+      - reference
+      - all
+
   tor:
-    image: goldy/tor-hidden-service:latest
+    image: ghcr.io/m0wer/docker-tor:latest
     container_name: jm-tor
     restart: unless-stopped
-    environment:
-      # Create hidden service named "directory" forwarding port 5222
-      DIRECTORY_TOR_SERVICE_HOSTS: "5222:jm-directory:5222"
-      DIRECTORY_TOR_SERVICE_VERSION: "3"
     volumes:
-      # Use pre-generated keys for deterministic onion address (rw needed for tor daemon)
-      - ./tests/e2e/reference/tor_keys:/var/lib/tor/hidden_service/directory
+      - ./tests/e2e/reference/tor/conf:/etc/tor:ro
+      - tor-data:/var/lib/tor
     networks:
       - jm-network
     depends_on:
       directory:
         condition: service_healthy
+      tor-init:
+        condition: service_completed_successfully
     profiles:
       - reference
       - all
@@ -290,8 +376,8 @@ services:
     image: ghcr.io/joinmarket-webui/jam-standalone:v0.4.0-clientserver-v0.9.11
     container_name: jm-jam
     environment:
-      - JM_RPC_HOST=jm-bitcoin
-      - JM_RPC_PORT=18443
+      - JM_RPC_HOST=jm-bitcoin-jam
+      - JM_RPC_PORT=18445
       - JM_RPC_USER=test
       - JM_RPC_PASSWORD=test
       - APP_USER=admin
@@ -323,7 +409,7 @@ services:
       retries: 5
       start_period: 60s
     depends_on:
-      bitcoin:
+      bitcoin-jam:
         condition: service_healthy
       directory:
         condition: service_healthy
@@ -360,6 +446,7 @@ services:
         condition: service_healthy
     profiles:
       - neutrino
+      - all
 
   # Maker with neutrino backend
   maker-neutrino:
@@ -387,6 +474,7 @@ services:
         condition: service_healthy
     profiles:
       - neutrino
+      - all
 
   # Taker with neutrino backend
   taker-neutrino:
@@ -415,11 +503,14 @@ services:
         condition: service_healthy
     profiles:
       - neutrino
+      - all
 
 volumes:
   bitcoin-data:
+  bitcoin-jam-data:
   neutrino-data:
   jam-data:
+  tor-data:
 
 networks:
   jm-network:

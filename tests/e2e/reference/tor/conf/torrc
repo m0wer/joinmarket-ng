@@ -1,0 +1,8 @@
+# Tor configuration for JoinMarket directory hidden service
+DataDirectory /var/lib/tor
+Log notice stdout
+
+# Hidden service for directory server
+HiddenServiceDir /var/lib/tor/directory
+HiddenServicePort 5222 jm-directory:5222
+HiddenServiceVersion 3

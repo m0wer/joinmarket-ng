@@ -328,16 +328,11 @@ async def test_system_health_check(bitcoin_backend, mined_chain):
 
 @pytest.mark.asyncio
 async def test_maker_bot_connect_directory(
-    bitcoin_backend, maker_config, directory_server, funded_wallet
+    bitcoin_backend, maker_config, directory_server, funded_maker1_wallet
 ):
     """Test maker bot connecting to directory server"""
-    wallet = WalletService(
-        mnemonic=maker_config.mnemonic,
-        backend=bitcoin_backend,
-        network="regtest",
-    )
-
-    bot = MakerBot(wallet, bitcoin_backend, maker_config)
+    # Use the funded_maker1_wallet fixture which uses MAKER1_MNEMONIC (same as maker_config)
+    bot = MakerBot(funded_maker1_wallet, bitcoin_backend, maker_config)
 
     # Start the bot in the background
     start_task = asyncio.create_task(bot.start())
@@ -362,7 +357,7 @@ async def test_maker_bot_connect_directory(
             await start_task
         except asyncio.CancelledError:
             pass
-        await wallet.close()
+        # Note: funded_maker1_wallet is closed by the fixture itself
 
 
 # ==============================================================================

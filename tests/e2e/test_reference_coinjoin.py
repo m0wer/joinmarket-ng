@@ -41,7 +41,7 @@ WALLET_FUND_TIMEOUT = 120  # 2 minutes for wallet funding
 
 # Pre-generated deterministic onion address for our directory server
 # Keys stored in tests/e2e/reference/tor_keys/
-DIRECTORY_ONION = "tsc2niuqhhnl35q4tzpyyuogcxscgxhotjrk3ldaynfsgysoctlgwxqd.onion"
+DIRECTORY_ONION = "5x6tavdaf6mdvckxw3jmobxmzxqnnsj3uldro5tvdlvo5hebhureysad.onion"
 
 
 def get_compose_file() -> Path:
@@ -226,7 +226,7 @@ def get_jam_wallet_address(
         "jam",
         "bash",
         "-c",
-        f"echo '{password}' | python /src/scripts/wallet-tool.py "
+        f"echo '{password}' | python3 /src/scripts/wallet-tool.py "
         f"--datadir=/root/.joinmarket "
         f"--wallet-password-stdin "
         f"/root/.joinmarket/wallets/{wallet_name} display",
@@ -494,6 +494,10 @@ async def test_execute_reference_coinjoin(reference_services):
     address = get_jam_wallet_address(wallet_name, wallet_password, 0)
     assert address, "Must have wallet address"
 
+    # Fund the wallet if not already funded
+    funded = fund_wallet_address(address, 1.0)
+    assert funded, "Wallet must be funded"
+
     # Get destination address (use mixdepth 1)
     dest_address = get_jam_wallet_address(wallet_name, wallet_password, 1)
     if not dest_address:
@@ -515,7 +519,7 @@ async def test_execute_reference_coinjoin(reference_services):
         "jam",
         "bash",
         "-c",
-        f"echo '{wallet_password}' | python /src/scripts/sendpayment.py "
+        f"echo '{wallet_password}' | python3 /src/scripts/sendpayment.py "
         f"--datadir=/root/.joinmarket --wallet-password-stdin "
         f"-N 2 -m 0 /root/.joinmarket/wallets/{wallet_name} "
         f"10000000 {dest_address}",
