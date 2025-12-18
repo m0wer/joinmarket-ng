@@ -362,31 +362,24 @@ async def test_services_healthy(reference_services):
     assert "regtest" in info.lower(), "Should be regtest network"
     logger.info("Bitcoin Core is healthy")
 
-    # Check makers are running and syncing (they may not be connected if unfunded)
-    # A running maker will either be syncing, connected, or report insufficient balance
-    result = run_compose_cmd(["logs", "--tail=50", "maker1"], check=False)
+    # Check makers are running by verifying container status and log activity
+    # Containers that started successfully will have logs showing listen activity
+    result = run_compose_cmd(["logs", "--tail=100", "maker1"], check=False)
     maker1_logs = result.stdout.lower()
-    maker1_running = any(
-        [
-            "starting maker" in maker1_logs,
-            "maker bot started" in maker1_logs,
-            "wallet synced" in maker1_logs,
-            "announced offer" in maker1_logs,
-            "connected to directory" in maker1_logs,
-        ]
+    # A running maker will show periodic "collected N messages" or "timeout waiting" logs
+    maker1_running = (
+        "collected" in maker1_logs
+        or "timeout waiting" in maker1_logs
+        or "listen" in maker1_logs
     )
     assert maker1_running, f"Maker1 should be running. Logs: {result.stdout[-500:]}"
 
-    result = run_compose_cmd(["logs", "--tail=50", "maker2"], check=False)
+    result = run_compose_cmd(["logs", "--tail=100", "maker2"], check=False)
     maker2_logs = result.stdout.lower()
-    maker2_running = any(
-        [
-            "starting maker" in maker2_logs,
-            "maker bot started" in maker2_logs,
-            "wallet synced" in maker2_logs,
-            "announced offer" in maker2_logs,
-            "connected to directory" in maker2_logs,
-        ]
+    maker2_running = (
+        "collected" in maker2_logs
+        or "timeout waiting" in maker2_logs
+        or "listen" in maker2_logs
     )
     assert maker2_running, f"Maker2 should be running. Logs: {result.stdout[-500:]}"
 
@@ -586,14 +579,14 @@ async def test_maker_offers_visible(reference_services):
     # Wait for makers to announce offers
     await asyncio.sleep(10)
 
-    # Check maker1 logs for offer announcement
-    result = run_compose_cmd(["logs", "--tail=50", "maker1"], check=False)
+    # Check maker logs - they should be running and listening
+    result = run_compose_cmd(["logs", "--tail=100", "maker1"], check=False)
     maker1_logs = result.stdout + result.stderr
 
-    result = run_compose_cmd(["logs", "--tail=50", "maker2"], check=False)
+    result = run_compose_cmd(["logs", "--tail=100", "maker2"], check=False)
     maker2_logs = result.stdout + result.stderr
 
-    # Look for offer-related messages
+    # Look for offer-related messages (might not be in recent logs if startup was long ago)
     offer_indicators = ["offer", "sw0reloffer", "pubmsg", "orderbook"]
     maker1_has_offers = any(ind in maker1_logs.lower() for ind in offer_indicators)
     maker2_has_offers = any(ind in maker2_logs.lower() for ind in offer_indicators)
@@ -601,13 +594,11 @@ async def test_maker_offers_visible(reference_services):
     logger.info(f"Maker1 offers visible: {maker1_has_offers}")
     logger.info(f"Maker2 offers visible: {maker2_has_offers}")
 
-    # At minimum, makers should be running
-    maker1_running = any(
-        [
-            "starting maker" in maker1_logs.lower(),
-            "maker bot started" in maker1_logs.lower(),
-            "announced offer" in maker1_logs.lower(),
-        ]
+    # At minimum, makers should be running (showing listen activity)
+    maker1_running = (
+        "collected" in maker1_logs.lower()
+        or "timeout waiting" in maker1_logs.lower()
+        or "listen" in maker1_logs.lower()
     )
     assert maker1_running, "Maker1 should be running"
 
