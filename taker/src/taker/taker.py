@@ -15,13 +15,13 @@ Reference: Original joinmarket-clientserver/src/jmclient/taker.py
 from __future__ import annotations
 
 import asyncio
-import json
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
 from jmcore.crypto import generate_jm_nick
 from jmcore.directory_client import DirectoryClient
+from jmcore.encryption import CryptoSession
 from jmcore.models import Offer
 from jmcore.protocol import JM_VERSION
 from jmwallet.backends.base import BlockchainBackend
@@ -206,7 +206,9 @@ class MakerSession:
     utxos: list[dict[str, Any]] = field(default_factory=list)
     cj_address: str = ""
     change_address: str = ""
-    pubkey: str = ""
+    pubkey: str = ""  # Maker's NaCl public key (hex)
+    auth_pubkey: str = ""  # Maker's EC auth public key from !ioauth (hex)
+    crypto: CryptoSession | None = None  # Encryption session with this maker
     signature: dict[str, Any] | None = None
     responded_fill: bool = False
     responded_auth: bool = False
@@ -258,6 +260,9 @@ class Taker:
         self.final_tx: bytes = b""
         self.txid: str = ""
         self.selected_utxos: list[UTXOInfo] = []  # Taker's selected UTXOs for signing
+
+        # E2E encryption session for communication with makers
+        self.crypto_session: CryptoSession | None = None
 
         # Schedule for tumbler-style operations
         self.schedule: Schedule | None = None
@@ -368,14 +373,16 @@ class Taker:
             logger.info("Generating PoDLE commitment...")
             wallet_utxos = await self.wallet.get_utxos(mixdepth)
 
+            def get_private_key(addr: str) -> bytes | None:
+                key = self.wallet.get_key_for_address(addr)
+                if key is None:
+                    return None
+                return key.get_private_key_bytes()
+
             self.podle_commitment = generate_podle_for_coinjoin(
                 wallet_utxos=wallet_utxos,
                 cj_amount=self.cj_amount,
-                private_key_getter=lambda addr: self.wallet.get_key_for_address(
-                    addr
-                ).get_private_key_bytes()
-                if self.wallet.get_key_for_address(addr)
-                else None,
+                private_key_getter=get_private_key,
                 min_confirmations=self.config.taker_utxo_age,
                 min_percent=self.config.taker_utxo_amtpercent,
             )
@@ -453,11 +460,15 @@ class Taker:
         if not self.podle_commitment:
             return False
 
+        # Create a new crypto session for this CoinJoin
+        self.crypto_session = CryptoSession()
+        taker_pubkey = self.crypto_session.get_pubkey_hex()
         commitment_hex = self.podle_commitment.to_commitment_str()
 
         # Send !fill to all makers
+        # Format: fill <oid> <amount> <taker_pubkey> <commitment>
         for nick, session in self.maker_sessions.items():
-            fill_data = f"{session.offer.oid} {self.cj_amount} {commitment_hex}"
+            fill_data = f"{session.offer.oid} {self.cj_amount} {taker_pubkey} {commitment_hex}"
             await self.directory_client.send_privmsg(nick, "!fill", fill_data)
             logger.debug(f"Sent !fill to {nick}")
 
@@ -472,15 +483,38 @@ class Taker:
         )
 
         # Process responses
+        # Maker sends !pubkey as plain hex: "<nacl_pubkey_hex> <signing_pubkey> <signature>"
+        # Directory client strips the command: "<nacl_pubkey_hex> <signing_pubkey> <sig>"
         for nick in list(self.maker_sessions.keys()):
             if nick in responses:
                 try:
-                    data = json.loads(responses[nick]["data"])
-                    self.maker_sessions[nick].pubkey = data.get("pubkey", "")
-                    self.maker_sessions[nick].responded_fill = True
-                    logger.debug(f"Processed !pubkey from {nick}")
-                except (json.JSONDecodeError, KeyError):
-                    logger.warning(f"Invalid !pubkey response from {nick}")
+                    response_data = responses[nick]["data"].strip()
+                    # The response format is: "<nacl_pubkey_hex> <signing_pubkey> <signature>"
+                    # We just need the first part (nacl_pubkey_hex)
+                    parts = response_data.split()
+                    if parts:
+                        nacl_pubkey = parts[0]
+                        self.maker_sessions[nick].pubkey = nacl_pubkey
+                        self.maker_sessions[nick].responded_fill = True
+
+                        # Set up encryption session with this maker using their NaCl pubkey
+                        # IMPORTANT: Reuse the same keypair from self.crypto_session
+                        # that was sent in !fill, just set up new box with maker's pubkey
+                        crypto = CryptoSession.__new__(CryptoSession)
+                        crypto.keypair = self.crypto_session.keypair  # Reuse taker keypair!
+                        crypto.box = None
+                        crypto.counterparty_pubkey = ""
+                        crypto.setup_encryption(nacl_pubkey)
+                        self.maker_sessions[nick].crypto = crypto
+                        logger.debug(
+                            f"Processed !pubkey from {nick}: {nacl_pubkey[:16]}..., "
+                            f"encryption set up"
+                        )
+                    else:
+                        logger.warning(f"Empty !pubkey response from {nick}")
+                        del self.maker_sessions[nick]
+                except Exception as e:
+                    logger.warning(f"Invalid !pubkey response from {nick}: {e}")
                     del self.maker_sessions[nick]
             else:
                 logger.warning(f"No !pubkey response from {nick}")
@@ -497,15 +531,30 @@ class Taker:
         if not self.podle_commitment:
             return False
 
-        commitment_hex = self.podle_commitment.to_commitment_str()
+        # Create pipe-separated revelation format expected by maker:
+        # txid:vout|P|P2|sig|e
         revelation = self.podle_commitment.to_revelation()
-        revelation_json = json.dumps(revelation)
+        revelation_str = "|".join(
+            [
+                revelation["utxo"],
+                revelation["P"],
+                revelation["P2"],
+                revelation["sig"],
+                revelation["e"],
+            ]
+        )
 
-        # Send !auth to all makers
+        # Send !auth to all makers with ENCRYPTED revelation
         for nick, session in self.maker_sessions.items():
-            auth_data = f"{commitment_hex} {revelation_json} {session.pubkey}"
+            if session.crypto is None:
+                logger.error(f"No encryption session for {nick}")
+                continue
+
+            # Encrypt the revelation
+            encrypted_revelation = session.crypto.encrypt(revelation_str)
+            auth_data = f"{encrypted_revelation}"
             await self.directory_client.send_privmsg(nick, "!auth", auth_data)
-            logger.debug(f"Sent !auth to {nick}")
+            logger.debug(f"Sent encrypted !auth to {nick}")
 
         # Wait for all !ioauth responses at once
         timeout = self.config.maker_timeout_sec
@@ -518,17 +567,92 @@ class Taker:
         )
 
         # Process responses
+        # Maker sends !ioauth as ENCRYPTED space-separated:
+        # <utxo_list> <auth_pub> <cj_addr> <change_addr> <btc_sig>
+        # where utxo_list is comma-separated: txid:vout,txid:vout,...
+        # Response format from directory: "<encrypted_data> <signing_pubkey> <signature>"
         for nick in list(self.maker_sessions.keys()):
             if nick in responses:
                 try:
-                    data = json.loads(responses[nick]["data"])
                     session = self.maker_sessions[nick]
-                    session.utxos = self._parse_utxos(data.get("utxos", {}))
-                    session.cj_address = data.get("cj_addr", "")
-                    session.change_address = data.get("change_addr", "")
+                    if session.crypto is None:
+                        logger.warning(f"No encryption session for {nick}")
+                        del self.maker_sessions[nick]
+                        continue
+
+                    # Extract encrypted data (first part of response)
+                    response_data = responses[nick]["data"].strip()
+                    parts = response_data.split()
+                    if not parts:
+                        logger.warning(f"Empty !ioauth response from {nick}")
+                        del self.maker_sessions[nick]
+                        continue
+
+                    encrypted_data = parts[0]
+
+                    # Decrypt the ioauth message
+                    decrypted = session.crypto.decrypt(encrypted_data)
+                    logger.debug(f"Decrypted !ioauth from {nick}: {decrypted[:50]}...")
+
+                    # Parse: <utxo_list> <auth_pub> <cj_addr> <change_addr> <btc_sig>
+                    ioauth_parts = decrypted.split()
+                    if len(ioauth_parts) < 4:
+                        logger.warning(
+                            f"Invalid !ioauth format from {nick}: expected 5 parts, "
+                            f"got {len(ioauth_parts)}"
+                        )
+                        del self.maker_sessions[nick]
+                        continue
+
+                    utxo_list = ioauth_parts[0]
+                    auth_pub = ioauth_parts[1]
+                    cj_addr = ioauth_parts[2]
+                    change_addr = ioauth_parts[3]
+                    # btc_sig = ioauth_parts[4]  # TODO: verify signature
+
+                    # Parse utxo_list: "txid:vout,txid:vout,..."
+                    # Then fetch UTXO values from blockchain
+                    session.utxos = []
+                    for utxo_str in utxo_list.split(","):
+                        if ":" in utxo_str:
+                            txid, vout = utxo_str.split(":", 1)
+                            vout_int = int(vout)
+
+                            # Fetch UTXO value from blockchain
+                            try:
+                                utxo_info = await self.backend.get_utxo(txid, vout_int)
+                                if utxo_info:
+                                    value = utxo_info.value
+                                    address = utxo_info.address
+                                else:
+                                    logger.warning(
+                                        f"Could not fetch UTXO info for {txid}:{vout_int}"
+                                    )
+                                    value = 0
+                                    address = ""
+                            except Exception as e:
+                                logger.warning(f"Error fetching UTXO {txid}:{vout_int}: {e}")
+                                value = 0
+                                address = ""
+
+                            session.utxos.append(
+                                {
+                                    "txid": txid,
+                                    "vout": vout_int,
+                                    "value": value,
+                                    "address": address,
+                                }
+                            )
+
+                    session.cj_address = cj_addr
+                    session.change_address = change_addr
+                    session.auth_pubkey = auth_pub  # Store for later verification
                     session.responded_auth = True
-                    logger.debug(f"Processed !ioauth from {nick} with {len(session.utxos)} UTXOs")
-                except (json.JSONDecodeError, KeyError) as e:
+                    logger.debug(
+                        f"Processed !ioauth from {nick}: {len(session.utxos)} UTXOs, "
+                        f"cj_addr={cj_addr[:16]}..."
+                    )
+                except Exception as e:
                     logger.warning(f"Invalid !ioauth response from {nick}: {e}")
                     del self.maker_sessions[nick]
             else:
@@ -642,12 +766,20 @@ class Taker:
 
     async def _phase_collect_signatures(self) -> bool:
         """Send !tx and collect !sig responses from makers."""
-        tx_hex = self.unsigned_tx.hex()
+        # Encode transaction as base64 (expected by maker after decryption)
+        import base64
 
-        # Send !tx to all makers
-        for nick in self.maker_sessions:
-            await self.directory_client.send_privmsg(nick, "!tx", tx_hex)
-            logger.debug(f"Sent !tx to {nick}")
+        tx_b64 = base64.b64encode(self.unsigned_tx).decode("ascii")
+
+        # Send ENCRYPTED !tx to each maker
+        for nick, session in self.maker_sessions.items():
+            if session.crypto is None:
+                logger.error(f"No encryption session for {nick}")
+                continue
+
+            encrypted_tx = session.crypto.encrypt(tx_b64)
+            await self.directory_client.send_privmsg(nick, "!tx", encrypted_tx)
+            logger.debug(f"Sent encrypted !tx to {nick}")
 
         # Wait for all !sig responses at once
         timeout = self.config.maker_timeout_sec
@@ -661,15 +793,59 @@ class Taker:
         )
 
         # Process responses
+        # Maker sends !sig as ENCRYPTED: just the signature base64
+        # Response format: "<encrypted_sig> <signing_pubkey> <signature>"
         for nick in list(self.maker_sessions.keys()):
             if nick in responses:
                 try:
-                    data = json.loads(responses[nick]["data"])
-                    signatures[nick] = data.get("signatures", [])
-                    self.maker_sessions[nick].signature = data
-                    self.maker_sessions[nick].responded_sig = True
-                    logger.debug(f"Processed !sig from {nick}")
-                except (json.JSONDecodeError, KeyError) as e:
+                    session = self.maker_sessions[nick]
+                    if session.crypto is None:
+                        logger.warning(f"No encryption session for {nick}")
+                        del self.maker_sessions[nick]
+                        continue
+
+                    # Extract encrypted data (first part of response)
+                    response_data = responses[nick]["data"].strip()
+                    parts = response_data.split()
+                    if not parts:
+                        logger.warning(f"Empty !sig response from {nick}")
+                        del self.maker_sessions[nick]
+                        continue
+
+                    encrypted_data = parts[0]
+
+                    # Decrypt the signature
+                    # Maker sends base64: varint(sig_len) + sig + varint(pub_len) + pub
+                    decrypted_sig = session.crypto.decrypt(encrypted_data)
+
+                    # Parse the signature to extract the witness stack
+                    # Format: varint(sig_len) + sig + varint(pub_len) + pub
+                    import base64
+
+                    sig_bytes = base64.b64decode(decrypted_sig)
+                    sig_len = sig_bytes[0]
+                    signature = sig_bytes[1 : 1 + sig_len]
+                    pub_len = sig_bytes[1 + sig_len]
+                    pubkey = sig_bytes[2 + sig_len : 2 + sig_len + pub_len]
+
+                    # Build witness as [signature_hex, pubkey_hex]
+                    witness = [signature.hex(), pubkey.hex()]
+
+                    # Match signature to the maker's UTXO
+                    # Makers send one signature per UTXO in the same order
+                    # For now, assume single UTXO per maker (most common case)
+                    if session.utxos:
+                        utxo = session.utxos[0]  # First (and usually only) UTXO
+                        sig_info = {
+                            "txid": utxo["txid"],
+                            "vout": utxo["vout"],
+                            "witness": witness,
+                        }
+                        signatures[nick] = [sig_info]
+                        session.signature = {"signatures": [sig_info]}
+                        session.responded_sig = True
+                        logger.debug(f"Processed !sig from {nick}: {decrypted_sig[:32]}...")
+                except Exception as e:
                     logger.warning(f"Invalid !sig response from {nick}: {e}")
                     del self.maker_sessions[nick]
             else:

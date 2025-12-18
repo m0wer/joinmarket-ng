@@ -93,8 +93,29 @@ class MakerBot:
             logger.info("Creating offers...")
             self.current_offers = await self.offer_manager.create_offers()
 
+            # If no offers due to insufficient balance, wait and retry
+            retry_count = 0
+            max_retries = 30  # 5 minutes max wait (30 * 10s)
+            while not self.current_offers and retry_count < max_retries:
+                retry_count += 1
+                logger.warning(
+                    f"No offers created (insufficient balance?). "
+                    f"Waiting 10s and retrying... (attempt {retry_count}/{max_retries})"
+                )
+                await asyncio.sleep(10)
+
+                # Re-sync wallet to check for new funds
+                await self.wallet.sync_all()
+                total_balance = await self.wallet.get_total_balance()
+                logger.info(f"Wallet re-synced. Total balance: {total_balance:,} sats")
+
+                self.current_offers = await self.offer_manager.create_offers()
+
             if not self.current_offers:
-                logger.error("No offers created. Insufficient balance?")
+                logger.error(
+                    f"No offers created after {max_retries} retries. "
+                    "Please fund the wallet and restart."
+                )
                 return
 
             logger.info("Connecting to directory servers...")
@@ -271,8 +292,9 @@ class MakerBot:
                 return
 
             # Respond to orderbook requests by re-announcing offers
-            # Note: rest doesn't include the leading "!" since COMMAND_PREFIX is the separator
-            if to_nick == "PUBLIC" and rest.strip() == "orderbook":
+            # Note: rest may include leading "!" when message has !!orderbook format
+            # (split on "!" gives empty string before "orderbook" which rejoins as "!orderbook")
+            if to_nick == "PUBLIC" and rest.strip().lstrip("!") == "orderbook":
                 logger.info(f"Received !orderbook request from {from_nick}, re-announcing offers")
                 await self._announce_offers()
 
@@ -293,15 +315,18 @@ class MakerBot:
             if to_nick != self.nick:
                 return
 
-            # Note: rest doesn't include the leading "!" since COMMAND_PREFIX is the separator
-            if rest.startswith("fill"):
-                await self._handle_fill(from_nick, rest)
-            elif rest.startswith("auth"):
-                await self._handle_auth(from_nick, rest)
-            elif rest.startswith("tx"):
-                await self._handle_tx(from_nick, rest)
+            # Strip leading "!" if present (due to !!command message format)
+            command = rest.strip().lstrip("!")
+
+            # Note: command prefix already stripped
+            if command.startswith("fill"):
+                await self._handle_fill(from_nick, command)
+            elif command.startswith("auth"):
+                await self._handle_auth(from_nick, command)
+            elif command.startswith("tx"):
+                await self._handle_tx(from_nick, command)
             else:
-                logger.debug(f"Unknown command: {rest[:20]}...")
+                logger.debug(f"Unknown command: {command[:20]}...")
 
         except Exception as e:
             logger.error(f"Failed to handle privmsg: {e}")

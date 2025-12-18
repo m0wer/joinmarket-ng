@@ -153,6 +153,7 @@ async def _run_coinjoin(
     bitcoin_network = config.bitcoin_network or config.network
 
     # Create backend based on config
+    backend: NeutrinoBackend | BitcoinCoreBackend
     if config.backend_type == "neutrino":
         backend = NeutrinoBackend(
             neutrino_url=config.backend_config.get("neutrino_url", "http://127.0.0.1:8334"),
@@ -305,6 +306,7 @@ async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
     bitcoin_network = config.bitcoin_network or config.network
 
     # Create backend based on config
+    backend: NeutrinoBackend | BitcoinCoreBackend
     if config.backend_type == "neutrino":
         backend = NeutrinoBackend(
             neutrino_url=config.backend_config.get("neutrino_url", "http://127.0.0.1:8334"),
@@ -417,6 +419,7 @@ async def _show_wallet_info(
 ) -> None:
     """Show wallet info."""
     # Create backend based on type
+    backend: NeutrinoBackend | BitcoinCoreBackend
     if backend_type == "neutrino":
         backend = NeutrinoBackend(
             neutrino_url=neutrino_url,

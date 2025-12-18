@@ -201,6 +201,30 @@ services:
   # Two makers + infrastructure for automated testing
   # ============================================================================
 
+  # Wallet funder - runs once on startup to fund maker/taker wallets
+  wallet-funder:
+    image: kylemanna/bitcoind:latest
+    container_name: jm-wallet-funder
+    restart: "no"
+    entrypoint: ["/bin/sh", "/scripts/fund-test-wallets.sh"]
+    environment:
+      - RPC_HOST=jm-bitcoin
+      - RPC_PORT=18443
+      - RPC_USER=test
+      - RPC_PASSWORD=test
+      - BLOCKS_TO_MINE=112
+    volumes:
+      - ./scripts:/scripts:ro
+    networks:
+      - jm-network
+    depends_on:
+      bitcoin:
+        condition: service_healthy
+    profiles:
+      - e2e
+      - reference
+      - all
+
   # Maker 1 for e2e tests
   maker1:
     build:
@@ -228,6 +252,8 @@ services:
         condition: service_healthy
       directory:
         condition: service_healthy
+      wallet-funder:
+        condition: service_completed_successfully
     profiles:
       - e2e
       - reference
@@ -260,6 +286,8 @@ services:
         condition: service_healthy
       directory:
         condition: service_healthy
+      wallet-funder:
+        condition: service_completed_successfully
     profiles:
       - e2e
       - reference

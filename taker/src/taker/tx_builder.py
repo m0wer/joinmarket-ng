@@ -73,12 +73,12 @@ def address_to_scriptpubkey(address: str) -> bytes:
         hrp_end = 4 if address.startswith("bcrt") else 2
         hrp = address[:hrp_end]
 
-        decoded = bech32.decode(hrp, address)
-        if decoded[0] is None:
+        bech32_decoded = bech32.decode(hrp, address)
+        if bech32_decoded[0] is None or bech32_decoded[1] is None:
             raise ValueError(f"Invalid bech32 address: {address}")
 
-        witver = decoded[0]
-        witprog = bytes(decoded[1])
+        witver = bech32_decoded[0]
+        witprog = bytes(bech32_decoded[1])
 
         if witver == 0:
             if len(witprog) == 20:
@@ -117,12 +117,18 @@ def scriptpubkey_to_address(scriptpubkey: bytes, network: str = "mainnet") -> st
     # P2WPKH
     if len(scriptpubkey) == 22 and scriptpubkey[0] == 0x00 and scriptpubkey[1] == 0x14:
         hrp = {"mainnet": "bc", "testnet": "tb", "signet": "tb", "regtest": "bcrt"}[network]
-        return bech32.encode(hrp, 0, scriptpubkey[2:])
+        result = bech32.encode(hrp, 0, scriptpubkey[2:])
+        if result is None:
+            raise ValueError(f"Failed to encode P2WPKH address: {scriptpubkey.hex()}")
+        return result
 
     # P2WSH
     if len(scriptpubkey) == 34 and scriptpubkey[0] == 0x00 and scriptpubkey[1] == 0x20:
         hrp = {"mainnet": "bc", "testnet": "tb", "signet": "tb", "regtest": "bcrt"}[network]
-        return bech32.encode(hrp, 0, scriptpubkey[2:])
+        result = bech32.encode(hrp, 0, scriptpubkey[2:])
+        if result is None:
+            raise ValueError(f"Failed to encode P2WSH address: {scriptpubkey.hex()}")
+        return result
 
     raise ValueError(f"Unsupported scriptPubKey: {scriptpubkey.hex()}")
 

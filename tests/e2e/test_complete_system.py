@@ -96,7 +96,11 @@ async def funded_wallet(bitcoin_backend):
 
 @pytest.fixture(scope="module")
 async def directory_server():
-    """Start directory server process or use existing."""
+    """Start directory server process or use existing Docker instance.
+
+    The directory server uses 'testnet' as the protocol network for both
+    testnet and regtest (matching reference JoinMarket behavior).
+    """
     import socket
     import subprocess
     import sys
@@ -108,7 +112,7 @@ async def directory_server():
     try:
         result = sock.connect_ex(("127.0.0.1", 5222))
         if result == 0:
-            # Port is open, assume directory server is running
+            # Port is open, assume directory server is running (Docker)
             yield None
             return
     finally:
@@ -118,7 +122,7 @@ async def directory_server():
     repo_root = Path(__file__).parent.parent.parent
     ds_path = repo_root / "directory_server"
 
-    # Start process
+    # Start process with 'testnet' as protocol network (matches Docker and reference JM)
     proc = subprocess.Popen(
         [sys.executable, "-m", "directory_server.main"],
         cwd=ds_path,
@@ -126,7 +130,7 @@ async def directory_server():
             "PYTHONPATH": str(ds_path / "src")
             + ":"
             + str(repo_root / "jmcore" / "src"),
-            "NETWORK": "regtest",
+            "NETWORK": "testnet",  # Protocol network (not bitcoin network)
             "PORT": "5222",
             "LOG_LEVEL": "DEBUG",
         },
@@ -135,7 +139,6 @@ async def directory_server():
     )
 
     # Wait for startup
-    # We could check the port but a simple sleep is usually enough for local regtest
     time.sleep(2)
 
     if proc.poll() is not None:
@@ -154,10 +157,16 @@ async def directory_server():
 
 @pytest.fixture
 def maker_config():
-    """Maker bot configuration using maker1 mnemonic"""
+    """Maker bot configuration using maker1 mnemonic.
+
+    Note: Uses TESTNET for protocol network (directory handshakes) but REGTEST
+    for bitcoin_network (address generation). This matches how reference JM
+    handles regtest - it uses "testnet" in protocol messages.
+    """
     return MakerConfig(
         mnemonic=MAKER1_MNEMONIC,
-        network=NetworkType.REGTEST,
+        network=NetworkType.TESTNET,  # Protocol network for directory handshakes
+        bitcoin_network=NetworkType.REGTEST,  # Bitcoin network for address generation
         backend_type="bitcoin_core",
         backend_config={
             "rpc_url": "http://127.0.0.1:18443",
@@ -173,10 +182,16 @@ def maker_config():
 
 @pytest.fixture
 def maker2_config():
-    """Second maker bot configuration using maker2 mnemonic"""
+    """Second maker bot configuration using maker2 mnemonic.
+
+    Note: Uses TESTNET for protocol network (directory handshakes) but REGTEST
+    for bitcoin_network (address generation). This matches how reference JM
+    handles regtest - it uses "testnet" in protocol messages.
+    """
     return MakerConfig(
         mnemonic=MAKER2_MNEMONIC,
-        network=NetworkType.REGTEST,
+        network=NetworkType.TESTNET,  # Protocol network for directory handshakes
+        bitcoin_network=NetworkType.REGTEST,  # Bitcoin network for address generation
         backend_type="bitcoin_core",
         backend_config={
             "rpc_url": "http://127.0.0.1:18443",
@@ -192,10 +207,16 @@ def maker2_config():
 
 @pytest.fixture
 def taker_config():
-    """Taker configuration using taker mnemonic."""
+    """Taker configuration using taker mnemonic.
+
+    Note: Uses TESTNET for protocol network (directory handshakes) but REGTEST
+    for bitcoin_network (address generation). This matches how reference JM
+    handles regtest - it uses "testnet" in protocol messages.
+    """
     return TakerConfig(
         mnemonic=TAKER_MNEMONIC,
-        network=NetworkType.REGTEST,
+        network=NetworkType.TESTNET,  # Protocol network for directory handshakes
+        bitcoin_network=NetworkType.REGTEST,  # Bitcoin network for address generation
         backend_type="bitcoin_core",
         backend_config={
             "rpc_url": "http://127.0.0.1:18443",
@@ -846,45 +867,65 @@ async def test_taker_signing_integration(funded_taker_wallet: WalletService):
 @pytest.mark.slow
 async def test_complete_coinjoin_two_makers(
     bitcoin_backend,
-    maker_config,
-    maker2_config,
     taker_config,
     directory_server,
 ):
     """
-    Complete end-to-end CoinJoin test with 2 makers and 1 taker.
+    Complete end-to-end CoinJoin test with Docker-based makers and an in-process taker.
 
     This test verifies the entire CoinJoin flow:
-    1. Two makers start and connect to directory server
-    2. Makers announce their offers
-    3. Taker connects and fetches orderbook
-    4. Taker initiates CoinJoin with both makers
-    5. All phases complete (fill, auth, ioauth, tx, sig)
-    6. Transaction is broadcast and confirmed
+    1. Docker makers (jm-maker1, jm-maker2) are already running with offers
+    2. Taker connects and fetches orderbook from directory server
+    3. Taker initiates CoinJoin with both makers
+    4. All phases complete (fill, auth, ioauth, tx, sig)
+    5. Transaction is broadcast and confirmed
 
-    This mirrors the manual testing documented in docs/REGTEST_TESTING.md
+    Requires: docker compose --profile all up -d (or --profile e2e)
+
+    Note: This test uses Docker makers (funded by wallet-funder service) rather than
+    in-process makers. This tests the real deployment scenario.
     """
-    from tests.e2e.rpc_utils import ensure_wallet_funded, mine_blocks
+    import subprocess
 
-    # Ensure coinbase maturity: mine 100 blocks so any existing coinbase UTXOs are spendable
-    # Coinbase outputs require 100 confirmations before they can be spent
+    from tests.e2e.rpc_utils import mine_blocks
+
+    # Check if Docker makers are running
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", "jm-maker1"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.stdout.strip() != "true":
+            pytest.skip(
+                "Docker maker1 not running. Start with: docker compose --profile e2e up -d"
+            )
+
+        # Also verify maker2
+        result2 = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", "jm-maker2"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result2.stdout.strip() != "true":
+            pytest.skip(
+                "Docker maker2 not running. Start with: docker compose --profile e2e up -d"
+            )
+    except (
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        subprocess.CalledProcessError,
+    ):
+        pytest.skip("Docker not available or makers not running")
+
+    # Ensure coinbase maturity: mine extra blocks for any recent coinbase outputs
     print("Mining blocks to ensure coinbase maturity...")
     addr = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080"
-    await mine_blocks(100, addr)
+    await mine_blocks(10, addr)
 
-    # Create wallets for all participants
-    maker1_wallet = WalletService(
-        mnemonic=MAKER1_MNEMONIC,
-        backend=bitcoin_backend,
-        network="regtest",
-        mixdepth_count=5,
-    )
-    maker2_wallet = WalletService(
-        mnemonic=MAKER2_MNEMONIC,
-        backend=bitcoin_backend,
-        network="regtest",
-        mixdepth_count=5,
-    )
+    # Create taker wallet
     taker_wallet = WalletService(
         mnemonic=TAKER_MNEMONIC,
         backend=bitcoin_backend,
@@ -892,108 +933,49 @@ async def test_complete_coinjoin_two_makers(
         mixdepth_count=5,
     )
 
-    # Sync all wallets
-    await maker1_wallet.sync_all()
-    await maker2_wallet.sync_all()
+    # Sync wallet
     await taker_wallet.sync_all()
-
-    # Check balances and auto-fund if needed
-    min_balance = 100_000_000  # 1 BTC minimum
-
-    maker1_balance = await maker1_wallet.get_total_balance()
-    if maker1_balance < min_balance:
-        print(
-            f"Maker1 balance ({maker1_balance:,} sats) below minimum, auto-funding..."
-        )
-        funding_address = maker1_wallet.get_receive_address(0, 0)
-        funded = await ensure_wallet_funded(
-            funding_address, amount_btc=2.0, confirmations=2
-        )
-        if funded:
-            await maker1_wallet.sync_all()
-            maker1_balance = await maker1_wallet.get_total_balance()
-
-    maker2_balance = await maker2_wallet.get_total_balance()
-    if maker2_balance < min_balance:
-        print(
-            f"Maker2 balance ({maker2_balance:,} sats) below minimum, auto-funding..."
-        )
-        funding_address = maker2_wallet.get_receive_address(0, 0)
-        funded = await ensure_wallet_funded(
-            funding_address, amount_btc=2.0, confirmations=2
-        )
-        if funded:
-            await maker2_wallet.sync_all()
-            maker2_balance = await maker2_wallet.get_total_balance()
-
     taker_balance = await taker_wallet.get_total_balance()
-    if taker_balance < min_balance:
-        print(f"Taker balance ({taker_balance:,} sats) below minimum, auto-funding...")
-        funding_address = taker_wallet.get_receive_address(0, 0)
-        funded = await ensure_wallet_funded(
-            funding_address, amount_btc=2.0, confirmations=2
-        )
-        if funded:
-            await taker_wallet.sync_all()
-            taker_balance = await taker_wallet.get_total_balance()
-
-    print(f"Maker1 balance: {maker1_balance:,} sats")
-    print(f"Maker2 balance: {maker2_balance:,} sats")
     print(f"Taker balance: {taker_balance:,} sats")
 
-    # Skip if still insufficient funds after auto-funding attempt
-    if maker1_balance < min_balance:
-        await maker1_wallet.close()
-        await maker2_wallet.close()
-        await taker_wallet.close()
-        pytest.skip(f"Maker1 needs at least {min_balance} sats (auto-funding failed)")
-
-    if maker2_balance < min_balance:
-        await maker1_wallet.close()
-        await maker2_wallet.close()
-        await taker_wallet.close()
-        pytest.skip(f"Maker2 needs at least {min_balance} sats (auto-funding failed)")
-
+    min_balance = 100_000_000  # 1 BTC minimum
     if taker_balance < min_balance:
-        await maker1_wallet.close()
-        await maker2_wallet.close()
         await taker_wallet.close()
-        pytest.skip(f"Taker needs at least {min_balance} sats (auto-funding failed)")
-
-    # Create maker bots
-    maker1_bot = MakerBot(maker1_wallet, bitcoin_backend, maker_config)
-    maker2_bot = MakerBot(maker2_wallet, bitcoin_backend, maker2_config)
+        pytest.skip(
+            f"Taker needs at least {min_balance:,} sats. "
+            "Run wallet-funder or fund manually."
+        )
 
     # Create taker
     taker = Taker(taker_wallet, bitcoin_backend, taker_config)
 
-    maker1_task = None
-    maker2_task = None
-
     try:
-        # Start makers
-        print("Starting maker bots...")
-        maker1_task = asyncio.create_task(maker1_bot.start())
-        maker2_task = asyncio.create_task(maker2_bot.start())
-
-        # Wait for makers to connect and announce offers
-        await asyncio.sleep(5)
-
-        assert maker1_bot.running, "Maker1 should be running"
-        assert maker2_bot.running, "Maker2 should be running"
-        print(f"Maker1 nick: {maker1_bot.nick}")
-        print(f"Maker2 nick: {maker2_bot.nick}")
-
-        # Start taker and initiate CoinJoin
+        # Start taker
         print("Starting taker...")
         await taker.start()
+
+        # Verify taker can see offers from Docker makers
+        print("Fetching orderbook...")
+        offers = await taker.directory_client.fetch_orderbook(timeout=15.0)
+        print(f"Found {len(offers)} offers in orderbook")
+
+        if len(offers) < 2:
+            await taker.stop()
+            await taker_wallet.close()
+            pytest.skip(
+                f"Need at least 2 offers, found {len(offers)}. "
+                "Ensure Docker makers are running and have funds."
+            )
+
+        # Update orderbook manager
+        taker.orderbook_manager.update_offers(offers)
 
         # Get taker's destination address (internal)
         dest_address = taker_wallet.get_receive_address(1, 0)  # mixdepth 1
 
         # Initiate CoinJoin
         cj_amount = 50_000_000  # 0.5 BTC
-        print(f"Initiating CoinJoin for {cj_amount:,} sats...")
+        print(f"Initiating CoinJoin for {cj_amount:,} sats to {dest_address}...")
 
         txid = await taker.do_coinjoin(
             amount=cj_amount,
@@ -1008,7 +990,7 @@ async def test_complete_coinjoin_two_makers(
         # Verify transaction on blockchain
         tx_info = await bitcoin_backend.get_transaction(txid)
         if tx_info:
-            print(f"Transaction confirmed: {tx_info}")
+            print(f"Transaction info: {tx_info}")
 
         # Mine a block to confirm
         await mine_blocks(1, dest_address)
@@ -1019,27 +1001,8 @@ async def test_complete_coinjoin_two_makers(
 
     finally:
         # Cleanup
-        print("Stopping bots...")
+        print("Stopping taker...")
         await taker.stop()
-        await maker1_bot.stop()
-        await maker2_bot.stop()
-
-        if maker1_task:
-            maker1_task.cancel()
-            try:
-                await maker1_task
-            except asyncio.CancelledError:
-                pass
-
-        if maker2_task:
-            maker2_task.cancel()
-            try:
-                await maker2_task
-            except asyncio.CancelledError:
-                pass
-
-        await maker1_wallet.close()
-        await maker2_wallet.close()
         await taker_wallet.close()
 
 

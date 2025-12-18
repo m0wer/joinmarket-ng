@@ -3,16 +3,22 @@ E2E test configuration and fixtures.
 
 Provides parameterized blockchain backend fixtures for testing
 with different backends (Bitcoin Core, Neutrino).
+
+Also provides fixtures for Docker service detection and wallet funding.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
+import socket
+import time
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING
 
 import pytest
 import pytest_asyncio
+from loguru import logger
 
 if TYPE_CHECKING:
     from jmwallet.backends.base import BlockchainBackend
@@ -44,6 +50,10 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
         "bitcoin_core: mark test as requiring bitcoin_core backend",
+    )
+    config.addinivalue_line(
+        "markers",
+        "slow: mark test as slow running",
     )
 
 
@@ -169,3 +179,115 @@ async def blockchain_backend(
 
     yield backend
     await backend.close()
+
+
+# =============================================================================
+# Docker Service Detection
+# =============================================================================
+
+
+def is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
+    """Check if a TCP port is open."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        result = sock.connect_ex((host, port))
+        return result == 0
+    finally:
+        sock.close()
+
+
+def is_directory_server_running(host: str = "127.0.0.1", port: int = 5222) -> bool:
+    """Check if directory server is running on the specified port."""
+    return is_port_open(host, port)
+
+
+def is_bitcoin_running(host: str = "127.0.0.1", port: int = 18443) -> bool:
+    """Check if Bitcoin RPC is accessible."""
+    return is_port_open(host, port)
+
+
+@pytest.fixture(scope="session")
+def docker_services_available() -> bool:
+    """
+    Check if Docker services are running.
+
+    Returns True if both Bitcoin and Directory server are accessible.
+    This is a session-scoped fixture so it's only checked once.
+    """
+    bitcoin_ok = is_bitcoin_running()
+    directory_ok = is_directory_server_running()
+
+    if not bitcoin_ok:
+        logger.warning("Bitcoin Core not accessible on port 18443")
+    if not directory_ok:
+        logger.warning("Directory server not accessible on port 5222")
+
+    return bitcoin_ok and directory_ok
+
+
+@pytest.fixture(scope="module")
+def require_docker_services(docker_services_available: bool) -> None:
+    """
+    Skip the test module if Docker services are not running.
+
+    Use this fixture in tests that require the Docker Compose stack.
+    """
+    if not docker_services_available:
+        pytest.skip(
+            "Docker services not running. Start with: docker compose up -d\n"
+            "Or for full e2e: docker compose --profile all up -d"
+        )
+
+
+@pytest_asyncio.fixture(scope="session")
+async def ensure_blockchain_ready() -> None:
+    """
+    Ensure blockchain has sufficient height for coinbase maturity.
+
+    Mines blocks if needed to reach height > 110.
+    This is session-scoped so it only runs once per test session.
+    """
+    from tests.e2e.rpc_utils import mine_blocks, rpc_call
+
+    try:
+        info = await rpc_call("getblockchaininfo")
+        height = info.get("blocks", 0)
+        logger.info(f"Current blockchain height: {height}")
+
+        if height < 110:
+            blocks_needed = 120 - height
+            # Mine to a valid P2WPKH address
+            addr = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080"
+            logger.info(f"Mining {blocks_needed} blocks for coinbase maturity...")
+            await mine_blocks(blocks_needed, addr)
+            logger.info(f"Mined {blocks_needed} blocks, new height: {120}")
+    except Exception as e:
+        logger.warning(f"Could not ensure blockchain ready: {e}")
+
+
+@pytest_asyncio.fixture(scope="module")
+async def wait_for_directory_server(
+    docker_services_available: bool,
+) -> AsyncGenerator[None, None]:
+    """
+    Wait for directory server to be ready and accepting connections.
+
+    This fixture:
+    1. Checks if the port is open
+    2. Optionally performs a simple handshake check
+    """
+    if not docker_services_available:
+        pytest.skip("Docker services not available")
+
+    max_wait = 30  # seconds
+    start = time.time()
+
+    while time.time() - start < max_wait:
+        if is_directory_server_running():
+            logger.info("Directory server is ready")
+            yield
+            return
+        await asyncio.sleep(1)
+
+    pytest.skip("Directory server did not become ready in time")

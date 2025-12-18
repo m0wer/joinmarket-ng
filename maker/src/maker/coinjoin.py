@@ -16,6 +16,7 @@ import time
 from enum import Enum
 from typing import Any
 
+from jmcore.encryption import CryptoSession
 from jmcore.models import NetworkType, Offer
 from jmwallet.backends.base import BlockchainBackend
 from jmwallet.wallet.models import UTXOInfo
@@ -28,7 +29,6 @@ from jmwallet.wallet.signing import (
 )
 from loguru import logger
 
-from maker.encryption import CryptoSession
 from maker.podle import parse_podle_revelation, verify_podle
 from maker.tx_verification import verify_unsigned_transaction
 

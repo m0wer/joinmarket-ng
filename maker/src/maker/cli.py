@@ -28,6 +28,7 @@ def create_wallet_service(config: MakerConfig) -> WalletService:
     # Use bitcoin_network for address generation (bcrt1 vs tb1 vs bc1)
     bitcoin_network = config.bitcoin_network or config.network
 
+    backend: BitcoinCoreBackend | NeutrinoBackend
     if backend_type == "bitcoin_core":
         backend_cfg = config.backend_config
         backend = BitcoinCoreBackend(

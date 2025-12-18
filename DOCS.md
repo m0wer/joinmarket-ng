@@ -1029,6 +1029,31 @@ The encryption uses NaCl (libsodium) Box for authenticated encryption:
 3. **Pubkey Response**: Maker sends their NaCl pubkey in `!pubkey`
 4. **Box Creation**: Both derive shared secret via ECDH
 
+**Critical Implementation Detail**: The taker must use the **same keypair** for all makers in a CoinJoin session. When the taker receives each maker's pubkey, they create a new NaCl Box using:
+- The **original taker keypair** (sent in `!fill` to all makers)
+- The **maker's pubkey** (received in `!pubkey`)
+
+```python
+# WRONG: Creating new keypair per maker breaks encryption
+for nick in makers:
+    crypto = CryptoSession()  # New keypair - WRONG!
+    crypto.setup_encryption(maker_pubkey)
+
+# CORRECT: Reuse original taker keypair
+taker_crypto = CryptoSession()
+taker_pubkey = taker_crypto.get_pubkey_hex()
+# Send taker_pubkey in !fill to all makers
+
+for nick in makers:
+    # Reuse taker's private key, create new box with maker's pubkey
+    crypto = CryptoSession.__new__(CryptoSession)
+    crypto.keypair = taker_crypto.keypair  # Reuse!
+    crypto.box = None
+    crypto.counterparty_pubkey = ""
+    crypto.setup_encryption(maker_pubkey)
+    maker_sessions[nick].crypto = crypto
+```
+
 ```python
 # Create NaCl Box for encryption
 from nacl.public import PrivateKey, PublicKey, Box
