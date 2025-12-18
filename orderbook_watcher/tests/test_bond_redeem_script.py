@@ -1,5 +1,8 @@
 """
 Test fidelity bond redeem script generation.
+
+Note: These tests use dummy proofs without valid signatures.
+We pass verify=False to skip signature verification.
 """
 
 from orderbook_watcher.directory_client import parse_fidelity_bond_proof
@@ -9,7 +12,8 @@ def test_parse_bond_with_redeem_script() -> None:
     """Test that redeem script is generated correctly"""
     proof_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwKhssPU5fanuMnQ4fKjtMXW5/ipsMHS4/SltsfY6fCh9AEDAqGyw9Tl9qe4ydDh8qO0xdbn+KmwwdLj9KW2x9jp8KEBI0VniavN7wEjRWeJq83vASNFZ4mrze8BI0VniavN7wEAAAAAsz9x"
 
-    result = parse_fidelity_bond_proof(proof_b64, "TestMakerNick123", "testtaker")
+    # Skip verification for parsing test (dummy proof)
+    result = parse_fidelity_bond_proof(proof_b64, "TestMakerNick123", "testtaker", verify=False)
 
     assert result is not None
     assert "redeem_script" in result
@@ -25,7 +29,8 @@ def test_redeem_script_matches_expected_format() -> None:
     """Test that redeem script has correct opcodes"""
     proof_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwKhssPU5fanuMnQ4fKjtMXW5/ipsMHS4/SltsfY6fCh9AEDAqGyw9Tl9qe4ydDh8qO0xdbn+KmwwdLj9KW2x9jp8KEBI0VniavN7wEjRWeJq83vASNFZ4mrze8BI0VniavN7wEAAAAAsz9x"
 
-    result = parse_fidelity_bond_proof(proof_b64, "TestMakerNick123", "testtaker")
+    # Skip verification for parsing test (dummy proof)
+    result = parse_fidelity_bond_proof(proof_b64, "TestMakerNick123", "testtaker", verify=False)
 
     assert result is not None
 
@@ -40,7 +45,8 @@ def test_p2wsh_script_format() -> None:
     """Test P2WSH script has correct format (OP_0 + 32-byte hash)"""
     proof_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwKhssPU5fanuMnQ4fKjtMXW5/ipsMHS4/SltsfY6fCh9AEDAqGyw9Tl9qe4ydDh8qO0xdbn+KmwwdLj9KW2x9jp8KEBI0VniavN7wEjRWeJq83vASNFZ4mrze8BI0VniavN7wEAAAAAsz9x"
 
-    result = parse_fidelity_bond_proof(proof_b64, "TestMakerNick123", "testtaker")
+    # Skip verification for parsing test (dummy proof)
+    result = parse_fidelity_bond_proof(proof_b64, "TestMakerNick123", "testtaker", verify=False)
 
     assert result is not None
 

@@ -21,7 +21,7 @@ from typing import Any
 from loguru import logger
 
 from jmcore.btc_script import mk_freeze_script, redeem_script_to_p2wsh_script
-from jmcore.crypto import generate_jm_nick
+from jmcore.crypto import generate_jm_nick, verify_fidelity_bond_proof
 from jmcore.models import FidelityBond, Offer, OfferType
 from jmcore.network import TCPConnection, connect_direct, connect_via_tor
 from jmcore.protocol import (
@@ -38,19 +38,30 @@ class DirectoryClientError(Exception):
 
 
 def parse_fidelity_bond_proof(
-    proof_base64: str, maker_nick: str, taker_nick: str
+    proof_base64: str, maker_nick: str, taker_nick: str, verify: bool = True
 ) -> dict[str, Any] | None:
     """
-    Parse a fidelity bond proof from base64-encoded binary data.
+    Parse and optionally verify a fidelity bond proof from base64-encoded binary data.
 
     Args:
         proof_base64: Base64-encoded bond proof
         maker_nick: Maker's nick
         taker_nick: Taker's nick (requesting party)
+        verify: If True, verify both signatures in the proof (default: True)
 
     Returns:
-        Dict with bond details or None if parsing fails
+        Dict with bond details or None if parsing/verification fails
     """
+    # First, verify the signatures if requested
+    if verify:
+        is_valid, verified_data, error = verify_fidelity_bond_proof(
+            proof_base64, maker_nick, taker_nick
+        )
+        if not is_valid:
+            logger.warning(f"Fidelity bond proof verification failed for {maker_nick}: {error}")
+            return None
+
+    # Parse the proof data (also extracts redeem script)
     try:
         decoded_data = base64.b64decode(proof_base64)
     except (binascii.Error, ValueError) as e:

@@ -240,3 +240,117 @@ def verify_signature(public_key_hex: str, message: bytes, signature: bytes) -> b
         return coincurve_verify(signature, message, public_key_bytes)
     except Exception:
         return False
+
+
+def verify_raw_ecdsa(message_hash: bytes, signature_der: bytes, pubkey_bytes: bytes) -> bool:
+    """
+    Verify an ECDSA signature on a pre-hashed message.
+
+    Args:
+        message_hash: The message hash (already SHA256'd)
+        signature_der: DER-encoded signature (may have trailing padding zeros)
+        pubkey_bytes: Compressed public key (33 bytes)
+
+    Returns:
+        True if signature is valid
+    """
+    try:
+        # Strip trailing zero padding from signature
+        sig = signature_der.rstrip(b"\x00")
+        if len(sig) == 0:
+            return False
+
+        # Use PublicKey.verify with hasher=None for raw verification
+        pubkey = PublicKey(pubkey_bytes)
+        return pubkey.verify(sig, message_hash, hasher=None)
+    except Exception:
+        return False
+
+
+def verify_fidelity_bond_proof(
+    proof_base64: str,
+    maker_nick: str,
+    taker_nick: str,
+) -> tuple[bool, dict[str, str | int | bytes] | None, str]:
+    """
+    Verify a fidelity bond proof by checking both signatures.
+
+    The proof structure (252 bytes total):
+    - 72 bytes: UTXO ownership signature (signs SHA256(taker_nick))
+    - 72 bytes: Certificate signature (signs SHA256(cert_pub || expiry || maker_nick))
+    - 33 bytes: Certificate public key
+    - 2 bytes: Certificate expiry (blocks / 2016)
+    - 33 bytes: UTXO public key
+    - 32 bytes: TXID (little-endian)
+    - 4 bytes: Vout (little-endian)
+    - 4 bytes: Locktime (little-endian)
+
+    Args:
+        proof_base64: Base64-encoded bond proof
+        maker_nick: Maker's JoinMarket nick
+        taker_nick: Taker's nick (the verifier)
+
+    Returns:
+        Tuple of (is_valid, bond_data, error_message)
+        bond_data contains parsed fields if successful
+    """
+    import struct
+
+    try:
+        decoded_data = base64.b64decode(proof_base64)
+    except Exception as e:
+        return False, None, f"Failed to decode base64: {e}"
+
+    if len(decoded_data) != 252:
+        return False, None, f"Invalid proof length: {len(decoded_data)}, expected 252"
+
+    try:
+        # Unpack the proof structure
+        unpacked = struct.unpack("<72s72s33sH33s32sII", decoded_data)
+
+        ownership_sig = unpacked[0]  # 72 bytes (padded DER signature)
+        cert_sig = unpacked[1]  # 72 bytes (padded DER signature)
+        cert_pub = unpacked[2]  # 33 bytes
+        cert_expiry_encoded = unpacked[3]  # 2 bytes (blocks / 2016)
+        utxo_pub = unpacked[4]  # 33 bytes
+        txid = unpacked[5]  # 32 bytes (little-endian)
+        vout = unpacked[6]  # 4 bytes
+        locktime = unpacked[7]  # 4 bytes
+
+        cert_expiry = cert_expiry_encoded * 2016
+
+        # 1. Verify UTXO ownership signature
+        # The ownership signature proves the maker controls the UTXO
+        # It signs SHA256(taker_nick) with the UTXO private key
+        ownership_message = hashlib.sha256(taker_nick.encode("utf-8")).digest()
+
+        if not verify_raw_ecdsa(ownership_message, ownership_sig, utxo_pub):
+            return False, None, "UTXO ownership signature verification failed"
+
+        # 2. Verify certificate signature
+        # The certificate is self-signed by the UTXO key (cert_pub should match utxo_pub)
+        # It signs SHA256(cert_pub || expiry || maker_nick)
+        cert_message_preimage = (
+            cert_pub + cert_expiry_encoded.to_bytes(2, "little") + maker_nick.encode("utf-8")
+        )
+        cert_message = hashlib.sha256(cert_message_preimage).digest()
+
+        if not verify_raw_ecdsa(cert_message, cert_sig, cert_pub):
+            return False, None, "Certificate signature verification failed"
+
+        # Both signatures are valid
+        bond_data = {
+            "utxo_txid": txid.hex(),
+            "utxo_vout": vout,
+            "locktime": locktime,
+            "utxo_pub": utxo_pub.hex(),
+            "cert_pub": cert_pub.hex(),
+            "cert_expiry": cert_expiry,
+            "maker_nick": maker_nick,
+            "taker_nick": taker_nick,
+        }
+
+        return True, bond_data, ""
+
+    except Exception as e:
+        return False, None, f"Failed to verify bond proof: {e}"

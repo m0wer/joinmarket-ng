@@ -1,5 +1,9 @@
 """
 Test fidelity bond parsing from network messages.
+
+Note: These tests use dummy/mock proofs that don't have valid signatures.
+We pass verify=False to skip signature verification and test only parsing logic.
+For signature verification tests, see jmcore/tests/test_crypto.py.
 """
 
 import base64
@@ -9,10 +13,11 @@ from orderbook_watcher.directory_client import parse_fidelity_bond_proof
 
 
 def test_parse_real_bond_proof() -> None:
-    """Test parsing actual bond proof from network"""
+    """Test parsing actual bond proof from network (parsing only, no sig verification)"""
     proof_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwKhssPU5fanuMnQ4fKjtMXW5/ipsMHS4/SltsfY6fCh9AEDAqGyw9Tl9qe4ydDh8qO0xdbn+KmwwdLj9KW2x9jp8KEBI0VniavN7wEjRWeJq83vASNFZ4mrze8BI0VniavN7wEAAAAAsz9x"
 
-    result = parse_fidelity_bond_proof(proof_b64, "TestMakerNick123", "testtaker")
+    # Skip signature verification for parsing test (dummy proof has no valid sigs)
+    result = parse_fidelity_bond_proof(proof_b64, "TestMakerNick123", "testtaker", verify=False)
 
     assert result is not None, "Should parse valid bond proof"
 
@@ -28,7 +33,8 @@ def test_parse_bond_proof_format() -> None:
     proof_data = b"\x00" * 252
     proof_b64 = base64.b64encode(proof_data).decode("ascii")
 
-    result = parse_fidelity_bond_proof(proof_b64, "maker", "taker")
+    # Skip signature verification for parsing test
+    result = parse_fidelity_bond_proof(proof_b64, "maker", "taker", verify=False)
 
     assert result is not None
     assert "utxo_txid" in result
@@ -43,13 +49,14 @@ def test_parse_bond_proof_invalid_length() -> None:
     proof_data = b"\x00" * 100
     proof_b64 = base64.b64encode(proof_data).decode("ascii")
 
-    result = parse_fidelity_bond_proof(proof_b64, "maker", "taker")
+    # Even with verify=False, wrong length should be rejected
+    result = parse_fidelity_bond_proof(proof_b64, "maker", "taker", verify=False)
     assert result is None
 
 
 def test_parse_bond_proof_invalid_base64() -> None:
     """Test that invalid base64 is rejected"""
-    result = parse_fidelity_bond_proof("not-valid-base64!!!", "maker", "taker")
+    result = parse_fidelity_bond_proof("not-valid-base64!!!", "maker", "taker", verify=False)
     assert result is None
 
 
@@ -70,8 +77,8 @@ def test_extract_bond_from_message() -> None:
     bond_parts = bond_section[6:].split()  # Remove "tbond " prefix and split
     bond_proof_b64 = bond_parts[0]
 
-    # Verify this is the correct proof
-    result = parse_fidelity_bond_proof(bond_proof_b64, "TestMaker123", "test")
+    # Skip verification for parsing test (dummy proof)
+    result = parse_fidelity_bond_proof(bond_proof_b64, "TestMaker123", "test", verify=False)
 
     assert result is not None
     assert result["utxo_txid"] == "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -97,7 +104,8 @@ def test_bond_proof_byte_order() -> None:
     assert len(packed) == 252
 
     proof_b64 = base64.b64encode(packed).decode("ascii")
-    result = parse_fidelity_bond_proof(proof_b64, "maker", "taker")
+    # Skip verification for parsing test (dummy proof)
+    result = parse_fidelity_bond_proof(proof_b64, "maker", "taker", verify=False)
 
     assert result is not None
     assert result["utxo_txid"] == "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
