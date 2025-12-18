@@ -5,8 +5,18 @@ Complete system tests with all JoinMarket components.
 ## Quick Start
 
 ```bash
-# Run ALL tests with a single profile:
+# Clean start (IMPORTANT: always use -v to reset blockchain state)
+docker compose --profile all down -v
+
+# Start all services and wait for wallet funding
 docker compose --profile all up -d --build
+sleep 30  # Wait for wallet-funder to complete
+
+# Restart makers to ensure they sync latest blockchain state
+docker compose restart maker1 maker2
+sleep 10  # Wait for makers to resync
+
+# Run tests
 pytest -lv \
   --cov=jmcore --cov=jmwallet --cov=directory_server \
   --cov=orderbook_watcher --cov=maker --cov=taker \
@@ -37,8 +47,18 @@ The unified `docker-compose.yml` uses profiles to organize services:
 Run ALL tests including reference compatibility:
 
 ```bash
+# Clean start (IMPORTANT!)
+docker compose --profile all down -v
+
 # Start all services
 docker compose --profile all up -d --build
+
+# Wait for wallet funding to complete
+sleep 30
+
+# Restart makers to ensure they have latest blockchain state
+docker compose restart maker1 maker2
+sleep 10
 
 # Run complete test suite
 pytest -lv \
@@ -55,8 +75,21 @@ docker compose --profile all down -v
 Tests our implementation without reference JAM:
 
 ```bash
+# Clean start
+docker compose --profile e2e down -v
+
+# Start services
 docker compose --profile e2e up -d --build
+sleep 30  # Wait for wallet funding
+
+# Restart makers
+docker compose restart maker1 maker2
+sleep 10
+
+# Run tests
 pytest tests/e2e/test_complete_system.py -v
+
+# Cleanup
 docker compose --profile e2e down -v
 ```
 
@@ -65,8 +98,22 @@ docker compose --profile e2e down -v
 Tests compatibility with upstream JoinMarket:
 
 ```bash
+# Clean start
+docker compose --profile reference down -v
+
+# Start services
 docker compose --profile reference up -d --build
-pytest tests/e2e/test_reference_coinjoin.py -v -s
+sleep 30  # Wait for wallet funding
+
+# Restart our makers to ensure they have latest blockchain state
+docker compose restart maker1 maker2
+sleep 10
+
+# Test our implementation with reference components:
+pytest tests/e2e/test_reference_coinjoin.py -v -s       # Reference maker + taker
+pytest tests/e2e/test_our_maker_reference_taker.py -v -s # Our maker + reference taker
+
+# Cleanup
 docker compose --profile reference down -v
 ```
 
@@ -140,11 +187,46 @@ Pre-configured test wallet mnemonics (regtest only!):
 
 ## Troubleshooting
 
+### ⚠️ IMPORTANT: Always Clean Volumes Before Testing
+
+**Docker volumes persist blockchain state between runs.** If you restart services without cleaning volumes, makers will have outdated wallet state and tests will fail with:
+
+```
+ERROR: outputs unconfirmed or already spent. utxo_data=[None]
+```
+
+**Solution:** Always use `down -v` and restart makers after funding:
+
+```bash
+# Clean volumes
+docker compose --profile all down -v
+
+# Start fresh
+docker compose --profile all up -d --build
+sleep 30
+
+# Restart makers to sync latest blockchain
+docker compose restart maker1 maker2
+sleep 10
+```
+
 ### Check Service Status
 
 ```bash
 docker compose --profile all ps
 docker compose logs <service-name>
+```
+
+### Makers Not Seeing UTXOs?
+
+Check if makers synced after wallet funding:
+
+```bash
+# Check maker1 balance
+docker compose logs maker1 | grep "Total balance"
+
+# Should show ~5900 BTC. If showing old balance, restart:
+docker compose restart maker1 maker2
 ```
 
 ### Reference Tests Failing?
