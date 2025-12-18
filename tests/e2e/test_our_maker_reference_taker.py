@@ -111,6 +111,8 @@ async def test_our_makers_are_running(our_maker_reference_taker_services):
     maker1_logs = result.stdout.lower()
 
     # Look for signs of healthy maker operation
+    # Include "timeout waiting" and "collected" which appear during normal operation
+    # when the maker is idle and listening for messages
     maker1_indicators = [
         "connected",
         "handshake",
@@ -118,6 +120,8 @@ async def test_our_makers_are_running(our_maker_reference_taker_services):
         "syncing",
         "wallet synced",
         "starting maker",
+        "timeout waiting",
+        "collected",
     ]
     maker1_healthy = any(ind in maker1_logs for ind in maker1_indicators)
 

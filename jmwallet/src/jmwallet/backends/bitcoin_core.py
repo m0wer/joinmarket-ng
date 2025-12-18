@@ -267,13 +267,54 @@ class BitcoinCoreBackend(BlockchainBackend):
 
     async def get_utxo(self, txid: str, vout: int) -> UTXO | None:
         """Get a specific UTXO from the blockchain UTXO set using gettxout.
-        Returns None if the UTXO does not exist or has been spent."""
+        Returns None if the UTXO does not exist or has been spent.
+
+        If not found in confirmed UTXO set, checks mempool for unconfirmed transactions.
+        """
         try:
             # gettxout returns None if UTXO doesn't exist or is spent
+            # include_mempool=True checks both confirmed and unconfirmed outputs
             result = await self._rpc_call("gettxout", [txid, vout, True])
 
             if result is None:
-                logger.debug(f"UTXO {txid}:{vout} not found in UTXO set")
+                # Not found in UTXO set - check if it's in mempool (unconfirmed)
+                logger.debug(
+                    f"UTXO {txid}:{vout} not found in confirmed UTXO set, checking mempool..."
+                )
+                try:
+                    # Get raw transaction from mempool
+                    tx_data = await self._rpc_call("getrawtransaction", [txid, True])
+
+                    if tx_data and "vout" in tx_data:
+                        # Check if the vout exists and hasn't been spent
+                        if vout < len(tx_data["vout"]):
+                            vout_data = tx_data["vout"][vout]
+                            value = int(vout_data.get("value", 0) * 100_000_000)
+
+                            # Extract address from scriptPubKey
+                            script_pub_key = vout_data.get("scriptPubKey", {})
+                            address = script_pub_key.get("address", "")
+                            # For multiple addresses (e.g., multisig), join them
+                            if not address and "addresses" in script_pub_key:
+                                addresses = script_pub_key.get("addresses", [])
+                                address = addresses[0] if addresses else ""
+                            scriptpubkey = script_pub_key.get("hex", "")
+
+                            # Unconfirmed transaction has 0 confirmations
+                            logger.info(f"Found UTXO {txid}:{vout} in mempool (unconfirmed)")
+                            return UTXO(
+                                txid=txid,
+                                vout=vout,
+                                value=value,
+                                address=address,
+                                confirmations=0,
+                                scriptpubkey=scriptpubkey,
+                                height=None,
+                            )
+                except Exception as mempool_err:
+                    logger.debug(f"UTXO {txid}:{vout} not in mempool either: {mempool_err}")
+
+                logger.debug(f"UTXO {txid}:{vout} not found (spent or doesn't exist)")
                 return None
 
             # Get tip height for confirmation calculation

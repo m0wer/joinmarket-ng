@@ -573,6 +573,15 @@ class MakerBot:
                     await self._send_response(taker_nick, "sig", {"signature": sig})
                 logger.info(f"CoinJoin with {taker_nick} COMPLETE ✓ (sent {len(signatures)} sigs)")
                 del self.active_sessions[taker_nick]
+
+                # Re-sync wallet to update UTXO set after CoinJoin
+                logger.info("Re-syncing wallet after CoinJoin completion...")
+                try:
+                    await self.wallet.sync_all()
+                    total_balance = await self.wallet.get_total_balance()
+                    logger.info(f"Wallet re-synced. New balance: {total_balance:,} sats")
+                except Exception as e:
+                    logger.error(f"Failed to re-sync wallet after CoinJoin: {e}")
             else:
                 logger.error(f"TX verification failed: {response.get('error')}")
                 del self.active_sessions[taker_nick]
