@@ -368,11 +368,11 @@ async def test_services_healthy(reference_services):
     maker1_logs = result.stdout.lower()
     maker1_running = any(
         [
-            "syncing" in maker1_logs,
-            "connected" in maker1_logs,
-            "handshake" in maker1_logs,
-            "wallet synced" in maker1_logs,
             "starting maker" in maker1_logs,
+            "maker bot started" in maker1_logs,
+            "wallet synced" in maker1_logs,
+            "announced offer" in maker1_logs,
+            "connected to directory" in maker1_logs,
         ]
     )
     assert maker1_running, f"Maker1 should be running. Logs: {result.stdout[-500:]}"
@@ -381,11 +381,11 @@ async def test_services_healthy(reference_services):
     maker2_logs = result.stdout.lower()
     maker2_running = any(
         [
-            "syncing" in maker2_logs,
-            "connected" in maker2_logs,
-            "handshake" in maker2_logs,
-            "wallet synced" in maker2_logs,
             "starting maker" in maker2_logs,
+            "maker bot started" in maker2_logs,
+            "wallet synced" in maker2_logs,
+            "announced offer" in maker2_logs,
+            "connected to directory" in maker2_logs,
         ]
     )
     assert maker2_running, f"Maker2 should be running. Logs: {result.stdout[-500:]}"
@@ -602,9 +602,14 @@ async def test_maker_offers_visible(reference_services):
     logger.info(f"Maker2 offers visible: {maker2_has_offers}")
 
     # At minimum, makers should be running
-    assert "running" in maker1_logs.lower() or "start" in maker1_logs.lower(), (
-        "Maker1 should be running"
+    maker1_running = any(
+        [
+            "starting maker" in maker1_logs.lower(),
+            "maker bot started" in maker1_logs.lower(),
+            "announced offer" in maker1_logs.lower(),
+        ]
     )
+    assert maker1_running, "Maker1 should be running"
 
 
 if __name__ == "__main__":
