@@ -2,8 +2,12 @@
 Network primitives and connection management.
 """
 
+from __future__ import annotations
+
 import asyncio
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 from loguru import logger
 
@@ -166,3 +170,97 @@ async def connect_via_tor(
     except Exception as e:
         logger.error(f"Failed to connect to {onion_address}:{port} via Tor: {e}")
         raise ConnectionError(f"Tor connection failed: {e}") from e
+
+
+class HiddenServiceListener:
+    """
+    TCP listener for accepting direct peer connections via Tor hidden service.
+
+    This is used by makers to accept direct connections from takers,
+    bypassing the directory server for lower latency.
+    """
+
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 0,
+        max_message_size: int = 2097152,
+        on_connection: Callable[[TCPConnection, str], Coroutine[Any, Any, None]] | None = None,
+    ):
+        """
+        Initialize hidden service listener.
+
+        Args:
+            host: Local address to bind to (typically 127.0.0.1 for Tor)
+            port: Local port to bind to (0 for auto-assign)
+            max_message_size: Maximum message size in bytes
+            on_connection: Callback when new connection is accepted
+        """
+        self.host = host
+        self.port = port
+        self.max_message_size = max_message_size
+        self.on_connection = on_connection
+        self.server: asyncio.Server | None = None  # type: ignore[no-any-unimported]
+        self.running = False
+        self._bound_port: int = 0
+
+    @property
+    def bound_port(self) -> int:
+        """Get the actual port the server is bound to."""
+        return self._bound_port
+
+    async def start(self) -> int:
+        """
+        Start listening for connections.
+
+        Returns:
+            The port number the server is bound to
+        """
+        self.server = await asyncio.start_server(
+            self._handle_connection,
+            self.host,
+            self.port,
+            limit=self.max_message_size,
+        )
+        self.running = True
+
+        # Get the actual bound port
+        addrs = self.server.sockets[0].getsockname() if self.server.sockets else None
+        if addrs:
+            self._bound_port = addrs[1]
+        else:
+            self._bound_port = self.port
+
+        logger.info(f"Hidden service listener started on {self.host}:{self._bound_port}")
+        return self._bound_port
+
+    async def _handle_connection(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        """Handle incoming connection."""
+        peer_addr = writer.get_extra_info("peername")
+        peer_str = f"{peer_addr[0]}:{peer_addr[1]}" if peer_addr else "unknown"
+        logger.info(f"Accepted connection from {peer_str}")
+
+        connection = TCPConnection(reader, writer, self.max_message_size)
+
+        if self.on_connection:
+            try:
+                await self.on_connection(connection, peer_str)
+            except Exception as e:
+                logger.error(f"Error handling connection from {peer_str}: {e}")
+                await connection.close()
+
+    async def stop(self) -> None:
+        """Stop the listener."""
+        self.running = False
+        if self.server:
+            self.server.close()
+            await self.server.wait_closed()
+            self.server = None
+        logger.info("Hidden service listener stopped")
+
+    async def serve_forever(self) -> None:
+        """Run the server until stopped."""
+        if self.server:
+            await self.server.serve_forever()

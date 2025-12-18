@@ -5,10 +5,12 @@ Tests for maker bot offer announcements with fidelity bond proofs.
 from __future__ import annotations
 
 import base64
+import json
 from unittest.mock import MagicMock
 
 import pytest
 from jmcore.models import NetworkType, Offer, OfferType
+from jmcore.network import TCPConnection
 
 from maker.bot import MakerBot
 from maker.config import MakerConfig
@@ -213,6 +215,161 @@ class TestBotInitialization:
 
         assert bot.nick is not None
         assert len(bot.nick) > 0
+
+    def test_bot_initializes_without_hidden_service(self, mock_wallet, mock_backend, config):
+        """Test that bot initializes without hidden service listener by default."""
+        bot = MakerBot(
+            wallet=mock_wallet,
+            backend=mock_backend,
+            config=config,
+        )
+
+        assert bot.hidden_service_listener is None
+        assert bot.direct_connections == {}
+
+    def test_bot_config_with_onion_host(self, mock_wallet, mock_backend):
+        """Test that bot can be configured with onion host."""
+        config = MakerConfig(
+            mnemonic="test " * 12,
+            directory_servers=["localhost:5222"],
+            network=NetworkType.REGTEST,
+            onion_host="test1234567890abcdef.onion",
+            onion_serving_host="127.0.0.1",
+            onion_serving_port=27183,
+            socks_host="127.0.0.1",
+            socks_port=9050,
+        )
+
+        bot = MakerBot(
+            wallet=mock_wallet,
+            backend=mock_backend,
+            config=config,
+        )
+
+        # Hidden service listener is created during start(), not init
+        assert bot.hidden_service_listener is None
+        assert config.onion_host == "test1234567890abcdef.onion"
+        assert config.onion_serving_port == 27183
+
+
+class TestHiddenServiceListener:
+    """Tests for hidden service listener functionality."""
+
+    @pytest.fixture
+    def mock_wallet(self):
+        wallet = MagicMock()
+        wallet.mixdepth_count = 5
+        wallet.utxo_cache = {}
+        return wallet
+
+    @pytest.fixture
+    def mock_backend(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def config_with_onion(self):
+        return MakerConfig(
+            mnemonic="test " * 12,
+            directory_servers=["localhost:5222"],
+            network=NetworkType.REGTEST,
+            onion_host="test1234567890abcdef.onion",
+            onion_serving_host="127.0.0.1",
+            onion_serving_port=0,  # Auto-assign port for tests
+        )
+
+    def test_direct_connection_tracking(self, mock_wallet, mock_backend, config_with_onion):
+        """Test that direct connections are tracked by nick."""
+        bot = MakerBot(
+            wallet=mock_wallet,
+            backend=mock_backend,
+            config=config_with_onion,
+        )
+
+        # Simulate adding a direct connection
+        mock_conn = MagicMock(spec=TCPConnection)
+        bot.direct_connections["J5test123"] = mock_conn
+
+        assert "J5test123" in bot.direct_connections
+        assert bot.direct_connections["J5test123"] == mock_conn
+
+    @pytest.mark.asyncio
+    async def test_on_direct_connection_invalid_json(
+        self, mock_wallet, mock_backend, config_with_onion
+    ):
+        """Test that invalid JSON messages are handled gracefully."""
+        bot = MakerBot(
+            wallet=mock_wallet,
+            backend=mock_backend,
+            config=config_with_onion,
+        )
+        bot.running = True
+
+        # Create a mock connection that returns invalid JSON then disconnects
+        mock_conn = MagicMock(spec=TCPConnection)
+        mock_conn.is_connected.side_effect = [True, False]  # Connected once, then disconnect
+
+        async def mock_receive() -> bytes:
+            return b"not valid json"
+
+        mock_conn.receive = mock_receive
+
+        async def mock_close() -> None:
+            pass
+
+        mock_conn.close = mock_close
+
+        # This should handle the invalid JSON gracefully
+        await bot._on_direct_connection(mock_conn, "127.0.0.1:12345")
+
+    @pytest.mark.asyncio
+    async def test_on_direct_connection_fill_command(
+        self, mock_wallet, mock_backend, config_with_onion
+    ):
+        """Test that direct connection fill command is routed correctly."""
+        bot = MakerBot(
+            wallet=mock_wallet,
+            backend=mock_backend,
+            config=config_with_onion,
+        )
+        bot.running = True
+
+        # Track if _handle_fill was called and verify connection tracking
+        fill_called = False
+        connection_was_tracked = False
+
+        async def mock_handle_fill(taker_nick: str, msg: str) -> None:
+            nonlocal fill_called, connection_was_tracked
+            fill_called = True
+            # At this point, the connection should be tracked
+            connection_was_tracked = taker_nick in bot.direct_connections
+            assert taker_nick == "J5taker123"
+            assert "fill" in msg
+
+        bot._handle_fill = mock_handle_fill
+
+        # Create a mock connection that sends a fill command then disconnects
+        fill_msg = json.dumps(
+            {"nick": "J5taker123", "cmd": "fill", "data": "0 1000000 abc123 Pcommitment"}
+        )
+
+        async def mock_receive() -> bytes:
+            return fill_msg.encode()
+
+        async def mock_close() -> None:
+            pass
+
+        mock_conn = MagicMock(spec=TCPConnection)
+        mock_conn.is_connected.side_effect = [True, False]
+        mock_conn.receive = mock_receive
+        mock_conn.close = mock_close
+
+        await bot._on_direct_connection(mock_conn, "127.0.0.1:12345")
+
+        assert fill_called, "_handle_fill should have been called"
+        # Connection is tracked during processing but cleaned up on disconnect
+        assert connection_was_tracked, "Connection should be tracked during message handling"
+        # After cleanup, connection should be removed
+        assert "J5taker123" not in bot.direct_connections, "Connection should be cleaned up"
 
 
 if __name__ == "__main__":

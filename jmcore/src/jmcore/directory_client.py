@@ -115,6 +115,7 @@ class DirectoryClient:
         port: int,
         network: str,
         nick: str | None = None,
+        location: str = "NOT-SERVING-ONION",
         socks_host: str = "127.0.0.1",
         socks_port: int = 9050,
         timeout: float = 30.0,
@@ -129,6 +130,7 @@ class DirectoryClient:
             port: Directory server port
             network: Bitcoin network (mainnet, testnet, signet, regtest)
             nick: JoinMarket nick (generated if None)
+            location: Our location string (onion address or NOT-SERVING-ONION)
             socks_host: SOCKS proxy host for Tor
             socks_port: SOCKS proxy port for Tor
             timeout: Connection timeout in seconds
@@ -138,6 +140,7 @@ class DirectoryClient:
         self.host = host
         self.port = port
         self.network = network
+        self.location = location
         self.socks_host = socks_host
         self.socks_port = socks_port
         self.timeout = timeout
@@ -189,7 +192,7 @@ class DirectoryClient:
 
         handshake_data = create_handshake_request(
             nick=self.nick,
-            location="NOT-SERVING-ONION",
+            location=self.location,
             network=self.network,
             directory=False,
         )

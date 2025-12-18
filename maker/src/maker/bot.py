@@ -17,6 +17,7 @@ from typing import Any
 from jmcore.crypto import NickIdentity
 from jmcore.directory_client import DirectoryClient
 from jmcore.models import Offer
+from jmcore.network import HiddenServiceListener, TCPConnection
 from jmcore.protocol import COMMAND_PREFIX, JM_VERSION
 from jmwallet.backends.base import BlockchainBackend
 from jmwallet.wallet.service import WalletService
@@ -58,7 +59,11 @@ class MakerBot:
         self.fidelity_bond: FidelityBondInfo | None = None
 
         self.running = False
-        self.listen_tasks: list[asyncio.Task] = []
+        self.listen_tasks: list[asyncio.Task[None]] = []
+
+        # Hidden service listener for direct peer connections
+        self.hidden_service_listener: HiddenServiceListener | None = None
+        self.direct_connections: dict[str, TCPConnection] = {}
 
     async def start(self) -> None:
         """
@@ -125,12 +130,20 @@ class MakerBot:
                     host = parts[0]
                     port = int(parts[1]) if len(parts) > 1 else 5222
 
-                    # Create DirectoryClient
+                    # Determine location for handshake:
+                    # If we have an onion_host configured, advertise it
+                    # Otherwise, use NOT-SERVING-ONION
+                    location = self.config.onion_host or "NOT-SERVING-ONION"
+
+                    # Create DirectoryClient with SOCKS config for Tor connections
                     client = DirectoryClient(
                         host=host,
                         port=port,
                         network=self.config.network.value,
                         nick=self.nick,
+                        location=location,
+                        socks_host=self.config.socks_host,
+                        socks_port=self.config.socks_port,
                     )
 
                     await client.connect()
@@ -146,15 +159,34 @@ class MakerBot:
                 logger.error("Failed to connect to any directory server")
                 return
 
+            # Start hidden service listener if configured
+            if self.config.onion_host:
+                logger.info(
+                    f"Starting hidden service listener on "
+                    f"{self.config.onion_serving_host}:{self.config.onion_serving_port}..."
+                )
+                self.hidden_service_listener = HiddenServiceListener(
+                    host=self.config.onion_serving_host,
+                    port=self.config.onion_serving_port,
+                    on_connection=self._on_direct_connection,
+                )
+                await self.hidden_service_listener.start()
+                logger.info(f"Hidden service listener started (onion: {self.config.onion_host})")
+
             logger.info("Announcing offers...")
             await self._announce_offers()
 
             logger.info("Maker bot started. Listening for takers...")
             self.running = True
 
-            # Start listening on all clients
+            # Start listening on all directory clients
             for node_id, client in self.directory_clients.items():
                 task = asyncio.create_task(self._listen_client(node_id, client))
+                self.listen_tasks.append(task)
+
+            # If hidden service listener is running, start serve_forever task
+            if self.hidden_service_listener:
+                task = asyncio.create_task(self.hidden_service_listener.serve_forever())
                 self.listen_tasks.append(task)
 
             # Wait for all listening tasks to complete
@@ -175,6 +207,18 @@ class MakerBot:
 
         if self.listen_tasks:
             await asyncio.gather(*self.listen_tasks, return_exceptions=True)
+
+        # Stop hidden service listener
+        if self.hidden_service_listener:
+            await self.hidden_service_listener.stop()
+
+        # Close all direct connections
+        for conn in self.direct_connections.values():
+            try:
+                await conn.close()
+            except Exception:
+                pass
+        self.direct_connections.clear()
 
         # Close all directory clients
         for client in self.directory_clients.values():
@@ -604,3 +648,72 @@ class MakerBot:
 
         except Exception as e:
             logger.error(f"Failed to send response: {e}")
+
+    async def _on_direct_connection(self, connection: TCPConnection, peer_str: str) -> None:
+        """Handle incoming direct connection from a taker via hidden service.
+
+        Direct connections use a simplified protocol compared to directory messages:
+        - Messages are sent as newline-delimited JSON over TCP
+        - Format: {"nick": "sender", "cmd": "command", "data": "..."}
+
+        This bypasses the directory server for lower latency once the taker
+        knows the maker's onion address (from the peerlist).
+        """
+        logger.info(f"Handling direct connection from {peer_str}")
+
+        try:
+            # Keep connection open and process messages
+            while self.running and connection.is_connected():
+                try:
+                    # Receive message with timeout
+                    data = await asyncio.wait_for(connection.receive(), timeout=60.0)
+                    if not data:
+                        logger.info(f"Direct connection from {peer_str} closed")
+                        break
+
+                    # Parse the message
+                    try:
+                        message = json.loads(data.decode("utf-8"))
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Invalid JSON from {peer_str}: {e}")
+                        continue
+
+                    sender_nick = message.get("nick", "unknown")
+                    cmd = message.get("cmd", "")
+                    msg_data = message.get("data", "")
+
+                    logger.debug(f"Direct message from {sender_nick}: cmd={cmd}")
+
+                    # Track this connection by nick for sending responses
+                    if sender_nick != "unknown":
+                        self.direct_connections[sender_nick] = connection
+
+                    # Process the command - reuse existing handlers
+                    # Commands: fill, auth, tx (same as via directory)
+                    full_msg = f"{cmd} {msg_data}" if msg_data else cmd
+
+                    if cmd == "fill":
+                        await self._handle_fill(sender_nick, full_msg)
+                    elif cmd == "auth":
+                        await self._handle_auth(sender_nick, full_msg)
+                    elif cmd == "tx":
+                        await self._handle_tx(sender_nick, full_msg)
+                    else:
+                        logger.debug(f"Unknown direct command from {sender_nick}: {cmd}")
+
+                except TimeoutError:
+                    # No message received, continue waiting
+                    continue
+                except Exception as e:
+                    logger.error(f"Error processing direct message from {peer_str}: {e}")
+                    break
+
+        except Exception as e:
+            logger.error(f"Error in direct connection handler for {peer_str}: {e}")
+        finally:
+            await connection.close()
+            # Clean up nick -> connection mapping
+            for nick, conn in list(self.direct_connections.items()):
+                if conn == connection:
+                    del self.direct_connections[nick]
+            logger.info(f"Direct connection from {peer_str} closed")

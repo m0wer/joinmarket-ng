@@ -24,6 +24,16 @@ class MakerConfig(BaseModel):
 
     directory_servers: list[str] = Field(default_factory=list)
 
+    # Tor/SOCKS configuration for outgoing connections
+    socks_host: str = "127.0.0.1"
+    socks_port: int = 9050
+
+    # Hidden service configuration for direct peer connections
+    # If onion_host is set, maker will serve on a hidden service
+    onion_host: str | None = None  # e.g., "mymaker...onion"
+    onion_serving_host: str = "127.0.0.1"  # Local address Tor forwards to
+    onion_serving_port: int = 27183  # Default JoinMarket port
+
     offer_type: OfferType = OfferType.SW0_RELATIVE
     min_size: int = 100_000
     cj_fee_relative: str = "0.0002"

@@ -608,7 +608,20 @@ class Taker:
                     auth_pub = ioauth_parts[1]
                     cj_addr = ioauth_parts[2]
                     change_addr = ioauth_parts[3]
-                    # btc_sig = ioauth_parts[4]  # TODO: verify signature
+
+                    # Verify btc_sig if present - proves maker owns the UTXO
+                    if len(ioauth_parts) >= 5:
+                        btc_sig = ioauth_parts[4]
+                        # The signature is over the maker's NaCl pubkey
+                        from jmcore.crypto import ecdsa_verify
+
+                        maker_nacl_pk = session.pubkey  # Maker's NaCl pubkey from !pubkey
+                        auth_pub_bytes = bytes.fromhex(auth_pub)
+                        if not ecdsa_verify(maker_nacl_pk, btc_sig, auth_pub_bytes):
+                            logger.warning(f"Invalid BTC signature from {nick}")
+                            del self.maker_sessions[nick]
+                            continue
+                        logger.debug(f"BTC signature verified for {nick}")
 
                     # Parse utxo_list: "txid:vout,txid:vout,..."
                     # Then fetch UTXO values from blockchain
