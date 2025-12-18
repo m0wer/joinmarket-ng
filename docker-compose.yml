@@ -6,19 +6,20 @@
 #   taker      - Add taker client
 #   e2e        - E2E testing setup with 2 makers (our implementation)
 #   reference  - Reference JoinMarket (JAM) for compatibility testing
-#   all        - Everything: e2e + reference (for full test suite)
 #   neutrino   - Add neutrino light client backend
+#   all        - Everything: e2e + reference + neutrino (for full test suite)
 #
 # Usage:
 #   docker compose up -d                           # Core services only
 #   docker compose --profile maker up -d           # Add maker bot
 #   docker compose --profile e2e up -d             # E2E tests (our implementation)
 #   docker compose --profile reference up -d       # Reference compatibility tests
-#   docker compose --profile all up -d             # Full test suite (all tests)
+#   docker compose --profile neutrino up -d        # Neutrino light client tests
+#   docker compose --profile all up -d             # Full test suite (all backends)
 #
-# Run full test suite:
+# Run full test suite with both bitcoin_core and neutrino backends:
 #   docker compose --profile all up -d --build
-#   pytest -lv --cov=jmcore --cov=jmwallet --cov=directory_server \
+#   pytest -lv --backend=all --cov=jmcore --cov=jmwallet --cov=directory_server \
 #          --cov=orderbook_watcher --cov=maker --cov=taker \
 #          jmcore orderbook_watcher directory_server jmwallet maker taker tests
 #   docker compose --profile all down -v
@@ -54,6 +55,9 @@ services:
       - '-zmqpubrawtx=tcp://0.0.0.0:28333'
       - '-debug=1'
       - '-disablewallet=0'
+      # Compact block filters for Neutrino support (BIP157/158)
+      - '-blockfilterindex=1'
+      - '-peerblockfilters=1'
     ports:
       - "18443:18443"
       - "18444:18444"
@@ -464,10 +468,10 @@ services:
     container_name: jm-neutrino
     restart: unless-stopped
     environment:
-      - NETWORK=testnet
+      - NETWORK=regtest
       - LISTEN_ADDR=0.0.0.0:8334
       - DATA_DIR=/data/neutrino
-      - LOG_LEVEL=info
+      - LOG_LEVEL=debug
       - CONNECT_PEERS=jm-bitcoin:18444
     ports:
       - "8334:8334"
@@ -490,7 +494,7 @@ services:
     container_name: jm-maker-neutrino
     restart: "no"
     environment:
-      - MNEMONIC=${MAKER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
+      - MNEMONIC=${MAKER_NEUTRINO_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
       - NETWORK=testnet
       - BITCOIN_NETWORK=regtest
       - BACKEND_TYPE=neutrino
@@ -507,6 +511,8 @@ services:
         condition: service_started
       directory:
         condition: service_healthy
+      wallet-funder:
+        condition: service_completed_successfully
     profiles:
       - neutrino
       - all
@@ -519,7 +525,7 @@ services:
     container_name: jm-taker-neutrino
     restart: "no"
     environment:
-      - MNEMONIC=${TAKER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
+      - MNEMONIC=${TAKER_NEUTRINO_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
       - NETWORK=testnet
       - BITCOIN_NETWORK=regtest
       - BACKEND_TYPE=neutrino
@@ -537,6 +543,8 @@ services:
         condition: service_started
       directory:
         condition: service_healthy
+      wallet-funder:
+        condition: service_completed_successfully
     profiles:
       - neutrino
       - all

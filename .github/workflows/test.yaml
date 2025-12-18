@@ -9,6 +9,7 @@ on:
       - 'orderbook_watcher/**'
       - 'maker/**'
       - 'taker/**'
+      - 'neutrino_server/**'
       - 'tests/**'
       - 'pytest.ini'
       - 'docker-compose.yml'
@@ -21,6 +22,7 @@ on:
       - 'orderbook_watcher/**'
       - 'maker/**'
       - 'taker/**'
+      - 'neutrino_server/**'
       - 'tests/**'
       - 'pytest.ini'
       - 'docker-compose.yml'
@@ -258,7 +260,8 @@ jobs:
 
       - name: "Start all services (profile: all)"
         run: |
-          # Start everything: bitcoin, directory, makers, tor, jam
+          # Start everything: bitcoin, directory, makers, tor, jam, neutrino
+          # Profile 'all' includes: e2e + reference + neutrino backends
           docker compose --profile all up -d --build
 
           # Wait for Bitcoin
@@ -314,7 +317,10 @@ jobs:
           BITCOIN_RPC_URL: http://127.0.0.1:18443
           BITCOIN_RPC_USER: test
           BITCOIN_RPC_PASSWORD: test
+          NEUTRINO_URL: http://127.0.0.1:8334
         run: |
+          # Run e2e tests with bitcoin_core backend (default)
+          # Neutrino backend tests also run via test_neutrino_backend.py
           pytest tests/e2e --junitxml=junit/test-results.xml \
             --cov --cov-report=term-missing --cov-report=xml \
             -v -s --timeout=600
@@ -342,6 +348,9 @@ jobs:
           echo ""
           echo "=== JAM logs ==="
           docker compose logs jam --tail=50
+          echo ""
+          echo "=== Neutrino logs ==="
+          docker compose logs neutrino --tail=30
 
       - name: Cleanup
         if: always()
