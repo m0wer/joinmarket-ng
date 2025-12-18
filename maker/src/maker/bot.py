@@ -14,7 +14,7 @@ import asyncio
 import json
 from typing import Any
 
-from jmcore.crypto import generate_jm_nick
+from jmcore.crypto import NickIdentity
 from jmcore.directory_client import DirectoryClient
 from jmcore.models import Offer
 from jmcore.protocol import COMMAND_PREFIX, JM_VERSION
@@ -26,6 +26,9 @@ from maker.coinjoin import CoinJoinSession
 from maker.config import MakerConfig
 from maker.fidelity import FidelityBondInfo, create_fidelity_bond_proof, get_best_fidelity_bond
 from maker.offers import OfferManager
+
+# Default hostid for onion network (matches reference implementation)
+DEFAULT_HOSTID = "onion-network"
 
 
 class MakerBot:
@@ -42,7 +45,10 @@ class MakerBot:
         self.wallet = wallet
         self.backend = backend
         self.config = config
-        self.nick = generate_jm_nick(JM_VERSION)
+
+        # Create nick identity for signing messages
+        self.nick_identity = NickIdentity(JM_VERSION)
+        self.nick = self.nick_identity.nick
 
         self.offer_manager = OfferManager(self.wallet, config, self.nick)
 
@@ -264,8 +270,9 @@ class MakerBot:
             if from_nick == self.nick:
                 return
 
-            # Respond to !orderbook requests by re-announcing offers
-            if to_nick == "PUBLIC" and rest.strip() == "!orderbook":
+            # Respond to orderbook requests by re-announcing offers
+            # Note: rest doesn't include the leading "!" since COMMAND_PREFIX is the separator
+            if to_nick == "PUBLIC" and rest.strip() == "orderbook":
                 logger.info(f"Received !orderbook request from {from_nick}, re-announcing offers")
                 await self._announce_offers()
 
@@ -286,11 +293,12 @@ class MakerBot:
             if to_nick != self.nick:
                 return
 
-            if rest.startswith("!fill"):
+            # Note: rest doesn't include the leading "!" since COMMAND_PREFIX is the separator
+            if rest.startswith("fill"):
                 await self._handle_fill(from_nick, rest)
-            elif rest.startswith("!auth"):
+            elif rest.startswith("auth"):
                 await self._handle_auth(from_nick, rest)
-            elif rest.startswith("!tx"):
+            elif rest.startswith("tx"):
                 await self._handle_tx(from_nick, rest)
             else:
                 logger.debug(f"Unknown command: {rest[:20]}...")
@@ -299,16 +307,24 @@ class MakerBot:
             logger.error(f"Failed to handle privmsg: {e}")
 
     async def _handle_fill(self, taker_nick: str, msg: str) -> None:
-        """Handle !fill request from taker"""
+        """Handle !fill request from taker.
+
+        Fill message format: fill <oid> <amount> <taker_nacl_pk> <commitment> [<signing_pk> <sig>]
+        """
         try:
             parts = msg.split()
-            if len(parts) < 4:
-                logger.warning(f"Invalid !fill format: {msg}")
+            if len(parts) < 5:
+                logger.warning(f"Invalid !fill format (need at least 5 parts): {msg}")
                 return
 
             offer_id = int(parts[1])
             amount = int(parts[2])
-            commitment = parts[3]
+            taker_pk = parts[3]  # Taker's NaCl pubkey for E2E encryption
+            commitment = parts[4]  # PoDLE commitment (with prefix like "P")
+
+            # Strip commitment prefix if present (e.g., "P" for standard PoDLE)
+            if commitment.startswith("P"):
+                commitment = commitment[1:]
 
             if offer_id >= len(self.current_offers):
                 logger.warning(f"Invalid offer ID: {offer_id}")
@@ -328,13 +344,14 @@ class MakerBot:
                 backend=self.backend,
             )
 
-            success, response = await session.handle_fill(amount, commitment)
+            # Pass the taker's NaCl pubkey for setting up encryption
+            success, response = await session.handle_fill(amount, commitment, taker_pk)
 
             if success:
                 self.active_sessions[taker_nick] = session
                 logger.info(f"Created CoinJoin session with {taker_nick}")
 
-                await self._send_response(taker_nick, "!pubkey", response)
+                await self._send_response(taker_nick, "pubkey", response)
             else:
                 logger.warning(f"Failed to handle fill: {response.get('error')}")
 
@@ -342,7 +359,14 @@ class MakerBot:
             logger.error(f"Failed to handle !fill: {e}")
 
     async def _handle_auth(self, taker_nick: str, msg: str) -> None:
-        """Handle !auth request from taker"""
+        """Handle !auth request from taker.
+
+        The auth message is ENCRYPTED using NaCl.
+        Format: auth <encrypted_base64> [<signing_pk> <sig>]
+
+        After decryption, the plaintext is pipe-separated:
+        txid:vout|P|P2|sig|e
+        """
         try:
             if taker_nick not in self.active_sessions:
                 logger.warning(f"No active session for {taker_nick}")
@@ -350,30 +374,73 @@ class MakerBot:
 
             session = self.active_sessions[taker_nick]
 
-            logger.info(f"Received !auth from {taker_nick}, verifying PoDLE...")
+            logger.info(f"Received !auth from {taker_nick}, decrypting and verifying PoDLE...")
 
-            # Parse: !auth <commitment> <revelation_json> <kphex>
-            # revelation_json contains spaces, so we need to extract it by finding { and }
-            # Find the JSON object boundaries
-            json_start = msg.find("{")
-            json_end = msg.rfind("}") + 1
-            if json_start == -1 or json_end == 0:
-                logger.error("Invalid !auth format: no JSON found")
+            # Parse: auth <encrypted_base64> [<signing_pk> <sig>]
+            parts = msg.split()
+            if len(parts) < 2:
+                logger.error("Invalid !auth format: missing encrypted data")
                 return
 
-            # Extract parts
-            before_json = msg[:json_start].strip().split()
-            commitment = before_json[1] if len(before_json) > 1 else ""
-            revelation_json = msg[json_start:json_end]
-            after_json = msg[json_end:].strip()
-            kphex = after_json if after_json else ""
+            encrypted_data = parts[1]
 
-            revelation = json.loads(revelation_json)
+            # Decrypt the auth message
+            if not session.crypto.is_encrypted:
+                logger.error("Encryption not set up for this session")
+                return
+
+            try:
+                decrypted = session.crypto.decrypt(encrypted_data)
+                logger.debug(f"Decrypted auth message length: {len(decrypted)}")
+            except Exception as e:
+                logger.error(f"Failed to decrypt auth message: {e}")
+                return
+
+            # Parse the decrypted revelation - pipe-separated format:
+            # txid:vout|P|P2|sig|e
+            try:
+                revelation_parts = decrypted.split("|")
+                if len(revelation_parts) != 5:
+                    logger.error(
+                        f"Invalid revelation format: expected 5 parts, got {len(revelation_parts)}"
+                    )
+                    return
+
+                utxo_str, p_hex, p2_hex, sig_hex, e_hex = revelation_parts
+
+                # Parse utxo
+                if ":" not in utxo_str:
+                    logger.error(f"Invalid utxo format: {utxo_str}")
+                    return
+
+                # Validate utxo format (txid:vout)
+                if not utxo_str.rsplit(":", 1)[1].isdigit():
+                    logger.error(f"Invalid vout in utxo: {utxo_str}")
+                    return
+
+                # parse_podle_revelation expects hex strings, not bytes
+                revelation = {
+                    "utxo": utxo_str,
+                    "P": p_hex,
+                    "P2": p2_hex,
+                    "sig": sig_hex,
+                    "e": e_hex,
+                }
+                logger.debug(f"Parsed revelation: utxo={utxo_str}, P={p_hex[:16]}...")
+            except Exception as e:
+                logger.error(f"Failed to parse revelation: {e}")
+                return
+
+            # The commitment was already stored from the !fill message
+            commitment = self.active_sessions[taker_nick].commitment.hex()
+
+            # kphex is empty for now - we don't use it yet
+            kphex = ""
 
             success, response = await session.handle_auth(commitment, revelation, kphex)
 
             if success:
-                await self._send_response(taker_nick, "!ioauth", response)
+                await self._send_response(taker_nick, "ioauth", response)
             else:
                 logger.error(f"Auth failed: {response.get('error')}")
                 del self.active_sessions[taker_nick]
@@ -382,7 +449,13 @@ class MakerBot:
             logger.error(f"Failed to handle !auth: {e}")
 
     async def _handle_tx(self, taker_nick: str, msg: str) -> None:
-        """Handle !tx request from taker"""
+        """Handle !tx request from taker.
+
+        The tx message is ENCRYPTED using NaCl.
+        Format: tx <encrypted_base64> [<signing_pk> <sig>]
+
+        After decryption, the plaintext is base64-encoded transaction bytes.
+        """
         try:
             if taker_nick not in self.active_sessions:
                 logger.warning(f"No active session for {taker_nick}")
@@ -390,20 +463,46 @@ class MakerBot:
 
             session = self.active_sessions[taker_nick]
 
-            logger.info(f"Received !tx from {taker_nick}, verifying transaction...")
+            logger.info(f"Received !tx from {taker_nick}, decrypting and verifying transaction...")
 
-            parts = msg.split(maxsplit=1)
+            # Parse: tx <encrypted_base64> [<signing_pk> <sig>]
+            parts = msg.split()
             if len(parts) < 2:
                 logger.warning("Invalid !tx format")
                 return
 
-            tx_hex = parts[1]
+            encrypted_data = parts[1]
+
+            # Decrypt the tx message
+            if not session.crypto.is_encrypted:
+                logger.error("Encryption not set up for this session")
+                return
+
+            try:
+                decrypted = session.crypto.decrypt(encrypted_data)
+                logger.debug(f"Decrypted tx message length: {len(decrypted)}")
+            except Exception as e:
+                logger.error(f"Failed to decrypt tx message: {e}")
+                return
+
+            # The decrypted content is base64-encoded transaction
+            import base64
+
+            try:
+                tx_bytes = base64.b64decode(decrypted)
+                tx_hex = tx_bytes.hex()
+            except Exception as e:
+                logger.error(f"Failed to decode transaction: {e}")
+                return
 
             success, response = await session.handle_tx(tx_hex)
 
             if success:
-                await self._send_response(taker_nick, "!sig", response)
-                logger.info(f"CoinJoin with {taker_nick} COMPLETE ✓")
+                # Send each signature as a separate message
+                signatures = response.get("signatures", [])
+                for sig in signatures:
+                    await self._send_response(taker_nick, "sig", {"signature": sig})
+                logger.info(f"CoinJoin with {taker_nick} COMPLETE ✓ (sent {len(signatures)} sigs)")
                 del self.active_sessions[taker_nick]
             else:
                 logger.error(f"TX verification failed: {response.get('error')}")
@@ -413,15 +512,70 @@ class MakerBot:
             logger.error(f"Failed to handle !tx: {e}")
 
     async def _send_response(self, taker_nick: str, command: str, data: dict[str, Any]) -> None:
-        """Send response to taker"""
+        """Send signed response to taker.
+
+        Different commands have different formats:
+        - !pubkey <nacl_pubkey_hex> - NOT encrypted
+        - !ioauth <encrypted_base64> - ENCRYPTED
+        - !sig <encrypted_base64> - ENCRYPTED
+
+        The signature is appended: <message_content> <signing_pubkey> <sig_b64>
+        The signature is over: <message_content> + hostid (NOT including the command!)
+
+        For encrypted commands, the plaintext is space-separated values that get
+        encrypted and base64-encoded before signing.
+        """
         try:
-            data_json = json.dumps(data)
-            msg = f"{command} {data_json}"
+            # Format message content based on command type
+            if command == "pubkey":
+                # !pubkey <nacl_pubkey_hex> - NOT encrypted
+                msg_content = data["nacl_pubkey"]
+            elif command == "ioauth":
+                # Plaintext format: <utxo_list> <auth_pub> <cj_addr> <change_addr> <btc_sig>
+                plaintext = " ".join(
+                    [
+                        data["utxo_list"],
+                        data["auth_pub"],
+                        data["cj_addr"],
+                        data["change_addr"],
+                        data["btc_sig"],
+                    ]
+                )
+
+                # Get the session to encrypt the message
+                if taker_nick not in self.active_sessions:
+                    logger.error(f"No active session for {taker_nick} to encrypt ioauth")
+                    return
+                session = self.active_sessions[taker_nick]
+                msg_content = session.crypto.encrypt(plaintext)
+                logger.debug(f"Encrypted ioauth message, plaintext_len={len(plaintext)}")
+            elif command == "sig":
+                # Plaintext format: <signature_base64>
+                # For multiple signatures, we send them one by one
+                plaintext = data["signature"]
+
+                # Get the session to encrypt the message
+                if taker_nick not in self.active_sessions:
+                    logger.error(f"No active session for {taker_nick} to encrypt sig")
+                    return
+                session = self.active_sessions[taker_nick]
+                msg_content = session.crypto.encrypt(plaintext)
+                logger.debug(f"Encrypted sig: plaintext_len={len(plaintext)}")
+            else:
+                # Fallback to JSON for unknown commands
+                msg_content = json.dumps(data)
+
+            # Sign ONLY the data portion (without command), with hostid appended
+            signed_data = self.nick_identity.sign_message(msg_content, DEFAULT_HOSTID)
+
+            # The signed_data is: "<msg_content> <pubkey> <sig>"
+            # We need to prepend the command: "<command> <msg_content> <pubkey> <sig>"
+            msg = f"{command} {signed_data}"
 
             for client in self.directory_clients.values():
                 await client.send_private_message(taker_nick, msg)
 
-            logger.debug(f"Sent {command} to {taker_nick}")
+            logger.debug(f"Sent signed {command} to {taker_nick}")
 
         except Exception as e:
             logger.error(f"Failed to send response: {e}")

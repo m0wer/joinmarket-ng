@@ -8,6 +8,7 @@ dependencies = [
     "jmwallet",
     "coincurve==20.0.0",
     "httpx>=0.25.0",
+    "libnacl>=2.0.0",
     "loguru>=0.7.0",
     "pydantic>=2.0.0",
     "typer>=0.9.0",

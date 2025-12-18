@@ -196,8 +196,8 @@ def generate_podle(
     e_bytes = hashlib.sha256(kg_bytes + kj_bytes + p_bytes + p2_bytes).digest()
     e = int.from_bytes(e_bytes, "big") % SECP256K1_N
 
-    # Response s = k_proof - e * k (mod n)
-    s = (k_proof - e * k) % SECP256K1_N
+    # Response s = k_proof + e * k (mod n) - JAM compatible
+    s = (k_proof + e * k) % SECP256K1_N
     s_bytes = s.to_bytes(32, "big")
 
     logger.debug(
@@ -274,21 +274,24 @@ def verify_podle(
         # sg = s * G
         sg = scalar_mult_g(s_int) if s_int > 0 else None
 
+        # Compute -e mod N for subtraction (JAM compatible: s = k + e*x, verify Kg = s*G - e*P)
+        minus_e_int = (-e_int) % SECP256K1_N
+
         for index in index_range:
             try:
                 j = get_nums_point(index)
 
-                # Kg = s*G + e*P
-                ep = point_mult(e_int, p_point)
-                kg = point_add(sg, ep) if sg is not None else ep
+                # Kg = s*G - e*P = s*G + (-e)*P (JAM compatible verification)
+                minus_e_p = point_mult(minus_e_int, p_point)
+                kg = point_add(sg, minus_e_p) if sg is not None else minus_e_p
 
-                # Kj = s*J + e*P2
-                ep2 = point_mult(e_int, p2_point)
+                # Kj = s*J - e*P2 = s*J + (-e)*P2
+                minus_e_p2 = point_mult(minus_e_int, p2_point)
                 if s_int > 0:
                     sj = point_mult(s_int, j)
-                    kj = point_add(sj, ep2)
+                    kj = point_add(sj, minus_e_p2)
                 else:
-                    kj = ep2
+                    kj = minus_e_p2
 
                 kg_bytes = point_to_bytes(kg)
                 kj_bytes = point_to_bytes(kj)

@@ -4,6 +4,7 @@ Cryptographic primitives for JoinMarket.
 
 from __future__ import annotations
 
+import base64
 import binascii
 import hashlib
 import secrets
@@ -40,7 +41,8 @@ def base58_encode(data: bytes) -> str:
 def generate_jm_nick(version: int = 5) -> str:
     privkey_bytes = secrets.token_bytes(32)
     private_key = PrivateKey(privkey_bytes)
-    pubkey_bytes = private_key.public_key.format(compressed=False)
+    # Use compressed pubkey (33 bytes) - matches reference implementation
+    pubkey_bytes = private_key.public_key.format(compressed=True)
 
     pubkey_hex = binascii.hexlify(pubkey_bytes)
     nick_pkh_raw = hashlib.sha256(pubkey_hex).digest()[:NICK_HASH_LENGTH]
@@ -49,6 +51,155 @@ def generate_jm_nick(version: int = 5) -> str:
     nick_pkh += "O" * (NICK_MAX_ENCODED - len(nick_pkh))
 
     return f"J{version}{nick_pkh}"
+
+
+def bitcoin_message_hash(message: str) -> bytes:
+    """
+    Hash a message using Bitcoin's message signing format.
+
+    Format: SHA256(SHA256("\\x18Bitcoin Signed Message:\\n" + varint(len) + message))
+    """
+    prefix = b"\x18Bitcoin Signed Message:\n"
+
+    # Encode message to bytes
+    msg_bytes = message.encode("utf-8")
+
+    # Create varint for message length
+    msg_len = len(msg_bytes)
+    if msg_len < 253:
+        varint = bytes([msg_len])
+    elif msg_len < 0x10000:
+        varint = b"\xfd" + msg_len.to_bytes(2, "little")
+    elif msg_len < 0x100000000:
+        varint = b"\xfe" + msg_len.to_bytes(4, "little")
+    else:
+        varint = b"\xff" + msg_len.to_bytes(8, "little")
+
+    # Full message to hash
+    full_msg = prefix + varint + msg_bytes
+
+    # Double SHA256
+    return hashlib.sha256(hashlib.sha256(full_msg).digest()).digest()
+
+
+def ecdsa_sign(message: str, private_key_bytes: bytes) -> str:
+    """
+    Sign a message with ECDSA using Bitcoin message format.
+
+    Args:
+        message: The message to sign (as string)
+        private_key_bytes: 32-byte private key
+
+    Returns:
+        Base64-encoded signature
+    """
+    # Hash using Bitcoin message format
+    msg_hash = bitcoin_message_hash(message)
+
+    # Sign with coincurve (raw signature, no additional hashing)
+    priv_key = PrivateKey(private_key_bytes)
+    signature = priv_key.sign(msg_hash, hasher=None)
+
+    return base64.b64encode(signature).decode("ascii")
+
+
+def ecdsa_verify(message: str, signature_b64: str, pubkey_bytes: bytes) -> bool:
+    """
+    Verify an ECDSA signature using Bitcoin message format.
+
+    Args:
+        message: The signed message (as string)
+        signature_b64: Base64-encoded signature
+        pubkey_bytes: Compressed public key (33 bytes)
+
+    Returns:
+        True if signature is valid
+    """
+    try:
+        # Hash using Bitcoin message format
+        msg_hash = bitcoin_message_hash(message)
+
+        # Decode signature from base64
+        signature = base64.b64decode(signature_b64)
+
+        # Verify with coincurve
+        return coincurve_verify(signature, msg_hash, pubkey_bytes)
+    except Exception:
+        return False
+
+
+class NickIdentity:
+    """
+    Encapsulates a JoinMarket nick identity with signing capabilities.
+
+    Each participant has a nick identity consisting of:
+    - A private key for signing messages
+    - A public key derived from the private key
+    - A nick derived from hash(hex(pubkey))
+
+    All private messages must be signed with this key for nick authentication.
+    """
+
+    def __init__(self, version: int = 5, private_key_bytes: bytes | None = None):
+        """
+        Create a new nick identity.
+
+        Args:
+            version: JoinMarket protocol version (default 5)
+            private_key_bytes: Optional 32-byte private key (random if not provided)
+        """
+        if private_key_bytes is None:
+            # Match reference: hashlib.sha256(os.urandom(16)).digest()
+            private_key_bytes = hashlib.sha256(secrets.token_bytes(16)).digest()
+
+        self._private_key_bytes = private_key_bytes
+        self._private_key = PrivateKey(private_key_bytes)
+        self._public_key = self._private_key.public_key
+        self._version = version
+
+        # Derive nick from pubkey hash
+        # Reference uses COMPRESSED pubkey (33 bytes) - the 0x01 suffix indicates compressed
+        pubkey_bytes = self._public_key.format(compressed=True)
+        pubkey_hex = binascii.hexlify(pubkey_bytes)
+        nick_pkh_raw = hashlib.sha256(pubkey_hex).digest()[:NICK_HASH_LENGTH]
+        nick_pkh = base58_encode(nick_pkh_raw)
+        nick_pkh += "O" * (NICK_MAX_ENCODED - len(nick_pkh))
+        self._nick = f"J{version}{nick_pkh}"
+
+    @property
+    def nick(self) -> str:
+        """The JoinMarket nick (e.g., J5xxx...)."""
+        return self._nick
+
+    @property
+    def public_key_hex(self) -> str:
+        """Public key as hex string (compressed, 33 bytes)."""
+        return self._public_key.format(compressed=True).hex()
+
+    def sign_message(self, message: str, hostid: str = "") -> str:
+        """
+        Sign a message for transmission using Bitcoin message signing format.
+
+        Args:
+            message: The message content (without pubkey/sig)
+            hostid: Directory server hostid (appended to message before signing)
+
+        Returns:
+            Signed message string: "<message> <pubkey_hex> <sig_base64>"
+        """
+        # Message to sign is message + hostid (as per reference implementation)
+        msg_to_sign = message + hostid
+
+        # Hash using Bitcoin message format (double SHA256 with prefix)
+        msg_hash = bitcoin_message_hash(msg_to_sign)
+
+        # Sign the pre-hashed message (raw signature, no additional hashing)
+        signature = self._private_key.sign(msg_hash, hasher=None)
+
+        # Encode signature as base64
+        sig_b64 = base64.b64encode(signature).decode("ascii")
+
+        return f"{message} {self.public_key_hex} {sig_b64}"
 
 
 class KeyPair:

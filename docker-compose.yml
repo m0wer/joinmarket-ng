@@ -84,6 +84,8 @@ services:
         condition: service_healthy
 
   # JoinMarket directory server
+  # Note: Uses "testnet" as network name for compatibility with reference JoinMarket
+  # which uses "testnet" for both testnet and regtest in its protocol messages
   directory:
     build:
       context: .
@@ -91,7 +93,7 @@ services:
     container_name: jm-directory
     restart: unless-stopped
     environment:
-      - NETWORK=regtest
+      - NETWORK=testnet
       - LOG_LEVEL=INFO
       - PORT=5222
       - HOST=0.0.0.0
@@ -116,7 +118,7 @@ services:
     container_name: jm-orderbook-watcher
     restart: unless-stopped
     environment:
-      - NETWORK=regtest
+      - NETWORK=testnet
       - LOG_LEVEL=INFO
       - DIRECTORY_NODES=jm-directory:5222
     ports:
@@ -139,7 +141,8 @@ services:
     restart: "no"
     environment:
       - MNEMONIC=${MAKER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
-      - NETWORK=regtest
+      - NETWORK=testnet
+      - BITCOIN_NETWORK=regtest
       - BACKEND_TYPE=bitcoin_core
       - BITCOIN_RPC_URL=http://jm-bitcoin:18443
       - BITCOIN_RPC_USER=test
@@ -171,7 +174,8 @@ services:
     restart: "no"
     environment:
       - MNEMONIC=${TAKER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
-      - NETWORK=regtest
+      - NETWORK=testnet
+      - BITCOIN_NETWORK=regtest
       - BACKEND_TYPE=bitcoin_core
       - BITCOIN_RPC_URL=http://jm-bitcoin:18443
       - BITCOIN_RPC_USER=test
@@ -206,7 +210,8 @@ services:
     restart: unless-stopped
     environment:
       - MNEMONIC=avoid whisper mesh corn already blur sudden fine planet chicken hover sniff
-      - NETWORK=regtest
+      - NETWORK=testnet
+      - BITCOIN_NETWORK=regtest
       - BACKEND_TYPE=bitcoin_core
       - BITCOIN_RPC_URL=http://jm-bitcoin:18443
       - BITCOIN_RPC_USER=test
@@ -237,7 +242,8 @@ services:
     restart: unless-stopped
     environment:
       - MNEMONIC=minute faint grape plate stock mercy tent world space opera apple rocket
-      - NETWORK=regtest
+      - NETWORK=testnet
+      - BITCOIN_NETWORK=regtest
       - BACKEND_TYPE=bitcoin_core
       - BITCOIN_RPC_URL=http://jm-bitcoin:18443
       - BITCOIN_RPC_USER=test
@@ -430,7 +436,7 @@ services:
     container_name: jm-neutrino
     restart: unless-stopped
     environment:
-      - NETWORK=regtest
+      - NETWORK=testnet
       - LISTEN_ADDR=0.0.0.0:8334
       - DATA_DIR=/data/neutrino
       - LOG_LEVEL=info
@@ -457,7 +463,8 @@ services:
     restart: "no"
     environment:
       - MNEMONIC=${MAKER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
-      - NETWORK=regtest
+      - NETWORK=testnet
+      - BITCOIN_NETWORK=regtest
       - BACKEND_TYPE=neutrino
       - NEUTRINO_URL=http://jm-neutrino:8334
       - DIRECTORY_SERVERS=jm-directory:5222
@@ -485,7 +492,8 @@ services:
     restart: "no"
     environment:
       - MNEMONIC=${TAKER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
-      - NETWORK=regtest
+      - NETWORK=testnet
+      - BITCOIN_NETWORK=regtest
       - BACKEND_TYPE=neutrino
       - NEUTRINO_URL=http://jm-neutrino:8334
       - DIRECTORY_SERVERS=jm-directory:5222

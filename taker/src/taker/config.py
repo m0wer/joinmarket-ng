@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Any
 
 from jmcore.models import NetworkType, OfferType
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class MaxCjFee(BaseModel):
@@ -22,7 +22,12 @@ class TakerConfig(BaseModel):
 
     # Wallet settings
     mnemonic: str
+    # Protocol network - used for directory server handshakes
+    # Reference JoinMarket uses "testnet" for both testnet and regtest
     network: NetworkType = NetworkType.MAINNET
+    # Bitcoin network - used for address generation (bcrt1 vs tb1 vs bc1)
+    # If not specified, defaults to the same as network
+    bitcoin_network: NetworkType | None = None
     backend_type: str = "bitcoin_core"
     backend_config: dict[str, Any] = Field(default_factory=dict)
 
@@ -62,6 +67,13 @@ class TakerConfig(BaseModel):
     preferred_offer_type: OfferType = OfferType.SW0_RELATIVE
     minimum_makers: int = Field(default=2, ge=1)
     dust_threshold: int = Field(default=546, ge=0)
+
+    @model_validator(mode="after")
+    def set_bitcoin_network_default(self) -> TakerConfig:
+        """If bitcoin_network is not set, default to the protocol network."""
+        if self.bitcoin_network is None:
+            object.__setattr__(self, "bitcoin_network", self.network)
+        return self
 
 
 class ScheduleEntry(BaseModel):

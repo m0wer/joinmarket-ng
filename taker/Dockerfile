@@ -40,6 +40,9 @@ USER jm
 
 # Environment variables
 ENV NETWORK=mainnet
+# Bitcoin network for address generation (bcrt1 vs tb1 vs bc1)
+# Defaults to NETWORK if not set
+ENV BITCOIN_NETWORK=
 ENV LOG_LEVEL=INFO
 
 # CoinJoin settings

@@ -49,7 +49,10 @@ def coinjoin(
     mnemonic: str = typer.Option(
         None, "--mnemonic", envvar="MNEMONIC", help="Wallet mnemonic phrase"
     ),
-    network: str = typer.Option("regtest", "--network", help="Bitcoin network"),
+    network: str = typer.Option("regtest", "--network", help="Protocol network for handshakes"),
+    bitcoin_network: str = typer.Option(
+        None, "--bitcoin-network", help="Bitcoin network for addresses (defaults to --network)"
+    ),
     backend_type: str = typer.Option(
         "bitcoin_core", "--backend", "-b", help="Backend type: bitcoin_core | neutrino"
     ),
@@ -96,6 +99,14 @@ def coinjoin(
         logger.error(f"Invalid network: {network}")
         raise typer.Exit(1)
 
+    # Parse bitcoin network (defaults to protocol network)
+    actual_bitcoin_network = bitcoin_network or network
+    try:
+        bitcoin_network_type = NetworkType(actual_bitcoin_network)
+    except ValueError:
+        logger.error(f"Invalid bitcoin network: {actual_bitcoin_network}")
+        raise typer.Exit(1)
+
     # Parse directory servers
     dir_servers = [s.strip() for s in directory_servers.split(",")]
 
@@ -103,7 +114,7 @@ def coinjoin(
     if backend_type == "neutrino":
         backend_config = {
             "neutrino_url": neutrino_url,
-            "network": network,
+            "network": actual_bitcoin_network,
         }
     else:
         backend_config = {
@@ -116,6 +127,7 @@ def coinjoin(
     config = TakerConfig(
         mnemonic=mnemonic,
         network=network_type,
+        bitcoin_network=bitcoin_network_type,
         backend_type=backend_type,
         backend_config=backend_config,
         directory_servers=dir_servers,
@@ -137,11 +149,14 @@ async def _run_coinjoin(
     counterparties: int,
 ) -> None:
     """Run CoinJoin transaction."""
+    # Use bitcoin_network for address generation
+    bitcoin_network = config.bitcoin_network or config.network
+
     # Create backend based on config
     if config.backend_type == "neutrino":
         backend = NeutrinoBackend(
             neutrino_url=config.backend_config.get("neutrino_url", "http://127.0.0.1:8334"),
-            network=config.network.value,
+            network=bitcoin_network.value,
         )
         # Wait for neutrino to sync
         logger.info("Waiting for neutrino to sync...")
@@ -156,11 +171,11 @@ async def _run_coinjoin(
             rpc_password=config.backend_config["rpc_password"],
         )
 
-    # Create wallet
+    # Create wallet with bitcoin_network for address generation
     wallet = WalletService(
         mnemonic=config.mnemonic,
         backend=backend,
-        network=config.network.value,
+        network=bitcoin_network.value,
         mixdepth_count=config.mixdepth_count,
     )
 
@@ -286,11 +301,14 @@ def tumble(
 
 async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
     """Run tumbler schedule."""
+    # Use bitcoin_network for address generation
+    bitcoin_network = config.bitcoin_network or config.network
+
     # Create backend based on config
     if config.backend_type == "neutrino":
         backend = NeutrinoBackend(
             neutrino_url=config.backend_config.get("neutrino_url", "http://127.0.0.1:8334"),
-            network=config.network.value,
+            network=bitcoin_network.value,
         )
         # Wait for neutrino to sync
         logger.info("Waiting for neutrino to sync...")
@@ -305,11 +323,11 @@ async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
             rpc_password=config.backend_config["rpc_password"],
         )
 
-    # Create wallet
+    # Create wallet with bitcoin_network for address generation
     wallet = WalletService(
         mnemonic=config.mnemonic,
         backend=backend,
-        network=config.network.value,
+        network=bitcoin_network.value,
         mixdepth_count=config.mixdepth_count,
     )
 

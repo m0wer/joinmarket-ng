@@ -22,6 +22,7 @@ This document consolidates the JoinMarket protocol specification, implementation
 16. [Security Model](#security-model)
 17. [Testing Strategy](#testing-strategy)
 18. [Testing Guide](#testing-guide)
+19. [Protocol Implementation Details](#protocol-implementation-details)
 
 ---
 
@@ -433,81 +434,147 @@ Taker                          Directory                        Maker
 
 ### Phase 2: Fill Request
 
+The taker sends a fill request with their NaCl encryption pubkey and PoDLE commitment:
+
 ```
 Taker                                                          Maker
   |                                                               |
-  |--- !fill <oid> <amount> <commitment> ------------------------>|
+  |--- !fill <oid> <amount> <taker_nacl_pk> <commitment> -------->|
   |                                                               |
-  |<-- !pubkey <maker_enc_pubkey> --------------------------------|
+  |<-- !pubkey <maker_nacl_pk> <signing_pk> <sig> ----------------|
 ```
+
+**Fill fields**:
+- `oid`: Order ID from the offer
+- `amount`: CoinJoin amount in satoshis
+- `taker_nacl_pk`: Taker's NaCl public key (hex, 64 chars)
+- `commitment`: PoDLE commitment = sha256(P2) (hex, 64 chars)
+
+**Pubkey response**: The maker sends their NaCl pubkey, signed with their nick identity.
 
 ### Phase 3: Authentication (Encrypted)
 
+After key exchange, all subsequent messages are NaCl encrypted:
+
 ```
 Taker                                                          Maker
   |                                                               |
-  |--- !auth <podle_revelation> --------------------------------->|
-  |        (PoDLE proof + taker signature)                        |
+  |--- !auth <encrypted_revelation> <signing_pk> <sig> ---------->|
+  |        Decrypted: txid:vout|P|P2|sig|e                        |
   |                                                               |
-  |<-- !ioauth <utxos> <cj_addr> <change_addr> <sig> -------------|
-  |        (Maker's inputs and outputs)                           |
+  |<-- !ioauth <encrypted_data> <signing_pk> <sig> ---------------|
+  |        Decrypted: utxos auth_pub cj_addr change_addr btc_sig  |
 ```
+
+**Auth revelation** (pipe-separated after decryption):
+- `utxo_str`: The UTXO being proven (`txid:vout`)
+- `P`: Public key for the UTXO (hex)
+- `P2`: PoDLE commitment point = k*J (hex)
+- `sig`: Schnorr signature s value (hex)
+- `e`: Schnorr challenge e value (hex)
+
+**ioauth fields** (space-separated after decryption):
+- `utxo_list`: Maker's UTXOs, comma-separated
+- `auth_pub`: EC pubkey from one of maker's UTXOs (for btc_sig verification)
+- `cj_addr`: Maker's CoinJoin output address
+- `change_addr`: Maker's change output address
+- `btc_sig`: ECDSA signature of maker's NaCl pubkey (proves UTXO ownership)
 
 ### Phase 4: Transaction (Encrypted)
 
 ```
 Taker                                                          Maker
   |                                                               |
-  |--- !tx <tx_hex> --------------------------------------------->|
-  |        (Unsigned transaction)                                 |
+  |--- !tx <encrypted_tx> <signing_pk> <sig> -------------------->|
+  |        Decrypted: base64(raw_tx_bytes)                        |
   |                                                               |
-  |<-- !sig <signatures> -----------------------------------------|
-  |        (Maker's signatures for their inputs)                  |
+  |<-- !sig <encrypted_sig> <signing_pk> <sig> -------------------|
+  |        Decrypted: base64(witness_signature)                   |
+  |        (one !sig message per maker input)                     |
 ```
 
 ### Phase 5: Broadcast
 
 The taker:
-1. Adds their own signatures
-2. Assembles the final transaction
-3. Broadcasts to the Bitcoin network
+1. Collects all maker signatures
+2. Adds their own signatures to the transaction
+3. Assembles the final witness data
+4. Broadcasts to the Bitcoin network
 
 ### Implementation Reference
 
 The protocol flow is implemented in:
 - `taker/src/taker/taker.py:292-449` - `do_coinjoin()` method
 - `maker/src/maker/bot.py:265-377` - Message handlers
+- `maker/src/maker/coinjoin.py` - CoinJoin session state machine
 
 ---
 
 ## Encryption Protocol
 
-Private messages containing sensitive data are encrypted using NaCl (libsodium).
+Private messages containing sensitive data are encrypted using NaCl (libsodium) authenticated encryption.
 
 ### Key Exchange
 
 ```
-TAK: !fill <order_id> <amount> <taker_enc_pubkey>
-MAK: !pubkey <maker_enc_pubkey>
+TAK: !fill <order_id> <amount> <taker_nacl_pubkey> <commitment>
+MAK: !pubkey <maker_nacl_pubkey> <signing_pk> <sig>
 ```
 
-Both parties derive a shared secret using Curve25519 ECDH and create a `Box` for authenticated encryption.
+Both parties:
+1. Generate ephemeral Curve25519 keypairs
+2. Exchange public keys in the fill/pubkey messages
+3. Derive a shared secret using ECDH
+4. Create a NaCl `Box` for authenticated encryption
+
+### NaCl Box Usage
+
+```python
+from nacl.public import PrivateKey, PublicKey, Box
+import base64
+
+# Key generation
+our_keypair = PrivateKey.generate()
+our_pubkey = our_keypair.public_key
+
+# After receiving counterparty's pubkey
+their_pubkey = PublicKey(bytes.fromhex(their_pubkey_hex))
+box = Box(our_keypair, their_pubkey)
+
+# Encrypt (includes authentication tag + random nonce)
+plaintext = "message to encrypt"
+ciphertext = box.encrypt(plaintext.encode())
+encrypted_b64 = base64.b64encode(ciphertext).decode()
+
+# Decrypt
+ciphertext = base64.b64decode(encrypted_b64)
+plaintext = box.decrypt(ciphertext).decode()
+```
 
 ### Encrypted Messages
 
-The following commands are always encrypted:
-- `!auth` - PoDLE revelation and taker signature
-- `!ioauth` - Maker's UTXOs and addresses
-- `!tx` - Unsigned transaction
-- `!sig` - Signatures
+The following commands are always encrypted after key exchange:
+- `!auth` - PoDLE revelation (pipe-separated fields)
+- `!ioauth` - Maker's UTXOs and addresses (space-separated fields)
+- `!tx` - Base64-encoded unsigned transaction
+- `!sig` - Base64-encoded witness signature
 
 ### Anti-MITM Protection
 
-Each party signs their encryption pubkey with a Bitcoin key that corresponds to:
-- **Taker**: One of their input UTXOs
-- **Maker**: Their CoinJoin output address
+Each party proves they control a Bitcoin key:
 
-This binds the encryption channel to the transaction participants.
+**Maker** (in `!ioauth`):
+- Signs their **own NaCl pubkey** with an EC key from one of their UTXOs
+- This `btc_sig` proves the encryption channel belongs to a real UTXO owner
+
+**Taker** (in `!auth`):
+- The PoDLE proof itself proves ownership of the committed UTXO
+- The UTXO's pubkey is revealed as `P` in the revelation
+
+This binding prevents a MITM from:
+1. Intercepting the key exchange
+2. Substituting their own encryption keys
+3. Decrypting and re-encrypting messages
 
 ---
 
@@ -523,12 +590,21 @@ Without PoDLE, an attacker could:
 3. Never complete the transaction
 4. Link maker UTXOs across requests
 
+### Mathematical Foundation
+
+The PoDLE proves that two points P and P2 have the same discrete logarithm (private key k) without revealing k:
+
+- `P = k * G` (standard public key, where G is the generator)
+- `P2 = k * J` (commitment point, where J is a NUMS point)
+
+A NUMS (Nothing Up My Sleeve) point is generated deterministically such that no one knows its discrete log.
+
 ### Protocol
 
 1. **Taker generates commitment**: `C = H(P2)` where `P2 = k*J`
    - `k` = private key for a UTXO
-   - `J` = NUMS (Nothing Up My Sleeve) point
-   - `G` = Standard generator point
+   - `J` = NUMS point (indexed 0-9 for reuse allowance)
+   - `G` = Standard secp256k1 generator point
 
 2. **Taker sends commitment** to maker in `!fill`
 
@@ -537,12 +613,55 @@ Without PoDLE, an attacker could:
 4. **Taker reveals** in `!auth`:
    - `P` = public key (k*G)
    - `P2` = commitment point (k*J)
-   - `sig`, `e` = Schnorr proof that P and P2 have same discrete log
+   - `sig` (s), `e` = Schnorr-like proof values
 
 5. **Maker verifies**:
    - `H(P2) == C` (commitment matches)
-   - Schnorr proof is valid
+   - Schnorr proof is valid (see below)
    - UTXO exists and is unspent
+
+### Schnorr Proof Details
+
+**Generation** (taker side):
+```python
+# Random nonce
+k_proof = random_scalar()
+
+# Commitment points
+Kg = k_proof * G
+Kj = k_proof * J
+
+# Challenge (Fiat-Shamir heuristic)
+e = sha256(Kg || Kj || P || P2)  # as integer mod N
+
+# Response (ADDITION convention)
+s = (k_proof + e * k) % N
+```
+
+**Verification** (maker side):
+```python
+# Recover Kg using SUBTRACTION
+# Since s = k_proof + e*k, we have k_proof = s - e*k
+# So Kg = k_proof*G = s*G - e*k*G = s*G - e*P
+minus_e = (-e) % N
+Kg_check = s*G + minus_e*P  # = s*G - e*P
+
+# Similarly for Kj
+Kj_check = s*J + minus_e*P2  # = s*J - e*P2
+
+# Verify challenge
+e_check = sha256(Kg_check || Kj_check || P || P2)
+assert e_check == e
+```
+
+### NUMS Point Generation
+
+NUMS points are precomputed for indices 0-9:
+```python
+NUMS[i] = hash_to_curve(sha256("joinmarket" + str(i)))
+```
+
+Lower indices are preferred as they indicate the UTXO hasn't been used for many failed CoinJoins.
 
 ### Implementation Reference
 
@@ -868,15 +987,241 @@ Expected structure:
 | File | Purpose |
 |------|---------|
 | `jmcore/src/jmcore/protocol.py` | Protocol constants and message types |
-| `jmcore/src/jmcore/crypto.py` | Cryptographic primitives |
+| `jmcore/src/jmcore/crypto.py` | Cryptographic primitives, nick generation, ECDSA signing |
 | `jmcore/src/jmcore/podle.py` | PoDLE generation and verification |
-| `maker/src/maker/bot.py` | Maker message handling |
-| `maker/src/maker/coinjoin.py` | Maker transaction signing |
+| `maker/src/maker/bot.py` | Maker message handling and protocol state |
+| `maker/src/maker/coinjoin.py` | Maker CoinJoin session and transaction signing |
+| `maker/src/maker/encryption.py` | NaCl encryption session management |
 | `taker/src/taker/taker.py` | Taker CoinJoin orchestration |
 | `taker/src/taker/tx_builder.py` | Transaction construction |
 | `jmwallet/src/jmwallet/wallet/signing.py` | P2WPKH signing utilities |
 | `neutrino_server/cmd/neutrinod/main.go` | Neutrino server entry point |
 | `jmwallet/src/jmwallet/backends/neutrino.py` | Neutrino backend client |
+
+---
+
+## Protocol Implementation Details
+
+This section documents the exact protocol details discovered through E2E testing with the reference JoinMarket (JAM) implementation.
+
+### Message Signing and Verification
+
+All JoinMarket messages are signed to prevent spoofing. The signature format is:
+
+```
+<message_content> <signing_pubkey_hex> <signature_base64>
+```
+
+**Critical**: The signature is computed over `message_content + hostid`, NOT the full message with command. The `hostid` is currently hardcoded to `1` in JoinMarket.
+
+```python
+# Correct signing (maker side)
+data_to_sign = msg_content + hostid  # e.g., "nacl_pubkey_hex" + "1"
+signature = nick_identity.sign_message(msg_content, hostid)
+```
+
+### NaCl Encryption Setup
+
+The encryption uses NaCl (libsodium) Box for authenticated encryption:
+
+1. **Key Exchange**: Each party generates an ephemeral Curve25519 keypair
+2. **Fill Message**: Taker sends their NaCl pubkey in `!fill`
+3. **Pubkey Response**: Maker sends their NaCl pubkey in `!pubkey`
+4. **Box Creation**: Both derive shared secret via ECDH
+
+```python
+# Create NaCl Box for encryption
+from nacl.public import PrivateKey, PublicKey, Box
+
+our_private = PrivateKey.generate()
+our_public = our_private.public_key
+their_public = PublicKey(bytes.fromhex(counterparty_pubkey_hex))
+box = Box(our_private, their_public)
+
+# Encrypt
+encrypted = box.encrypt(plaintext.encode())
+encrypted_b64 = base64.b64encode(encrypted).decode()
+
+# Decrypt
+encrypted_bytes = base64.b64decode(encrypted_b64)
+decrypted = box.decrypt(encrypted_bytes).decode()
+```
+
+### Auth Message Format
+
+The `!auth` message contains the PoDLE revelation, encrypted:
+
+**Plaintext format** (pipe-separated):
+```
+txid:vout|P_hex|P2_hex|sig_hex|e_hex
+```
+
+Example:
+```
+abc123def456...:0|03a1b2c3...|02d4e5f6...|1234abcd...|5678efgh...
+```
+
+The taker encrypts this with the maker's NaCl pubkey and sends it.
+
+### ioauth Message Format
+
+The `!ioauth` message from maker to taker contains:
+
+**Plaintext format** (space-separated):
+```
+utxo_list auth_pub cj_addr change_addr btc_sig
+```
+
+Where:
+- `utxo_list`: Comma-separated list of `txid:vout` pairs (or single utxo)
+- `auth_pub`: EC public key (hex) from one of the maker's UTXOs
+- `cj_addr`: Maker's CoinJoin output address
+- `change_addr`: Maker's change output address
+- `btc_sig`: ECDSA signature (base64) of the maker's NaCl pubkey
+
+**Critical**: The `btc_sig` is the maker signing **their own NaCl pubkey** (not the taker's!):
+
+```python
+# Maker signs their own NaCl pubkey to prove UTXO ownership
+our_nacl_pk_hex = our_nacl_public_key.encode().hex()
+btc_sig = ecdsa_sign(our_nacl_pk_hex, auth_hd_key.get_private_key_bytes())
+```
+
+This binds the encryption channel to a Bitcoin key the maker controls.
+
+### PoDLE Schnorr Signature Convention
+
+The PoDLE uses a specific Schnorr signature variant:
+
+**Generation** (reference implementation convention):
+```python
+# Generate random nonce k
+k = random_scalar()
+
+# Compute commitments
+Kg = k * G
+Kj = k * J  # J is the NUMS point
+
+# Compute challenge
+e = sha256(Kg || Kj || P || P2)
+
+# Compute signature (ADDITION, not subtraction!)
+s = (k + e * private_key) % N
+```
+
+**Verification**:
+```python
+# Verify: Kg = s*G - e*P (SUBTRACTION!)
+sG = s * G
+minus_e = (-e) % N
+minus_eP = minus_e * P
+Kg_check = sG + minus_eP  # = s*G - e*P
+
+# Similarly for Kj
+minus_eP2 = minus_e * P2
+Kj_check = s*J + minus_eP2  # = s*J - e*P2
+
+# Verify challenge
+e_check = sha256(Kg_check || Kj_check || P || P2)
+assert e_check == e
+```
+
+**Key insight**: The formula is `s = k + e*x` with verification `Kg = s*G - e*P`. This is opposite to some Schnorr variants that use `s = k - e*x` with `Kg = s*G + e*P`.
+
+### ECDSA Bitcoin Message Signing
+
+For `btc_sig` in `!ioauth`, use Bitcoin's message signing format:
+
+```python
+def ecdsa_sign(message: str, private_key_bytes: bytes) -> str:
+    """Sign message using Bitcoin message format."""
+    # Bitcoin message format: double SHA256 with prefix
+    prefix = b"\x18Bitcoin Signed Message:\n"
+    message_bytes = message.encode()
+
+    # Length-prefixed message
+    prefixed = prefix + len(message_bytes).to_bytes(1, 'big') + message_bytes
+    message_hash = hashlib.sha256(hashlib.sha256(prefixed).digest()).digest()
+
+    # Sign with secp256k1
+    private_key = coincurve.PrivateKey(private_key_bytes)
+    signature = private_key.sign_recoverable(message_hash, hasher=None)
+
+    return base64.b64encode(signature).decode()
+```
+
+### Transaction Message Format
+
+The `!tx` message contains the unsigned transaction:
+
+**Plaintext**: Base64-encoded raw transaction bytes
+**Encrypted**: Using NaCl Box, then base64-encoded again
+
+```python
+# Taker sends tx
+tx_bytes = bytes.fromhex(tx_hex)
+tx_b64 = base64.b64encode(tx_bytes).decode()
+encrypted = session.crypto.encrypt(tx_b64)  # Returns base64
+```
+
+### Signature Response Format
+
+The `!sig` message contains maker signatures:
+
+**Plaintext**: Base64-encoded signature (one per input)
+**Multiple inputs**: Multiple `!sig` messages sent, one per input
+
+```python
+# Maker sends signatures
+for sig_b64 in signatures:
+    encrypted_sig = session.crypto.encrypt(sig_b64)
+    await send_message(taker_nick, "sig", encrypted_sig)
+```
+
+### Input Index Mapping in CoinJoin
+
+CoinJoin transactions have shuffled inputs. The maker must find their input indices:
+
+```python
+def find_input_indices(tx_inputs: list, our_utxos: list[tuple[str, int]]) -> dict:
+    """Map our UTXOs to actual input indices in the transaction."""
+    input_map = {}
+    for idx, inp in enumerate(tx_inputs):
+        # Transaction inputs store txid in little-endian
+        txid_be = inp.txid[::-1].hex()
+        key = (txid_be, inp.vout)
+        if key in our_utxos:
+            input_map[key] = idx
+    return input_map
+```
+
+### Complete Protocol Sequence
+
+```
+Taker                           Maker
+  |                               |
+  |--- !fill (oid, amt, taker_pk, commit) -->|  PLAINTEXT
+  |<-- !pubkey (maker_nacl_pk) ---|          PLAINTEXT + signature
+  |                               |
+  |--- !auth (encrypted reveal) ->|          ENCRYPTED
+  |<-- !ioauth (encrypted) -------|          ENCRYPTED + signature
+  |                               |
+  |--- !tx (encrypted tx_b64) --->|          ENCRYPTED
+  |<-- !sig (encrypted sig_b64) --|          ENCRYPTED (one per input)
+  |                               |
+  [Taker broadcasts final tx]
+```
+
+### Error Handling
+
+Common failure modes and their causes:
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| "Commitment does not match" | Wrong PoDLE formula | Use `s = k + e*x` convention |
+| "btc_sig verification failed" | Signing wrong data | Sign OUR NaCl pubkey, not theirs |
+| "Decryption failed" | Wrong key exchange | Ensure both sides use same NaCl keys |
+| "Input not found in tx" | LE/BE txid confusion | Convert txid bytes to big-endian |
 
 ---
 

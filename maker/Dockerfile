@@ -6,6 +6,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libffi-dev \
+    libsodium-dev \
     git \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
@@ -40,6 +41,9 @@ USER jm
 
 # Environment variables
 ENV NETWORK=mainnet
+# Bitcoin network for address generation (bcrt1 vs tb1 vs bc1)
+# Defaults to NETWORK if not set
+ENV BITCOIN_NETWORK=
 ENV LOG_LEVEL=INFO
 ENV MIN_SIZE=100000
 ENV TX_FEE_CONTRIBUTION=1000
@@ -66,9 +70,16 @@ ENV DIRECTORY_SERVERS=
 # Wallet mnemonic (REQUIRED - set at runtime!)
 # ENV MNEMONIC=
 
-CMD ["sh", "-c", "jm-maker start \
+# Use shell to conditionally add --bitcoin-network if set
+CMD ["sh", "-c", "\
+    BITCOIN_NETWORK_ARG=\"\"; \
+    if [ -n \"${BITCOIN_NETWORK}\" ]; then \
+        BITCOIN_NETWORK_ARG=\"--bitcoin-network ${BITCOIN_NETWORK}\"; \
+    fi; \
+    jm-maker start \
     --mnemonic \"${MNEMONIC}\" \
     --network \"${NETWORK}\" \
+    ${BITCOIN_NETWORK_ARG} \
     --backend-type \"${BACKEND_TYPE}\" \
     --rpc-url \"${BITCOIN_RPC_URL}\" \
     --rpc-user \"${BITCOIN_RPC_USER}\" \

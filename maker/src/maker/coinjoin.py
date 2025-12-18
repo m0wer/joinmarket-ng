@@ -23,12 +23,12 @@ from jmwallet.wallet.service import WalletService
 from jmwallet.wallet.signing import (
     TransactionSigningError,
     create_p2wpkh_script_code,
-    create_witness_stack,
     deserialize_transaction,
     sign_p2wpkh_input,
 )
 from loguru import logger
 
+from maker.encryption import CryptoSession
 from maker.podle import parse_podle_revelation, verify_podle
 from maker.tx_verification import verify_unsigned_transaction
 
@@ -79,16 +79,22 @@ class CoinJoinSession:
         self.change_address = ""
         self.mixdepth = 0
         self.commitment = b""
-        self.auth_pubkey = b""
+        self.taker_nacl_pk = ""  # Taker's NaCl pubkey (hex) for btc_sig
         self.created_at = time.time()
 
-    async def handle_fill(self, amount: int, commitment: str) -> tuple[bool, dict[str, Any]]:
+        # E2E encryption session with taker
+        self.crypto = CryptoSession()
+
+    async def handle_fill(
+        self, amount: int, commitment: str, taker_pk: str
+    ) -> tuple[bool, dict[str, Any]]:
         """
         Handle !fill message from taker.
 
         Args:
             amount: CoinJoin amount requested
             commitment: PoDLE commitment (will be verified later in !auth)
+            taker_pk: Taker's NaCl public key for E2E encryption
 
         Returns:
             (success, response_data)
@@ -105,18 +111,29 @@ class CoinJoinSession:
 
             self.amount = amount
             self.commitment = bytes.fromhex(commitment)
+            self.taker_nacl_pk = taker_pk  # Store for btc_sig in handle_auth
             self.state = CoinJoinState.FILL_RECEIVED
 
             logger.info(
                 f"Received !fill from {self.taker_nick}: "
-                f"amount={amount}, commitment={commitment[:16]}..."
+                f"amount={amount}, commitment={commitment[:16]}..., taker_pk={taker_pk[:16]}..."
             )
 
-            response = {"nick": self.offer.counterparty, "pubkey": self.auth_pubkey.hex()}
+            # Set up E2E encryption with taker's NaCl pubkey
+            try:
+                self.crypto.setup_encryption(taker_pk)
+                logger.debug(f"Set up encryption box with taker {self.taker_nick}")
+            except Exception as e:
+                logger.error(f"Failed to set up encryption with taker: {e}")
+                return False, {"error": f"Invalid taker pubkey: {e}"}
+
+            # Return our NaCl pubkey for E2E encryption setup
+            # Format for !pubkey: just the hex pubkey string
+            nacl_pubkey = self.crypto.get_pubkey_hex()
 
             self.state = CoinJoinState.PUBKEY_SENT
 
-            return True, response
+            return True, {"nacl_pubkey": nacl_pubkey}
 
         except Exception as e:
             logger.error(f"Failed to handle !fill: {e}")
@@ -199,17 +216,34 @@ class CoinJoinSession:
             self.change_address = change_addr
             self.mixdepth = mixdepth
 
-            utxos_serialized = {
-                f"{txid}:{vout}": {"address": info.address, "value": info.value}
-                for (txid, vout), info in utxos_dict.items()
-            }
+            # Format UTXOs as comma-separated list: "txid:vout,txid:vout,..."
+            utxo_list_str = ",".join(f"{txid}:{vout}" for txid, vout in utxos_dict.keys())
+
+            # Get EC key for our first UTXO to sign taker's encryption key
+            # This proves we own the UTXO we're contributing
+            first_utxo_key, first_utxo_info = next(iter(utxos_dict.items()))
+            auth_address = first_utxo_info.address
+            auth_hd_key = self.wallet.get_key_for_address(auth_address)
+
+            if auth_hd_key is None:
+                return False, {"error": f"Could not get key for address {auth_address}"}
+
+            # Get our EC pubkey (compressed)
+            auth_pub_bytes = auth_hd_key.get_public_key_bytes()
+
+            # Sign OUR OWN NaCl pubkey (hex string) with our EC key
+            # This proves to the taker that we own the UTXO and links it to our encryption identity
+            from jmcore.crypto import ecdsa_sign
+
+            our_nacl_pk_hex = self.crypto.get_pubkey_hex()
+            btc_sig = ecdsa_sign(our_nacl_pk_hex, auth_hd_key.get_private_key_bytes())
 
             response = {
-                "utxos": utxos_serialized,
-                "auth_pub": parsed_rev["P"].hex(),
+                "utxo_list": utxo_list_str,
+                "auth_pub": auth_pub_bytes.hex(),
                 "cj_addr": cj_addr,
                 "change_addr": change_addr,
-                "btc_sig": "",
+                "btc_sig": btc_sig,
             }
 
             self.state = CoinJoinState.IOAUTH_SENT
@@ -339,13 +373,20 @@ class CoinJoinSession:
             logger.error(f"Failed to select UTXOs: {e}")
             return {}, "", "", -1
 
-    async def _sign_transaction(self, tx_hex: str) -> list[dict[str, Any]]:
-        """Sign our inputs in the transaction."""
+    async def _sign_transaction(self, tx_hex: str) -> list[str]:
+        """Sign our inputs in the transaction.
+
+        Returns list of base64-encoded signatures in JM format.
+        Each signature is: base64(varint(sig_len) + sig + varint(pub_len) + pub)
+        This matches the CScript serialization format.
+        """
+        import base64
+
         try:
             tx_bytes = bytes.fromhex(tx_hex)
             tx = deserialize_transaction(tx_bytes)
 
-            signatures_info = []
+            signatures: list[str] = []
 
             # Build a map of (txid, vout) -> input index for the transaction
             # Note: txid in tx.inputs is little-endian bytes, need to convert
@@ -386,21 +427,21 @@ class CoinJoinSession:
                     private_key=priv_key,
                 )
 
-                witness = create_witness_stack(signature, pubkey_bytes)
+                # Format as CScript: varint(sig_len) + sig + varint(pub_len) + pub
+                # For lengths < 0x4c (76), varint is just the length byte
+                sig_len = len(signature)
+                pub_len = len(pubkey_bytes)
 
-                signatures_info.append(
-                    {
-                        "txid": txid,
-                        "vout": vout,
-                        "signature": signature.hex(),
-                        "pubkey": pubkey_bytes.hex(),
-                        "witness": [item.hex() for item in witness],
-                    }
-                )
+                # Build the sigmsg in JM format
+                sigmsg = bytes([sig_len]) + signature + bytes([pub_len]) + pubkey_bytes
+
+                # Base64 encode for transmission
+                sig_b64 = base64.b64encode(sigmsg).decode("ascii")
+                signatures.append(sig_b64)
 
                 logger.debug(f"Signed input {input_index} for UTXO {txid}:{vout}")
 
-            return signatures_info
+            return signatures
 
         except TransactionSigningError as e:
             logger.error(f"Signing error: {e}")

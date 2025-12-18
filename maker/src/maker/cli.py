@@ -25,6 +25,8 @@ def run_async(coro):
 
 def create_wallet_service(config: MakerConfig) -> WalletService:
     backend_type = config.backend_type.lower()
+    # Use bitcoin_network for address generation (bcrt1 vs tb1 vs bc1)
+    bitcoin_network = config.bitcoin_network or config.network
 
     if backend_type == "bitcoin_core":
         backend_cfg = config.backend_config
@@ -37,7 +39,7 @@ def create_wallet_service(config: MakerConfig) -> WalletService:
         backend_cfg = config.backend_config
         backend = NeutrinoBackend(
             neutrino_url=backend_cfg.get("neutrino_url", "http://127.0.0.1:8334"),
-            network=config.network.value,
+            network=bitcoin_network.value,
             connect_peers=backend_cfg.get("connect_peers", []),
             data_dir=backend_cfg.get("data_dir", "/data/neutrino"),
         )
@@ -47,7 +49,7 @@ def create_wallet_service(config: MakerConfig) -> WalletService:
     wallet = WalletService(
         mnemonic=config.mnemonic,
         backend=backend,
-        network=config.network.value,
+        network=bitcoin_network.value,
         mixdepth_count=config.mixdepth_count,
         gap_limit=config.gap_limit,
     )
@@ -58,6 +60,11 @@ def create_wallet_service(config: MakerConfig) -> WalletService:
 def start(
     mnemonic: str = typer.Option(..., help="BIP39 mnemonic phrase"),
     network: NetworkType = typer.Option(NetworkType.REGTEST, case_sensitive=False),
+    bitcoin_network: NetworkType | None = typer.Option(
+        None,
+        case_sensitive=False,
+        help="Bitcoin network for address generation (defaults to --network)",
+    ),
     backend_type: str = typer.Option("bitcoin_core", help="Backend type: bitcoin_core | neutrino"),
     rpc_url: str | None = typer.Option(None, help="Bitcoin Core RPC URL"),
     rpc_user: str | None = typer.Option(None, help="Bitcoin Core RPC username"),
@@ -74,6 +81,9 @@ def start(
     ),
 ):
     """Start the maker bot."""
+    # Use bitcoin_network for address generation, default to network if not specified
+    actual_bitcoin_network = bitcoin_network or network
+
     backend_config = {}
     if backend_type == "bitcoin_core":
         backend_config = {
@@ -84,12 +94,13 @@ def start(
     elif backend_type == "neutrino":
         backend_config = {
             "neutrino_url": neutrino_url or "http://127.0.0.1:8334",
-            "network": network.value,
+            "network": actual_bitcoin_network.value,
         }
 
     config = MakerConfig(
         mnemonic=mnemonic,
         network=network,
+        bitcoin_network=actual_bitcoin_network,
         backend_type=backend_type,
         backend_config=backend_config,
         directory_servers=directory_servers,
@@ -122,10 +133,21 @@ def start(
 def generate_address(
     mnemonic: str = typer.Option(..., help="BIP39 mnemonic"),
     network: NetworkType = typer.Option(NetworkType.REGTEST, case_sensitive=False),
+    bitcoin_network: NetworkType | None = typer.Option(
+        None,
+        case_sensitive=False,
+        help="Bitcoin network for address generation (defaults to --network)",
+    ),
     backend_type: str = typer.Option("bitcoin_core"),
 ):
     """Generate a new receive address."""
-    config = MakerConfig(mnemonic=mnemonic, network=network, backend_type=backend_type)
+    actual_bitcoin_network = bitcoin_network or network
+    config = MakerConfig(
+        mnemonic=mnemonic,
+        network=network,
+        bitcoin_network=actual_bitcoin_network,
+        backend_type=backend_type,
+    )
     wallet = create_wallet_service(config)
     address = wallet.get_receive_address(0, 0)
     typer.echo(address)

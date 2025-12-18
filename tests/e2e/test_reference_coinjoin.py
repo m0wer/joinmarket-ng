@@ -161,6 +161,14 @@ def wait_for_services(timeout: int = STARTUP_TIMEOUT) -> bool:
     return False
 
 
+def cleanup_wallet_lock(wallet_name: str = "test_wallet.jmdat") -> None:
+    """Remove stale wallet lock file if it exists."""
+    lock_file = f"/root/.joinmarket/wallets/.{wallet_name}.lock"
+    result = run_jam_cmd(["rm", "-f", lock_file], timeout=10)
+    if result.returncode == 0:
+        logger.debug(f"Cleaned up lock file: {lock_file}")
+
+
 def create_jam_wallet(
     wallet_name: str = "test_wallet.jmdat", password: str = "testpassword123"
 ) -> bool:
@@ -169,6 +177,9 @@ def create_jam_wallet(
 
     The expect script handles the interactive prompts from wallet-tool.py generate.
     """
+    # Clean up any stale lock file from previous runs
+    cleanup_wallet_lock(wallet_name)
+
     # Check if wallet already exists
     result = run_jam_cmd(
         ["ls", f"/root/.joinmarket/wallets/{wallet_name}"],
@@ -213,6 +224,9 @@ def get_jam_wallet_address(
 
     Uses stdin to provide the password non-interactively.
     """
+    # Clean up any stale lock file from previous runs
+    cleanup_wallet_lock(wallet_name)
+
     compose_file = get_compose_file()
 
     # Use bash to echo password and pipe it to wallet-tool.py
@@ -507,6 +521,9 @@ async def test_execute_reference_coinjoin(reference_services):
 
     logger.info(f"Destination address: {dest_address}")
 
+    # Clean up any stale lock file before running sendpayment
+    cleanup_wallet_lock(wallet_name)
+
     # Run sendpayment.py
     compose_file = get_compose_file()
     cmd = [
@@ -522,7 +539,7 @@ async def test_execute_reference_coinjoin(reference_services):
         f"echo '{wallet_password}' | python3 /src/scripts/sendpayment.py "
         f"--datadir=/root/.joinmarket --wallet-password-stdin "
         f"-N 2 -m 0 /root/.joinmarket/wallets/{wallet_name} "
-        f"10000000 {dest_address}",
+        f"10000000 {dest_address} --yes",
     ]
 
     logger.info(f"Running sendpayment: {' '.join(cmd)}")
@@ -535,14 +552,32 @@ async def test_execute_reference_coinjoin(reference_services):
     logger.info(f"sendpayment stdout:\n{result.stdout}")
     logger.info(f"sendpayment stderr:\n{result.stderr}")
 
+    # Check for failure indicators first
+    failure_indicators = [
+        "not enough liquidity",
+        "did not complete successfully",
+        "error",
+        "failed",
+        "taker not continuing",
+    ]
+    output_lower = result.stdout.lower() + result.stderr.lower()
+    failure_found = any(ind in output_lower for ind in failure_indicators)
+
     # Check for success indicators
-    success_indicators = ["coinjoin", "transaction", "broadcast", "success"]
-    success = any(ind in result.stdout.lower() for ind in success_indicators)
+    success_indicators = ["broadcast", "txid", "coinjoin complete", "transaction sent"]
+    success_found = any(ind in output_lower for ind in success_indicators)
 
-    if not success:
-        logger.error("CoinJoin may have failed - check logs above")
+    if failure_found and not success_found:
+        pytest.fail(
+            f"CoinJoin failed. Check logs above for details.\nstdout: {result.stdout}"
+        )
 
-    assert result.returncode == 0, f"sendpayment failed: {result.stderr}"
+    assert result.returncode == 0, (
+        f"sendpayment failed with exit code {result.returncode}: {result.stderr}"
+    )
+    assert success_found, (
+        f"CoinJoin did not complete successfully. stdout: {result.stdout}"
+    )
 
 
 @pytest.mark.asyncio
