@@ -291,3 +291,34 @@ async def wait_for_directory_server(
         await asyncio.sleep(1)
 
     pytest.skip("Directory server did not become ready in time")
+
+
+@pytest.fixture(scope="function")
+def fresh_docker_makers():
+    """Restart Docker makers before test to ensure fresh UTXOs.
+
+    This fixture restarts the Docker maker containers to prevent UTXO reuse
+    between tests, which can cause transaction verification failures.
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["docker", "restart", "jm-maker1", "jm-maker2"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            logger.info("Restarted Docker makers, waiting for startup...")
+            time.sleep(15)  # Wait for makers to start and sync with directory
+        else:
+            logger.warning(f"Failed to restart makers: {result.stderr}")
+    except subprocess.TimeoutExpired:
+        logger.warning("Docker restart timed out")
+    except FileNotFoundError:
+        logger.warning("Docker command not found")
+    except Exception as e:
+        logger.warning(f"Could not restart makers: {e}")
+
+    yield

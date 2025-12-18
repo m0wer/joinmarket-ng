@@ -869,6 +869,7 @@ async def test_complete_coinjoin_two_makers(
     bitcoin_backend,
     taker_config,
     directory_server,
+    fresh_docker_makers,
 ):
     """
     Complete end-to-end CoinJoin test with Docker-based makers and an in-process taker.

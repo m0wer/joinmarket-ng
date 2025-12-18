@@ -36,7 +36,9 @@ while true; do
     fi
 
     # Mine mempool transactions
-    mempool_count=$($CLI getmempoolinfo | grep -o '"size":[0-9]*' | grep -o '[0-9]*' || echo "0")
+    mempool_count=$($CLI getmempoolinfo | grep -o '"size": [0-9]*' | grep -o '[0-9]*')
+    # Default to 0 if extraction fails
+    mempool_count=${mempool_count:-0}
 
     if [ "$mempool_count" -gt 0 ]; then
         echo "Mining block with $mempool_count mempool transactions"

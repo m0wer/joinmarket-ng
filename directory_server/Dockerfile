@@ -7,10 +7,11 @@ FROM python:${PYTHON_VERSION}-slim AS base
 
 WORKDIR /app
 
-# Install system dependencies for building coincurve
+# Install system dependencies for building coincurve and running libnacl
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libffi-dev \
+    libsodium23 \
     git \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
@@ -65,7 +66,7 @@ FROM base AS production
 FROM python:${PYTHON_VERSION} AS debug-base
 
 RUN apt update && \
-    apt install --no-install-recommends -y gdb && \
+    apt install --no-install-recommends -y gdb libsodium23 && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
