@@ -8,9 +8,24 @@ Complete system tests with all JoinMarket components.
 # Clean start (IMPORTANT: always use -v to reset blockchain state)
 docker compose --profile all down -v
 
-# Start all services and wait for wallet funding
+# Start all services (includes neutrino backend)
 docker compose --profile all up -d --build
-sleep 30  # Wait for wallet-funder to complete
+
+# Wait for services to be ready
+echo "Waiting for Bitcoin..."
+until docker compose exec -T bitcoin bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo 2>/dev/null; do
+  sleep 2
+done
+echo "Bitcoin ready"
+
+echo "Waiting for wallet-funder to complete..."
+sleep 30
+
+echo "Waiting for Neutrino to sync..."
+until curl -s http://localhost:8334/v1/status | grep -q '"synced":true'; do
+  sleep 2
+done
+echo "Neutrino synced"
 
 # Restart makers to ensure they sync latest blockchain state
 docker compose restart maker1 maker2
@@ -37,8 +52,8 @@ The unified `docker-compose.yml` uses profiles to organize services:
 | `taker` | + taker | Single taker client |
 | `e2e` | + maker1, maker2 | E2E tests (our implementation) |
 | `reference` | + tor, jam, maker1, maker2 | Reference JAM compatibility tests |
-| `all` | e2e + reference (everything) | **Full test suite** |
 | `neutrino` | + neutrino, maker-neutrino, taker-neutrino | Light client testing |
+| `all` | e2e + reference + neutrino | **Full test suite** |
 
 ## Running Tests
 
@@ -50,11 +65,24 @@ Run ALL tests including reference compatibility:
 # Clean start (IMPORTANT!)
 docker compose --profile all down -v
 
-# Start all services
+# Start all services (includes neutrino)
 docker compose --profile all up -d --build
 
+# Wait for Bitcoin to be ready
+echo "Waiting for Bitcoin..."
+until docker compose exec -T bitcoin bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo 2>/dev/null; do
+  sleep 2
+done
+
 # Wait for wallet funding to complete
+echo "Waiting for wallet funding..."
 sleep 30
+
+# Wait for Neutrino to sync
+echo "Waiting for Neutrino..."
+until curl -s http://localhost:8334/v1/status | grep -q '"synced":true'; do
+  sleep 2
+done
 
 # Restart makers to ensure they have latest blockchain state
 docker compose restart maker1 maker2
@@ -117,17 +145,29 @@ pytest tests/e2e/test_our_maker_reference_taker.py -v -s # Our maker + reference
 docker compose --profile reference down -v
 ```
 
-### Skip Reference Tests (When Not Running)
+### Neutrino Backend Tests
 
-If you run the full test suite without the `reference` profile, reference tests
-are **automatically skipped** (not failed):
+Tests the neutrino light client backend:
 
 ```bash
-# Only core services
-docker compose up -d
+# Clean start
+docker compose --profile all down -v
 
-# Reference tests will be skipped automatically
-pytest -lv tests/
+# Start services with neutrino
+docker compose --profile all up -d --build
+sleep 30
+
+# Wait for neutrino to sync (should happen automatically)
+until curl -s http://localhost:8334/v1/status | grep -q '"synced":true'; do
+  echo "Waiting for neutrino sync..."
+  sleep 5
+done
+
+# Run neutrino tests
+pytest tests/e2e/test_neutrino_backend.py -v
+
+# Cleanup
+docker compose --profile all down -v
 ```
 
 ## Architecture
@@ -148,6 +188,12 @@ pytest -lv tests/
 │  │   Miner     │  │  Maker 1   │  │  Maker 2  │                       │
 │  │  (auto)     │  └────────────┘  └───────────┘                       │
 │  └─────────────┘                                                      │
+│                                                                       │
+│  Neutrino Profile:                                                    │
+│  ┌──────────────┐                                                     │
+│  │   Neutrino   │ ◄── Light client (BIP157/158)                       │
+│  │   Server     │                                                     │
+│  └──────────────┘                                                     │
 │                                                                       │
 │  Reference Profile Only:                                              │
 │  ┌──────────────┐    ┌──────────────┐                                │
@@ -183,7 +229,32 @@ Pre-configured test wallet mnemonics (regtest only!):
 | Bitcoin RPC | http://localhost:18443 |
 | Directory Server | localhost:5222 |
 | Orderbook Watcher | http://localhost:8080 |
-| Neutrino (if enabled) | http://localhost:8334 |
+| Neutrino API | http://localhost:8334 |
+
+## Neutrino Backend
+
+The neutrino backend is a BIP157/BIP158 light client that syncs with Bitcoin Core using compact block filters. This provides privacy-preserving SPV operation without downloading the full blockchain.
+
+### Neutrino Status API
+
+Check neutrino sync status:
+```bash
+curl -s http://localhost:8334/v1/status
+# {"synced":true,"block_height":5490,"filter_height":5490,"peers":1}
+```
+
+### How Neutrino Works
+
+1. **Compact Block Filters**: Neutrino downloads compact block filters (BIP158) instead of full blocks
+2. **Privacy**: Doesn't reveal which addresses you're interested in to peers
+3. **Sync**: Syncs headers and filters before reporting as synced
+4. **UTXO Discovery**: Uses filter matching to find relevant transactions
+
+### Neutrino Test Requirements
+
+- Bitcoin Core must have `blockfilterindex=1` and `peerblockfilters=1` enabled
+- Neutrino needs P2P access to Bitcoin Core on port 18444
+- Tests will fail (not skip) if neutrino is unavailable or not synced
 
 ## Troubleshooting
 
@@ -215,6 +286,30 @@ sleep 10
 ```bash
 docker compose --profile all ps
 docker compose logs <service-name>
+```
+
+### Neutrino Not Syncing?
+
+1. Check if Bitcoin Core has block filters enabled:
+```bash
+docker compose exec bitcoin bitcoin-cli -regtest -rpcuser=test -rpcpassword=test getblockchaininfo | grep -A5 filter
+```
+
+2. Check neutrino logs:
+```bash
+docker compose logs neutrino
+```
+
+3. Verify neutrino can reach Bitcoin:
+```bash
+docker compose exec neutrino ping -c 3 jm-bitcoin
+```
+
+4. Clear neutrino data and restart:
+```bash
+docker compose stop neutrino
+docker volume rm jm-refactor_neutrino-data
+docker compose up -d neutrino
 ```
 
 ### Makers Not Seeing UTXOs?

@@ -33,6 +33,7 @@ type Config struct {
 	BanDuration     time.Duration
 	FilterCacheSize int
 	Logger          *btclog.Backend
+	LogLevel        string
 }
 
 // Node wraps a neutrino ChainService with additional functionality.
@@ -88,7 +89,20 @@ func NewNode(config *Config) (*Node, error) {
 	}
 
 	logger := config.Logger.Logger("NTRN")
-	logger.SetLevel(btclog.LevelInfo)
+	// Use the configured log level
+	logLevel := config.LogLevel
+	if logLevel == "" {
+		logLevel = "info"
+	}
+	level, _ := btclog.LevelFromString(logLevel)
+	logger.SetLevel(level)
+
+	logger.Infof("Initializing neutrino node for network: %s", config.Network)
+	logger.Infof("Data directory: %s", config.DataDir)
+	logger.Infof("Log level: %s", logLevel)
+	if config.ConnectPeers != "" {
+		logger.Infof("Connect peers: %s", config.ConnectPeers)
+	}
 
 	node := &Node{
 		config:      config,
@@ -105,11 +119,24 @@ func (n *Node) Start() error {
 
 	// Open the database for neutrino
 	dbPath := filepath.Join(n.config.DataDir, "neutrino.db")
+	n.logger.Infof("Opening database at: %s", dbPath)
 	db, err := walletdb.Create("bdb", dbPath, true, 60*time.Second)
 	if err != nil {
 		return fmt.Errorf("failed to create database at %s: %w", dbPath, err)
 	}
 	n.db = db
+
+	// Configure logging for the neutrino library itself
+	logLevel := n.config.LogLevel
+	if logLevel == "" {
+		logLevel = "info"
+	}
+	level, _ := btclog.LevelFromString(logLevel)
+
+	// Set log level for neutrino library's internal loggers
+	neutrinoLogger := n.config.Logger.Logger("NTRNO")
+	neutrinoLogger.SetLevel(level)
+	neutrino.UseLogger(neutrinoLogger)
 
 	// Create neutrino config
 	neutrinoConfig := neutrino.Config{
@@ -125,15 +152,21 @@ func (n *Node) Start() error {
 		for _, peer := range peers {
 			peer = strings.TrimSpace(peer)
 			if peer != "" {
+				n.logger.Infof("Adding connect peer: %s", peer)
 				neutrinoConfig.ConnectPeers = append(neutrinoConfig.ConnectPeers, peer)
 			}
 		}
+		n.logger.Infof("Total connect peers configured: %d", len(neutrinoConfig.ConnectPeers))
 	}
 
 	// Add DNS seeds if no connect peers specified
 	if len(neutrinoConfig.ConnectPeers) == 0 {
-		neutrinoConfig.AddPeers = getDNSSeeds(n.config.Network)
+		seeds := getDNSSeeds(n.config.Network)
+		neutrinoConfig.AddPeers = seeds
+		n.logger.Infof("No connect peers specified, using %d DNS seeds", len(seeds))
 	}
+
+	n.logger.Infof("Creating chain service for network: %s", n.chainParams.Name)
 
 	// Create chain service
 	chainService, err := neutrino.NewChainService(neutrinoConfig)
@@ -143,15 +176,18 @@ func (n *Node) Start() error {
 	}
 
 	n.chainService = chainService
+	n.logger.Info("Chain service created successfully")
 
 	// Start the chain service
+	n.logger.Info("Starting chain service...")
 	if err := n.chainService.Start(); err != nil {
 		n.db.Close()
 		return fmt.Errorf("failed to start chain service: %w", err)
 	}
+	n.logger.Info("Chain service started successfully")
 
 	// Create rescan manager
-	n.rescanMgr = NewRescanManager(n.chainService)
+	n.rescanMgr = NewRescanManager(n.chainService, n.logger)
 
 	// Start sync monitoring goroutine
 	go n.monitorSync()
@@ -275,9 +311,29 @@ func (n *Node) monitorSync() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
+	lastPeerCount := -1
+	lastHeight := int32(-1)
+
 	for range ticker.C {
 		if n.chainService == nil {
 			continue
+		}
+
+		// Get peer count
+		peers := n.chainService.Peers()
+		peerCount := len(peers)
+
+		// Log peer changes
+		if peerCount != lastPeerCount {
+			if peerCount == 0 {
+				n.logger.Warn("No peers connected - waiting for peer connections...")
+			} else {
+				n.logger.Infof("Peer count changed: %d -> %d", lastPeerCount, peerCount)
+				for i, peer := range peers {
+					n.logger.Debugf("  Peer %d: %s", i, peer.Addr())
+				}
+			}
+			lastPeerCount = peerCount
 		}
 
 		// Get best block
@@ -287,18 +343,28 @@ func (n *Node) monitorSync() {
 			continue
 		}
 
+		// Log height changes
+		if bestBlock.Height != lastHeight {
+			n.logger.Infof("Block height: %d (was %d)", bestBlock.Height, lastHeight)
+			lastHeight = bestBlock.Height
+		}
+
 		// Use IsCurrent() as the primary sync indicator
 		// The neutrino library tracks filter sync internally
 		isCurrent := n.chainService.IsCurrent()
 
 		n.mu.Lock()
+		wasSynced := n.synced
 		n.blockHeight = bestBlock.Height
 		n.filterHeight = bestBlock.Height // Assume filters are synced when blocks are synced
 		n.synced = isCurrent
 		n.mu.Unlock()
 
-		if !n.synced {
-			n.logger.Debugf("Syncing... blocks: %d", n.blockHeight)
+		// Log sync status changes
+		if isCurrent && !wasSynced {
+			n.logger.Infof("Sync complete! Block height: %d, Peers: %d", bestBlock.Height, peerCount)
+		} else if !isCurrent {
+			n.logger.Debugf("Syncing... blocks: %d, peers: %d, isCurrent: %v", bestBlock.Height, peerCount, isCurrent)
 		}
 	}
 }

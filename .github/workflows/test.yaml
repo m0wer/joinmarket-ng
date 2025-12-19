@@ -236,6 +236,13 @@ jobs:
 
   # ==========================================================================
   # Full E2E + Reference tests - uses 'all' profile
+  #
+  # Profile 'all' includes:
+  # - e2e: Our maker1, maker2 + infrastructure
+  # - reference: JAM taker + tor for compatibility testing
+  # - neutrino: Neutrino light client (may not sync in regtest - tests skip)
+  #
+  # Note: Neutrino tests will skip if neutrino isn't synced (expected in regtest)
   # ==========================================================================
 
   test-all-e2e:
@@ -304,6 +311,16 @@ jobs:
               break
             fi
             sleep 5
+          done
+
+          # Wait for Neutrino to be ready
+          echo "Waiting for Neutrino..."
+          for i in {1..30}; do
+            if curl -s http://localhost:8334/v1/status >/dev/null 2>&1; then
+              echo "Neutrino ready"
+              break
+            fi
+            sleep 2
           done
 
           # Give makers time to connect and announce offers

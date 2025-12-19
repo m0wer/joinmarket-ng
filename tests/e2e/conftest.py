@@ -27,13 +27,6 @@ if TYPE_CHECKING:
 def pytest_addoption(parser: pytest.Parser) -> None:
     """Add custom pytest options for e2e tests."""
     parser.addoption(
-        "--backend",
-        action="store",
-        default="bitcoin_core",
-        choices=["bitcoin_core", "neutrino", "all"],
-        help="Blockchain backend to test: bitcoin_core, neutrino, or all",
-    )
-    parser.addoption(
         "--neutrino-url",
         action="store",
         default="http://127.0.0.1:8334",
@@ -61,28 +54,10 @@ def pytest_collection_modifyitems(
     config: pytest.Config,
     items: list[pytest.Item],
 ) -> None:
-    """Skip tests based on backend selection."""
-    backend = config.getoption("--backend")
-
-    if backend == "all":
-        return  # Run all tests
-
-    skip_neutrino = pytest.mark.skip(reason="neutrino backend not selected")
-    skip_bitcoin_core = pytest.mark.skip(reason="bitcoin_core backend not selected")
-
-    for item in items:
-        if backend == "bitcoin_core":
-            if "neutrino" in item.keywords:
-                item.add_marker(skip_neutrino)
-        elif backend == "neutrino":
-            if "bitcoin_core" in item.keywords:
-                item.add_marker(skip_bitcoin_core)
-
-
-@pytest.fixture(scope="session")
-def backend_type(request: pytest.FixtureRequest) -> str:
-    """Get the backend type from command line."""
-    return request.config.getoption("--backend")
+    """Configure test markers - all backend tests run by default."""
+    # No automatic skipping - all tests should run
+    # Tests will fail if required services are unavailable
+    pass
 
 
 @pytest.fixture(scope="session")
@@ -130,11 +105,12 @@ async def neutrino_backend_fixture(
         network="regtest",
     )
 
-    # Check if neutrino is available
+    # Verify neutrino is available - fail if not
     try:
-        await backend.get_block_height()
-    except Exception:
-        pytest.skip("Neutrino server not available")
+        height = await backend.get_block_height()
+        logger.info(f"Neutrino backend connected, height: {height}")
+    except Exception as e:
+        pytest.fail(f"Neutrino server not available at {neutrino_url}: {e}")
 
     yield backend
     await backend.close()
@@ -143,39 +119,21 @@ async def neutrino_backend_fixture(
 @pytest_asyncio.fixture
 async def blockchain_backend(
     request: pytest.FixtureRequest,
-    backend_type: str,
     bitcoin_rpc_config: dict[str, str],
-    neutrino_url: str,
 ) -> AsyncGenerator[BlockchainBackend, None]:
     """
-    Parameterized blockchain backend fixture.
+    Bitcoin Core blockchain backend fixture.
 
-    Use this fixture when you want tests to run with both backends.
+    Use this fixture for tests that need Bitcoin Core backend specifically.
+    For neutrino tests, use neutrino_backend_fixture.
     """
-    backend: BlockchainBackend
+    from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
 
-    if backend_type in ("bitcoin_core", "all"):
-        from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
-
-        backend = BitcoinCoreBackend(
-            rpc_url=bitcoin_rpc_config["rpc_url"],
-            rpc_user=bitcoin_rpc_config["rpc_user"],
-            rpc_password=bitcoin_rpc_config["rpc_password"],
-        )
-    elif backend_type == "neutrino":
-        from jmwallet.backends.neutrino import NeutrinoBackend
-
-        backend = NeutrinoBackend(
-            neutrino_url=neutrino_url,
-            network="regtest",
-        )
-
-        try:
-            await backend.get_block_height()
-        except Exception:
-            pytest.skip("Neutrino server not available")
-    else:
-        raise ValueError(f"Unknown backend type: {backend_type}")
+    backend = BitcoinCoreBackend(
+        rpc_url=bitcoin_rpc_config["rpc_url"],
+        rpc_user=bitcoin_rpc_config["rpc_user"],
+        rpc_password=bitcoin_rpc_config["rpc_password"],
+    )
 
     yield backend
     await backend.close()

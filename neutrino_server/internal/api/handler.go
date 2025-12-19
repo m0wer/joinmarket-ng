@@ -255,10 +255,12 @@ func (h *Handler) handleRescan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.node.Rescan(req.StartHeight, req.Addresses); err != nil {
-		h.errorResponse(w, http.StatusInternalServerError, err.Error())
-		return
-	}
+	// Start rescan in background goroutine to not block HTTP response
+	go func() {
+		if err := h.node.Rescan(req.StartHeight, req.Addresses); err != nil {
+			h.logger.Errorf("Rescan failed: %v", err)
+		}
+	}()
 
 	h.jsonResponse(w, map[string]string{
 		"status": "started",

@@ -8,33 +8,11 @@ Tests neutrino light client backend functionality:
 - Cross-backend compatibility (bitcoin_core + neutrino)
 - Fidelity bonds with neutrino backend
 
-Requires: docker compose --profile neutrino up -d
+Requires: docker compose --profile all up -d
 
-IMPORTANT LIMITATION - Neutrino + Regtest:
-===========================================
-The lightninglabs/neutrino library has known limitations with regtest:
-
-1. **Peer Discovery**: Neutrino's peer discovery doesn't work well in regtest
-   - Even with Bitcoin Core serving compact block filters (-blockfilterindex=1 -peerblockfilters=1)
-   - Even with direct peer specification (--connect=node:port)
-   - The library was primarily designed for mainnet/testnet/signet
-
-2. **Sync Behavior**: Neutrino may not sync in regtest even when:
-   - Bitcoin Core has thousands of blocks
-   - Block filters are being generated correctly
-   - The P2P port is reachable
-
-3. **Test Strategy**:
-   - ✅ API tests verify the neutrino backend methods exist and have correct signatures
-   - ✅ Unit tests in jmwallet/tests/test_backends.py test with mocked responses
-   - ✅ These e2e tests validate graceful degradation when neutrino isn't synced
-   - ⚠️ Full neutrino integration testing requires testnet/signet deployment
-   - ✅ For regtest e2e CoinJoin tests, use bitcoin_core backend
-
-These tests serve as:
-- Smoke tests for neutrino API availability
-- Documentation of neutrino backend interface
-- Preparation for future testnet/signet integration
+The neutrino backend uses BIP157/BIP158 compact block filters for
+privacy-preserving SPV operation. These tests verify that the neutrino
+backend works correctly with the JoinMarket wallet implementation.
 """
 
 from __future__ import annotations
@@ -86,11 +64,16 @@ async def neutrino_backend(neutrino_url: str):
         network="regtest",
     )
 
-    # Check if neutrino is available
+    # Verify neutrino is available and synced - fail if not
     try:
-        await backend.get_block_height()
-    except Exception:
-        pytest.skip("Neutrino server not available at http://127.0.0.1:8334")
+        height = await backend.get_block_height()
+        if height == 0:
+            # Wait for sync
+            synced = await backend.wait_for_sync(timeout=30.0)
+            if not synced:
+                pytest.fail("Neutrino failed to sync within timeout")
+    except Exception as e:
+        pytest.fail(f"Neutrino server not available at {neutrino_url}: {e}")
 
     yield backend
     await backend.close()
@@ -108,32 +91,49 @@ async def funded_neutrino_wallet(neutrino_backend: NeutrinoBackend):
         mixdepth_count=5,
     )
 
-    # Wait for neutrino to sync
-    if hasattr(neutrino_backend, "wait_for_sync"):
-        synced = await neutrino_backend.wait_for_sync(timeout=60.0)
-        if not synced:
-            await wallet.close()
-            pytest.skip("Neutrino failed to sync within timeout")
+    # Get the funding address BEFORE syncing
+    funding_address = wallet.get_receive_address(0, 0)
 
+    # Add the address to neutrino's watch list
+    await neutrino_backend.add_watch_address(funding_address)
+
+    # Check current balance
     await wallet.sync_all()
-
     total_balance = await wallet.get_total_balance()
+
     if total_balance == 0:
-        # Fund via Bitcoin Core (neutrino will discover the UTXO)
-        funding_address = wallet.get_receive_address(0, 0)
+        # Fund via Bitcoin Core - mines directly to the address
         funded = await ensure_wallet_funded(
             funding_address, amount_btc=1.0, confirmations=2
         )
-        if funded:
-            # Rescan from genesis to find the funding transaction
-            await neutrino_backend.rescan_from_height(0, addresses=[funding_address])
-            await asyncio.sleep(5)  # Wait for rescan
-            await wallet.sync_all()
-            total_balance = await wallet.get_total_balance()
+        if not funded:
+            await wallet.close()
+            pytest.fail("Failed to fund wallet via Bitcoin Core RPC")
+
+        # Wait for neutrino to see the new blocks
+        await asyncio.sleep(2)
+
+        # Get current height and rescan from a recent height (not 0)
+        # The funding transaction will be in recent blocks
+        current_height = await neutrino_backend.get_block_height()
+        rescan_start = max(0, current_height - 10)  # Scan last 10 blocks
+
+        # Rescan to find the funding transaction
+        await neutrino_backend.rescan_from_height(
+            rescan_start, addresses=[funding_address]
+        )
+        await asyncio.sleep(5)  # Wait for background rescan to complete
+
+        # Re-sync wallet
+        await wallet.sync_all()
+        total_balance = await wallet.get_total_balance()
 
     if total_balance == 0:
         await wallet.close()
-        pytest.skip("Wallet has no funds and auto-funding failed")
+        pytest.fail(
+            f"Wallet has no funds after funding attempt. "
+            f"Address: {funding_address}, neutrino may not have synced the new blocks"
+        )
 
     try:
         yield wallet
@@ -153,30 +153,45 @@ async def funded_maker1_neutrino_wallet(neutrino_backend: NeutrinoBackend):
         mixdepth_count=5,
     )
 
-    # Wait for neutrino sync
-    if hasattr(neutrino_backend, "wait_for_sync"):
-        synced = await neutrino_backend.wait_for_sync(timeout=60.0)
-        if not synced:
-            await wallet.close()
-            pytest.skip("Neutrino failed to sync")
+    # Get the funding address
+    funding_address = wallet.get_receive_address(0, 0)
 
+    # Add the address to neutrino's watch list
+    await neutrino_backend.add_watch_address(funding_address)
+
+    # Check current balance
     await wallet.sync_all()
-
     total_balance = await wallet.get_total_balance()
+
     if total_balance == 0:
-        funding_address = wallet.get_receive_address(0, 0)
+        # Fund via Bitcoin Core
         funded = await ensure_wallet_funded(
             funding_address, amount_btc=1.0, confirmations=2
         )
-        if funded:
-            await neutrino_backend.rescan_from_height(0, addresses=[funding_address])
-            await asyncio.sleep(5)
-            await wallet.sync_all()
-            total_balance = await wallet.get_total_balance()
+        if not funded:
+            await wallet.close()
+            pytest.fail("Failed to fund maker1 wallet via Bitcoin Core RPC")
+
+        # Wait for neutrino to see the new blocks
+        await asyncio.sleep(2)
+
+        # Get current height and rescan from a recent height
+        current_height = await neutrino_backend.get_block_height()
+        rescan_start = max(0, current_height - 10)
+
+        # Rescan to find the funding transaction
+        await neutrino_backend.rescan_from_height(
+            rescan_start, addresses=[funding_address]
+        )
+        await asyncio.sleep(5)  # Wait for background rescan
+
+        # Re-sync wallet
+        await wallet.sync_all()
+        total_balance = await wallet.get_total_balance()
 
     if total_balance == 0:
         await wallet.close()
-        pytest.skip("Maker1 wallet has no funds")
+        pytest.fail(f"Maker1 wallet has no funds. Address: {funding_address}")
 
     try:
         yield wallet
@@ -196,30 +211,45 @@ async def funded_taker_neutrino_wallet(neutrino_backend: NeutrinoBackend):
         mixdepth_count=5,
     )
 
-    # Wait for neutrino sync
-    if hasattr(neutrino_backend, "wait_for_sync"):
-        synced = await neutrino_backend.wait_for_sync(timeout=60.0)
-        if not synced:
-            await wallet.close()
-            pytest.skip("Neutrino failed to sync")
+    # Get the funding address
+    funding_address = wallet.get_receive_address(0, 0)
 
+    # Add the address to neutrino's watch list
+    await neutrino_backend.add_watch_address(funding_address)
+
+    # Check current balance
     await wallet.sync_all()
-
     total_balance = await wallet.get_total_balance()
+
     if total_balance == 0:
-        funding_address = wallet.get_receive_address(0, 0)
+        # Fund via Bitcoin Core
         funded = await ensure_wallet_funded(
             funding_address, amount_btc=1.0, confirmations=2
         )
-        if funded:
-            await neutrino_backend.rescan_from_height(0, addresses=[funding_address])
-            await asyncio.sleep(5)
-            await wallet.sync_all()
-            total_balance = await wallet.get_total_balance()
+        if not funded:
+            await wallet.close()
+            pytest.fail("Failed to fund taker wallet via Bitcoin Core RPC")
+
+        # Wait for neutrino to see the new blocks
+        await asyncio.sleep(2)
+
+        # Get current height and rescan from a recent height
+        current_height = await neutrino_backend.get_block_height()
+        rescan_start = max(0, current_height - 10)
+
+        # Rescan to find the funding transaction
+        await neutrino_backend.rescan_from_height(
+            rescan_start, addresses=[funding_address]
+        )
+        await asyncio.sleep(5)  # Wait for background rescan
+
+        # Re-sync wallet
+        await wallet.sync_all()
+        total_balance = await wallet.get_total_balance()
 
     if total_balance == 0:
         await wallet.close()
-        pytest.skip("Taker wallet has no funds")
+        pytest.fail(f"Taker wallet has no funds. Address: {funding_address}")
 
     try:
         yield wallet
@@ -272,18 +302,12 @@ def taker_neutrino_config():
 @pytest.mark.asyncio
 @pytest.mark.neutrino
 async def test_neutrino_connection(neutrino_backend: NeutrinoBackend):
-    """Test basic neutrino backend connectivity.
-
-    Note: Neutrino may not sync in regtest mode because:
-    - Bitcoin Core doesn't serve compact block filters by default
-    - Regtest has no DNS seeds for peer discovery
-    - This test validates API connectivity even if not fully synced
-    """
+    """Test basic neutrino backend connectivity."""
     height = await neutrino_backend.get_block_height()
-    assert height >= 0, "Should get block height from neutrino (may be 0 in regtest)"
+    assert height > 0, "Should get block height from neutrino"
 
     fee = await neutrino_backend.estimate_fee(6)
-    assert fee > 0, "Should estimate fee (uses fallback in regtest)"
+    assert fee > 0, "Should estimate fee"
 
 
 @pytest.mark.asyncio
@@ -463,8 +487,7 @@ async def test_taker_neutrino_podle_generation(
 
     utxos = await funded_taker_neutrino_wallet.get_utxos(0)
 
-    if not utxos:
-        pytest.skip("No UTXOs available for PoDLE test")
+    assert utxos, "Funded wallet should have UTXOs for PoDLE test"
 
     cj_amount = 100_000
 
@@ -475,9 +498,9 @@ async def test_taker_neutrino_podle_generation(
         min_percent=10,
     )
 
-    if selected:
-        assert selected.confirmations >= 1
-        assert selected.value >= cj_amount * 0.1
+    assert selected is not None, "Should select a UTXO for PoDLE"
+    assert selected.confirmations >= 1
+    assert selected.value >= cj_amount * 0.1
 
 
 @pytest.mark.asyncio
@@ -518,6 +541,7 @@ async def test_taker_neutrino_orderbook_fetch(
 @pytest.mark.asyncio
 @pytest.mark.neutrino
 @pytest.mark.slow
+@pytest.mark.xfail(reason="Cross-backend CoinJoin not yet implemented")
 async def test_cross_backend_bitcoin_core_maker_neutrino_taker():
     """
     Test cross-backend compatibility: Bitcoin Core maker + Neutrino taker.
@@ -526,15 +550,16 @@ async def test_cross_backend_bitcoin_core_maker_neutrino_taker():
     successfully complete CoinJoin with takers using Neutrino backend.
 
     Requires:
-    - docker compose --profile e2e up -d (for Bitcoin Core makers)
-    - docker compose --profile neutrino up -d (for Neutrino service)
+    - docker compose --profile all up -d
     """
-    pytest.skip("Requires full e2e setup with both backends - implement when needed")
+    # TODO: Implement cross-backend CoinJoin test
+    assert False, "Not implemented"
 
 
 @pytest.mark.asyncio
 @pytest.mark.neutrino
 @pytest.mark.slow
+@pytest.mark.xfail(reason="Cross-backend CoinJoin not yet implemented")
 async def test_cross_backend_neutrino_maker_bitcoin_core_taker():
     """
     Test cross-backend compatibility: Neutrino maker + Bitcoin Core taker.
@@ -543,10 +568,10 @@ async def test_cross_backend_neutrino_maker_bitcoin_core_taker():
     successfully complete CoinJoin with takers using Bitcoin Core backend.
 
     Requires:
-    - docker compose --profile neutrino up -d (for Neutrino makers)
-    - Bitcoin Core taker
+    - docker compose --profile all up -d
     """
-    pytest.skip("Requires full e2e setup with both backends - implement when needed")
+    # TODO: Implement cross-backend CoinJoin test
+    assert False, "Not implemented"
 
 
 # ==============================================================================
@@ -556,6 +581,7 @@ async def test_cross_backend_neutrino_maker_bitcoin_core_taker():
 
 @pytest.mark.asyncio
 @pytest.mark.neutrino
+@pytest.mark.xfail(reason="Fidelity bond testing requires time-locked UTXOs")
 async def test_neutrino_fidelity_bond_discovery():
     """
     Test fidelity bond discovery with neutrino backend.
@@ -563,10 +589,8 @@ async def test_neutrino_fidelity_bond_discovery():
     Neutrino should be able to discover timelocked UTXOs and verify
     fidelity bond proofs using compact block filters.
     """
-    pytest.skip(
-        "Fidelity bond testing with neutrino requires time-locked UTXOs - "
-        "implement when needed"
-    )
+    # TODO: Implement fidelity bond discovery test
+    assert False, "Not implemented"
 
 
 # ==============================================================================
@@ -580,14 +604,10 @@ async def test_neutrino_rescan_from_height(neutrino_backend: NeutrinoBackend):
     """Test neutrino blockchain rescan functionality."""
     test_address = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080"
 
-    # Rescan from genesis
-    try:
-        await neutrino_backend.rescan_from_height(0, addresses=[test_address])
-        # If we get here, the rescan was initiated successfully
-        assert True
-    except Exception as e:
-        # Some neutrino implementations may not support rescan
-        pytest.skip(f"Neutrino rescan not supported or failed: {e}")
+    # Rescan from genesis - should succeed
+    await neutrino_backend.rescan_from_height(0, addresses=[test_address])
+    # If we get here, the rescan was initiated successfully
+    assert True
 
 
 @pytest.mark.asyncio
@@ -598,15 +618,11 @@ async def test_neutrino_watch_outpoint(neutrino_backend: NeutrinoBackend):
     test_txid = "a" * 64
     test_vout = 0
 
-    try:
-        await neutrino_backend.add_watch_outpoint(test_txid, test_vout)
-        # If successful, verify it's in watched set
-        if (test_txid, test_vout) in neutrino_backend._watched_outpoints:
-            assert (test_txid, test_vout) in neutrino_backend._watched_outpoints
-    except Exception:
-        # API may not be available
-        pass
+    await neutrino_backend.add_watch_outpoint(test_txid, test_vout)
+
+    # Verify it's in watched set
+    assert (test_txid, test_vout) in neutrino_backend._watched_outpoints
 
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s", "--backend=neutrino"])
+    pytest.main([__file__, "-v", "-s"])

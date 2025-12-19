@@ -60,6 +60,7 @@ func main() {
 		BanDuration:     *banDuration,
 		FilterCacheSize: *filterCacheSize,
 		Logger:          backend,
+		LogLevel:        *logLevel,
 	}
 
 	node, err := neutrino.NewNode(nodeConfig)
