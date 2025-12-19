@@ -227,6 +227,7 @@ services:
     profiles:
       - e2e
       - reference
+      - neutrino
       - all
 
   # Maker 1 for e2e tests
