@@ -494,16 +494,66 @@ async def test_execute_reference_coinjoin(reference_services):
     wallet_name = "test_wallet.jmdat"
     wallet_password = "testpassword123"
 
-    # Ensure wallet exists and is funded
+    # Restart makers to ensure fresh wallet state
+    # This is necessary because previous tests may have consumed maker UTXOs
+    logger.info("Restarting makers to ensure fresh state...")
+    run_compose_cmd(["restart", "maker1", "maker2"], check=False)
+    await asyncio.sleep(15)  # Wait for makers to restart and announce offers
+
+    # Ensure bitcoin and bitcoin-jam are fully synced
+    logger.info("Checking that bitcoin nodes are synced...")
+    for attempt in range(30):
+        result1 = run_bitcoin_cmd(["getblockcount"])
+        # Get bitcoin-jam blockcount
+        result2 = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-f",
+                str(get_compose_file()),
+                "exec",
+                "-T",
+                "bitcoin-jam",
+                "bitcoin-cli",
+                "-regtest",
+                "-rpcuser=test",
+                "-rpcpassword=test",
+                "-rpcport=18445",
+                "getblockcount",
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        if result1.returncode == 0 and result2.returncode == 0:
+            count1 = int(result1.stdout.strip())
+            count2 = int(result2.stdout.strip())
+            logger.info(f"Block counts: bitcoin={count1}, bitcoin-jam={count2}")
+            if count1 == count2:
+                logger.info("Nodes are synced!")
+                break
+            else:
+                logger.info(f"Waiting for sync... (attempt {attempt + 1}/30)")
+                await asyncio.sleep(2)
+        else:
+            logger.warning("Failed to get block counts")
+            await asyncio.sleep(2)
+    else:
+        pytest.fail("Bitcoin nodes failed to sync within timeout")
+
+    # Now fund the taker wallet
     wallet_created = create_jam_wallet(wallet_name, wallet_password)
     assert wallet_created, "Wallet must exist"
 
     address = get_jam_wallet_address(wallet_name, wallet_password, 0)
     assert address, "Must have wallet address"
 
-    # Fund the wallet if not already funded
+    # Fund the wallet
     funded = fund_wallet_address(address, 1.0)
     assert funded, "Wallet must be funded"
+
+    # Wait for wallet sync
+    await asyncio.sleep(5)
 
     # Get destination address (use mixdepth 1)
     dest_address = get_jam_wallet_address(wallet_name, wallet_password, 1)

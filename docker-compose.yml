@@ -457,6 +457,92 @@ services:
       - reference
       - all
 
+  # Reference JAM maker 1 (yieldgenerator)
+  jam-maker1:
+    image: ghcr.io/joinmarket-webui/jam-standalone:v0.4.0-clientserver-v0.9.11
+    container_name: jm-jam-maker1
+    restart: unless-stopped
+    environment:
+      - JM_RPC_HOST=jm-bitcoin-jam
+      - JM_RPC_PORT=18445
+      - JM_RPC_USER=test
+      - JM_RPC_PASSWORD=test
+      - APP_USER=admin
+      - APP_PASSWORD=admin
+      - ENSURE_WALLET=false
+      - REMOVE_LOCK_FILES=true
+      - RESTORE_DEFAULT_CONFIG=false
+    volumes:
+      - jam-maker1-data:/root/.joinmarket
+      - ./tests/e2e/reference/joinmarket.cfg:/root/.joinmarket/joinmarket.cfg:ro
+      - ./tests/e2e/reference/create_wallet.exp:/scripts/create_wallet.exp:ro
+    networks:
+      - jm-network
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "sh", "-c", "timeout 5 bash -c '</dev/tcp/127.0.0.1/80'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      bitcoin-jam:
+        condition: service_healthy
+      directory:
+        condition: service_healthy
+      tor:
+        condition: service_started
+    profiles:
+      - reference-maker
+      - all
+
+  # Reference JAM maker 2 (yieldgenerator)
+  jam-maker2:
+    image: ghcr.io/joinmarket-webui/jam-standalone:v0.4.0-clientserver-v0.9.11
+    container_name: jm-jam-maker2
+    restart: unless-stopped
+    environment:
+      - JM_RPC_HOST=jm-bitcoin-jam
+      - JM_RPC_PORT=18445
+      - JM_RPC_USER=test
+      - JM_RPC_PASSWORD=test
+      - APP_USER=admin
+      - APP_PASSWORD=admin
+      - ENSURE_WALLET=false
+      - REMOVE_LOCK_FILES=true
+      - RESTORE_DEFAULT_CONFIG=false
+    volumes:
+      - jam-maker2-data:/root/.joinmarket
+      - ./tests/e2e/reference/joinmarket.cfg:/root/.joinmarket/joinmarket.cfg:ro
+      - ./tests/e2e/reference/create_wallet.exp:/scripts/create_wallet.exp:ro
+    networks:
+      - jm-network
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "sh", "-c", "timeout 5 bash -c '</dev/tcp/127.0.0.1/80'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      bitcoin-jam:
+        condition: service_healthy
+      directory:
+        condition: service_healthy
+      tor:
+        condition: service_started
+    profiles:
+      - reference-maker
+      - all
+
   # ============================================================================
   # Neutrino Light Client (profile: neutrino)
   # ============================================================================
@@ -554,6 +640,8 @@ volumes:
   bitcoin-jam-data:
   neutrino-data:
   jam-data:
+  jam-maker1-data:
+  jam-maker2-data:
   tor-data:
 
 networks:
