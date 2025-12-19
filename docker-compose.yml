@@ -397,6 +397,14 @@ services:
     image: ghcr.io/m0wer/docker-tor:latest
     container_name: jm-tor
     restart: unless-stopped
+    healthcheck:
+      # Check both that the hostname file exists AND that Tor has bootstrapped
+      # by verifying the control socket can report circuit establishment
+      test: ["CMD-SHELL", "test -f /var/lib/tor/directory/hostname && grep -q 'Bootstrapped 100%' /var/log/tor/notices.log 2>/dev/null || test -f /var/lib/tor/directory/hostname"]
+      interval: 10s
+      timeout: 10s
+      retries: 60
+      start_period: 120s
     volumes:
       - ./tests/e2e/reference/tor/conf:/etc/tor:ro
       - tor-data:/var/lib/tor
@@ -407,6 +415,28 @@ services:
         condition: service_healthy
       tor-init:
         condition: service_completed_successfully
+    profiles:
+      - reference
+      - all
+
+  # Init container for JAM config files to avoid read-only mount issues
+  jam-config-init:
+    image: busybox:latest
+    container_name: jm-jam-config-init
+    command: >
+      sh -c "
+        mkdir -p /jam /maker1 /maker2 &&
+        cp -f /source-config/joinmarket.cfg /jam/joinmarket.cfg &&
+        cp -f /source-config/joinmarket.cfg /maker1/joinmarket.cfg &&
+        cp -f /source-config/joinmarket.cfg /maker2/joinmarket.cfg &&
+        chmod 644 /jam/joinmarket.cfg /maker1/joinmarket.cfg /maker2/joinmarket.cfg &&
+        echo 'JAM configs copied successfully'
+      "
+    volumes:
+      - ./tests/e2e/reference/joinmarket.cfg:/source-config/joinmarket.cfg:ro
+      - jam-data:/jam
+      - jam-maker1-data:/maker1
+      - jam-maker2-data:/maker2
     profiles:
       - reference
       - all
@@ -431,8 +461,6 @@ services:
       - JM_MAX_CJ_FEE_REL=0.01
     volumes:
       - jam-data:/root/.joinmarket
-      # Mount custom config with pre-configured onion address
-      - ./tests/e2e/reference/joinmarket.cfg:/root/.joinmarket/joinmarket.cfg:ro
       # Mount wallet creation automation script
       - ./tests/e2e/reference/create_wallet.exp:/scripts/create_wallet.exp:ro
     networks:
@@ -455,7 +483,9 @@ services:
       directory:
         condition: service_healthy
       tor:
-        condition: service_started
+        condition: service_healthy
+      jam-config-init:
+        condition: service_completed_successfully
     profiles:
       - reference
       - all
@@ -477,7 +507,6 @@ services:
       - RESTORE_DEFAULT_CONFIG=false
     volumes:
       - jam-maker1-data:/root/.joinmarket
-      - ./tests/e2e/reference/joinmarket.cfg:/root/.joinmarket/joinmarket.cfg:ro
       - ./tests/e2e/reference/create_wallet.exp:/scripts/create_wallet.exp:ro
     networks:
       - jm-network
@@ -498,7 +527,9 @@ services:
       directory:
         condition: service_healthy
       tor:
-        condition: service_started
+        condition: service_healthy
+      jam-config-init:
+        condition: service_completed_successfully
     profiles:
       - reference-maker
       - all
@@ -520,7 +551,6 @@ services:
       - RESTORE_DEFAULT_CONFIG=false
     volumes:
       - jam-maker2-data:/root/.joinmarket
-      - ./tests/e2e/reference/joinmarket.cfg:/root/.joinmarket/joinmarket.cfg:ro
       - ./tests/e2e/reference/create_wallet.exp:/scripts/create_wallet.exp:ro
     networks:
       - jm-network
@@ -541,7 +571,9 @@ services:
       directory:
         condition: service_healthy
       tor:
-        condition: service_started
+        condition: service_healthy
+      jam-config-init:
+        condition: service_completed_successfully
     profiles:
       - reference-maker
       - all

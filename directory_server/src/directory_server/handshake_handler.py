@@ -91,13 +91,18 @@ class HandshakeHandler:
             return (NOT_SERVING_ONION_HOSTNAME, -1)
 
         try:
+            if not location or ":" not in location:
+                logger.warning(f"Incomplete location string: {location}, defaulting to not serving")
+                return (NOT_SERVING_ONION_HOSTNAME, -1)
+
             host, port_str = location.split(":")
             port = int(port_str)
             if port <= 0 or port > 65535:
                 raise ValueError("Invalid port")
             return (host, port)
         except (ValueError, AttributeError) as e:
-            raise HandshakeError(f"Invalid location string: {location}") from e
+            logger.warning(f"Invalid location string: {location}, defaulting to not serving: {e}")
+            return (NOT_SERVING_ONION_HOSTNAME, -1)
 
     def create_rejection_response(self, reason: str) -> dict:
         return create_handshake_response(

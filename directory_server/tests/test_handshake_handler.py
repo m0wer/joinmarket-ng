@@ -138,6 +138,28 @@ def test_handshake_missing_fields(handler):
         handler.process_handshake(handshake_data, "127.0.0.1:12345")
 
 
+def test_handshake_lenient_location(handler):
+    # Test case where location-string is just a port or invalid format
+    handshake_data = json.dumps(
+        {
+            "app-name": "joinmarket",
+            "directory": False,
+            "location-string": "9050",  # Invalid format (legacy/buggy client)
+            "proto-ver": JM_VERSION,
+            "features": {},
+            "nick": "test_client",
+            "network": "mainnet",
+        }
+    )
+
+    peer_info, response = handler.process_handshake(handshake_data, "127.0.0.1:12345")
+
+    # Should default to NOT-SERVING-ONION instead of raising error
+    assert peer_info.onion_address == "NOT-SERVING-ONION"
+    assert peer_info.port == -1
+    assert response["accepted"] is True
+
+
 def test_create_rejection_response(handler):
     response = handler.create_rejection_response("Test rejection")
 

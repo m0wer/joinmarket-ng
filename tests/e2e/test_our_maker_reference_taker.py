@@ -94,8 +94,9 @@ def our_maker_reference_taker_services():
         )
 
     # Give makers extra time to sync and announce offers
+    # CI environments have more latency, especially with Tor
     logger.info("Waiting for makers to announce offers...")
-    time.sleep(30)
+    time.sleep(60)
 
     yield {
         "compose_file": compose_file,
@@ -148,8 +149,8 @@ async def test_our_makers_are_running(our_maker_reference_taker_services):
 @pytest.mark.timeout(300)
 async def test_jam_taker_can_see_our_makers(our_maker_reference_taker_services):
     """Verify that JAM taker can see offers from our makers."""
-    # Give time for orderbook sync
-    await asyncio.sleep(15)
+    # Give more time for orderbook sync in CI
+    await asyncio.sleep(45)
 
     # Check JAM logs for orderbook activity
     result = run_compose_cmd(["logs", "--tail=200", "jam"], check=False)
@@ -195,8 +196,8 @@ async def test_create_and_fund_jam_wallet(our_maker_reference_taker_services):
     funded = fund_wallet_address(address, amount_btc=1.0)
     assert funded, "Failed to fund wallet"
 
-    # Wait for confirmation
-    await asyncio.sleep(5)
+    # Wait for confirmation - give more time in CI
+    await asyncio.sleep(15)
 
     # Verify blocks were mined (fund_wallet_address mines 111 blocks to the address)
     result = run_bitcoin_cmd(["getblockcount"])
@@ -233,8 +234,8 @@ async def test_reference_taker_coinjoin_with_our_makers(
     funded = fund_wallet_address(address, 1.0)
     assert funded, "Wallet must be funded"
 
-    # Wait for wallet to sync
-    await asyncio.sleep(10)
+    # Wait for wallet to sync - extra time for CI
+    await asyncio.sleep(30)
 
     # Get destination address (from mixdepth 1 or generate new)
     dest_address = get_jam_wallet_address(wallet_name, wallet_password, mixdepth=1)

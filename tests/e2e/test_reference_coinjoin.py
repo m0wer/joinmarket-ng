@@ -35,9 +35,10 @@ from loguru import logger
 
 
 # Timeouts for reference implementation tests
-STARTUP_TIMEOUT = 180  # 3 minutes for all services to start
-COINJOIN_TIMEOUT = 300  # 5 minutes for coinjoin to complete
-WALLET_FUND_TIMEOUT = 120  # 2 minutes for wallet funding
+# CI environments have slower Tor bootstrapping, so we use generous timeouts
+STARTUP_TIMEOUT = 420  # 7 minutes for all services to start (Tor can be slow in CI)
+COINJOIN_TIMEOUT = 900  # 15 minutes for coinjoin to complete (includes Tor latency)
+WALLET_FUND_TIMEOUT = 300  # 5 minutes for wallet funding
 
 # Pre-generated deterministic onion address for our directory server
 # Keys stored in tests/e2e/reference/tor_keys/
@@ -393,8 +394,9 @@ async def test_jam_can_connect_to_directory(reference_services):
     onion = reference_services["onion_address"]
     logger.info(f"Testing jam connection to directory at {onion}")
 
-    # Give jam some time to establish connection
-    await asyncio.sleep(30)
+    # Give jam more time to establish Tor connection - CI environments are slower
+    # Tor bootstrap + circuit establishment can take 60-90s in constrained environments
+    await asyncio.sleep(90)
 
     # Check jam logs for connection
     result = run_compose_cmd(["logs", "--tail=50", "jam"], check=False)
@@ -413,6 +415,9 @@ async def test_jam_can_connect_to_directory(reference_services):
         logger.warning(f"Jam logs: {logs}")
 
     logger.info(f"Jam connection status from logs: {connection_success}")
+    assert connection_success, (
+        f"Jam failed to connect to directory. Logs: {logs[-2000:]}"
+    )
 
 
 @pytest.mark.asyncio
@@ -498,7 +503,9 @@ async def test_execute_reference_coinjoin(reference_services):
     # This is necessary because previous tests may have consumed maker UTXOs
     logger.info("Restarting makers to ensure fresh state...")
     run_compose_cmd(["restart", "maker1", "maker2"], check=False)
-    await asyncio.sleep(15)  # Wait for makers to restart and announce offers
+    await asyncio.sleep(
+        45
+    )  # Wait longer for makers to restart and announce offers in CI
 
     # Ensure bitcoin and bitcoin-jam are fully synced
     logger.info("Checking that bitcoin nodes are synced...")
@@ -552,8 +559,8 @@ async def test_execute_reference_coinjoin(reference_services):
     funded = fund_wallet_address(address, 1.0)
     assert funded, "Wallet must be funded"
 
-    # Wait for wallet sync
-    await asyncio.sleep(5)
+    # Wait for wallet sync - allow extra time in CI
+    await asyncio.sleep(15)
 
     # Get destination address (use mixdepth 1)
     dest_address = get_jam_wallet_address(wallet_name, wallet_password, 1)
