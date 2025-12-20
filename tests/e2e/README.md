@@ -419,6 +419,14 @@ See `.github/workflows/test.yaml` for details.
 - Never store real funds
 - Only for testing on regtest
 
+## Useful Debugging Commands
+
+```bash
+# View raw transaction details
+docker exec -it jm-bitcoin bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test \
+  getrawtransaction <txid> true
+```
+
 ---
 
 **Status:** E2E tests fully automated
