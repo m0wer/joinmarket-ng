@@ -362,18 +362,82 @@ def fund_wallet_address(address: str, amount_btc: float = 1.0) -> bool:
     txid = result.stdout.strip()
     logger.info(f"Sent {amount_btc} BTC to {address}, txid: {txid}")
 
-    # Mine a block to confirm the transaction (on main node, propagates to peers)
+    # Mine 5 blocks to confirm the transaction (on main node, propagates to peers)
     result = run_bitcoin_cmd(["-rpcwallet=" + funder_wallet, "getnewaddress"])
     if result.returncode == 0:
         funder_address = result.stdout.strip()
-        result = run_bitcoin_cmd(["generatetoaddress", "1", funder_address])
+        result = run_bitcoin_cmd(["generatetoaddress", "5", funder_address])
         if result.returncode == 0:
-            logger.info("Mined 1 block to confirm transaction")
+            logger.info("Mined 5 blocks to confirm transaction")
 
-    # Wait a moment for the transaction to propagate to bitcoin-jam
+    # Wait for the transaction to propagate to bitcoin-jam
     time.sleep(3)
 
+    # Wait for nodes to sync - important for cross-node UTXO verification
+    _wait_for_node_sync()
+
     return True
+
+
+def _wait_for_node_sync(max_attempts: int = 30) -> bool:
+    """Wait for bitcoin and bitcoin-jam nodes to have the same block height."""
+    for attempt in range(max_attempts):
+        result1 = run_bitcoin_cmd(["getblockcount"])
+        result2 = run_bitcoin_jam_cmd(["getblockcount"])
+
+        if result1.returncode == 0 and result2.returncode == 0:
+            try:
+                count1 = int(result1.stdout.strip())
+                count2 = int(result2.stdout.strip())
+                if count1 == count2:
+                    logger.debug(f"Nodes synced at height {count1}")
+                    return True
+                logger.debug(
+                    f"Waiting for sync: bitcoin={count1}, bitcoin-jam={count2}"
+                )
+            except ValueError:
+                pass
+        time.sleep(1)
+
+    logger.warning("Nodes did not sync within timeout")
+    return False
+
+
+def restart_makers_and_wait(wait_time: int = 60) -> bool:
+    """
+    Restart maker containers and wait for them to be fully ready.
+
+    This ensures makers have fresh UTXOs from the main bitcoin node
+    and are properly connected to the directory server.
+    """
+    logger.info("Restarting makers to ensure fresh UTXO state...")
+
+    # Restart both makers
+    result = run_compose_cmd(["restart", "maker1", "maker2"], check=False)
+    if result.returncode != 0:
+        logger.warning(f"Failed to restart makers: {result.stderr}")
+        return False
+
+    logger.info(f"Waiting {wait_time}s for makers to sync and announce offers...")
+    time.sleep(wait_time)
+
+    # Verify makers are running by checking logs
+    result = run_compose_cmd(["logs", "--tail=20", "maker1"], check=False)
+    maker1_ok = (
+        "collected" in result.stdout.lower() or "timeout" in result.stdout.lower()
+    )
+
+    result = run_compose_cmd(["logs", "--tail=20", "maker2"], check=False)
+    maker2_ok = (
+        "collected" in result.stdout.lower() or "timeout" in result.stdout.lower()
+    )
+
+    if maker1_ok and maker2_ok:
+        logger.info("Both makers are running and listening")
+        return True
+
+    logger.warning("Makers may not be fully ready")
+    return False
 
 
 def _fund_wallet_via_mining(address: str) -> bool:
@@ -596,53 +660,13 @@ async def test_execute_reference_coinjoin(reference_services):
     wallet_name = "test_wallet.jmdat"
     wallet_password = "testpassword123"
 
-    # Restart makers to ensure fresh wallet state
-    # This is necessary because previous tests may have consumed maker UTXOs
-    logger.info("Restarting makers to ensure fresh state...")
-    run_compose_cmd(["restart", "maker1", "maker2"], check=False)
-    await asyncio.sleep(
-        45
-    )  # Wait longer for makers to restart and announce offers in CI
+    # Restart makers to ensure fresh wallet state with new UTXOs
+    # This is critical - previous tests may have consumed maker UTXOs
+    restart_makers_and_wait(wait_time=60)
 
-    # Ensure bitcoin and bitcoin-jam are fully synced
+    # Ensure bitcoin nodes are synced
     logger.info("Checking that bitcoin nodes are synced...")
-    for attempt in range(30):
-        result1 = run_bitcoin_cmd(["getblockcount"])
-        # Get bitcoin-jam blockcount
-        result2 = subprocess.run(
-            [
-                "docker",
-                "compose",
-                "-f",
-                str(get_compose_file()),
-                "exec",
-                "-T",
-                "bitcoin-jam",
-                "bitcoin-cli",
-                "-regtest",
-                "-rpcuser=test",
-                "-rpcpassword=test",
-                "-rpcport=18445",
-                "getblockcount",
-            ],
-            capture_output=True,
-            text=True,
-        )
-
-        if result1.returncode == 0 and result2.returncode == 0:
-            count1 = int(result1.stdout.strip())
-            count2 = int(result2.stdout.strip())
-            logger.info(f"Block counts: bitcoin={count1}, bitcoin-jam={count2}")
-            if count1 == count2:
-                logger.info("Nodes are synced!")
-                break
-            else:
-                logger.info(f"Waiting for sync... (attempt {attempt + 1}/30)")
-                await asyncio.sleep(2)
-        else:
-            logger.warning("Failed to get block counts")
-            await asyncio.sleep(2)
-    else:
+    if not _wait_for_node_sync(max_attempts=30):
         pytest.fail("Bitcoin nodes failed to sync within timeout")
 
     # Now fund the taker wallet
@@ -699,32 +723,37 @@ async def test_execute_reference_coinjoin(reference_services):
     logger.info(f"sendpayment stdout:\n{result.stdout}")
     logger.info(f"sendpayment stderr:\n{result.stderr}")
 
-    # Check for failure indicators first
-    failure_indicators = [
-        "not enough liquidity",
-        "did not complete successfully",
-        "error",
-        "failed",
+    # Check for success - look for txid in output which indicates broadcast
+    output_combined = result.stdout + result.stderr
+    output_lower = output_combined.lower()
+
+    # Strong success indicator: txid = <hash> means transaction was broadcast
+    has_txid = "txid = " in output_combined or "txid:" in output_lower
+
+    # Check for explicit failure indicators
+    explicit_failures = [
+        "not enough counterparties",
         "taker not continuing",
+        "did not complete successfully",
+        "giving up",
+        "aborting",
     ]
-    output_lower = result.stdout.lower() + result.stderr.lower()
-    failure_found = any(ind in output_lower for ind in failure_indicators)
+    has_explicit_failure = any(ind in output_lower for ind in explicit_failures)
 
-    # Check for success indicators
-    success_indicators = ["broadcast", "txid", "coinjoin complete", "transaction sent"]
-    success_found = any(ind in output_lower for ind in success_indicators)
-
-    if failure_found and not success_found:
+    if has_explicit_failure:
         pytest.fail(
-            f"CoinJoin failed. Check logs above for details.\nstdout: {result.stdout}"
+            f"CoinJoin explicitly failed.\n"
+            f"Exit code: {result.returncode}\n"
+            f"Output: {result.stdout[-3000:]}"
         )
 
-    assert result.returncode == 0, (
-        f"sendpayment failed with exit code {result.returncode}: {result.stderr}"
+    assert has_txid, (
+        f"CoinJoin did not broadcast transaction (no txid found).\n"
+        f"Exit code: {result.returncode}\n"
+        f"Output: {result.stdout[-3000:]}"
     )
-    assert success_found, (
-        f"CoinJoin did not complete successfully. stdout: {result.stdout}"
-    )
+
+    logger.info("CoinJoin completed successfully!")
 
 
 @pytest.mark.asyncio

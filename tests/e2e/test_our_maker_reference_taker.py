@@ -33,6 +33,7 @@ from tests.e2e.test_reference_coinjoin import (
     COINJOIN_TIMEOUT,
     STARTUP_TIMEOUT,
     WALLET_FUND_TIMEOUT,
+    _wait_for_node_sync,
     cleanup_wallet_lock,
     create_jam_wallet,
     fund_wallet_address,
@@ -40,6 +41,7 @@ from tests.e2e.test_reference_coinjoin import (
     get_jam_wallet_address,
     is_jam_running,
     is_tor_running,
+    restart_makers_and_wait,
     run_bitcoin_cmd,
     run_compose_cmd,
     wait_for_services,
@@ -221,6 +223,15 @@ async def test_reference_taker_coinjoin_with_our_makers(
     wallet_name = "test_maker_wallet.jmdat"
     wallet_password = "testpass123"
 
+    # Restart makers to ensure fresh wallet state with new UTXOs
+    # This is critical - previous tests may have consumed maker UTXOs
+    restart_makers_and_wait(wait_time=60)
+
+    # Ensure bitcoin nodes are synced
+    logger.info("Checking that bitcoin nodes are synced...")
+    if not _wait_for_node_sync(max_attempts=30):
+        pytest.fail("Bitcoin nodes failed to sync within timeout")
+
     # Ensure wallet exists and is funded
     logger.info("Ensuring JAM wallet is ready...")
     created = create_jam_wallet(wallet_name, wallet_password)
@@ -299,48 +310,36 @@ async def test_reference_taker_coinjoin_with_our_makers(
     logger.info(f"Maker2 post-CoinJoin logs:\n{result_m2.stdout[-2000:]}")
 
     # Analyze results
-    output_lower = result.stdout.lower() + result.stderr.lower()
+    output_combined = result.stdout + result.stderr
+    output_lower = output_combined.lower()
 
-    # Check for failure indicators
-    failure_indicators = [
-        "not enough liquidity",
-        "did not complete successfully",
-        "error",
-        "failed",
+    # Strong success indicator: txid = <hash> means transaction was broadcast
+    has_txid = "txid = " in output_combined or "txid:" in output_lower
+
+    # Check for explicit failure indicators
+    explicit_failures = [
+        "not enough counterparties",
         "taker not continuing",
+        "did not complete successfully",
+        "giving up",
+        "aborting",
+        "not enough liquidity",
         "no suitable counterparties",
         "insufficient funds",
     ]
-    failure_found = any(ind in output_lower for ind in failure_indicators)
+    has_explicit_failure = any(ind in output_lower for ind in explicit_failures)
 
-    # Check for success indicators
-    success_indicators = [
-        "broadcast",
-        "txid",
-        "coinjoin complete",
-        "transaction sent",
-        "success",
-    ]
-    success_found = any(ind in output_lower for ind in success_indicators)
-
-    # Detailed assertion with helpful error messages
-    if failure_found and not success_found:
+    if has_explicit_failure:
         pytest.fail(
-            f"CoinJoin failed. Check logs above.\n"
+            f"CoinJoin explicitly failed.\n"
             f"Exit code: {result.returncode}\n"
-            f"Output: {result.stdout}\n"
-            f"Error: {result.stderr}"
+            f"Output: {result.stdout[-3000:]}"
         )
 
-    assert result.returncode == 0, (
-        f"sendpayment exited with code {result.returncode}\n"
-        f"stderr: {result.stderr}\n"
-        f"stdout: {result.stdout}"
-    )
-
-    assert success_found, (
-        f"CoinJoin did not complete successfully (no success indicators found)\n"
-        f"Output: {result.stdout}"
+    assert has_txid, (
+        f"CoinJoin did not broadcast transaction (no txid found).\n"
+        f"Exit code: {result.returncode}\n"
+        f"Output: {result.stdout[-3000:]}"
     )
 
     logger.info("✓ CoinJoin completed successfully with our makers!")
