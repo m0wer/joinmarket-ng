@@ -235,19 +235,12 @@ jobs:
         if: always()
 
   # ==========================================================================
-  # Full E2E + Reference tests - uses 'all' profile
-  #
-  # Profile 'all' includes:
-  # - e2e: Our maker1, maker2 + infrastructure
-  # - reference: JAM taker + tor for compatibility testing
-  # - neutrino: Neutrino light client (may not sync in regtest - tests skip)
-  #
-  # Note: Neutrino tests will skip if neutrino isn't synced (expected in regtest)
+  # E2E tests with our implementation (no reference JAM)
   # ==========================================================================
 
-  test-all-e2e:
+  test-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -265,11 +258,110 @@ jobs:
           pip install -e taker[dev]
           pip install httpx loguru pytest-asyncio pytest-timeout
 
-      - name: "Start all services (profile: all)"
+      - name: "Start e2e services"
         run: |
-          # Start everything: bitcoin, directory, makers, tor, jam, neutrino
-          # Profile 'all' includes: e2e + reference + neutrino backends
-          docker compose --profile all up -d --build
+          # Start our implementation only: bitcoin, directory, maker1, maker2
+          docker compose --profile e2e up -d --build
+
+          # Wait for Bitcoin
+          echo "Waiting for Bitcoin..."
+          for i in {1..60}; do
+            if docker compose exec -T bitcoin bitcoin-cli -chain=regtest \
+                -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo 2>/dev/null; then
+              echo "Bitcoin ready"
+              break
+            fi
+            echo "Attempt $i/60..."
+            sleep 2
+          done
+
+          # Wait for directory server
+          echo "Waiting for directory server..."
+          for i in {1..30}; do
+            if nc -z localhost 5222 2>/dev/null; then
+              echo "Directory server ready"
+              break
+            fi
+            sleep 2
+          done
+
+          # Give makers time to connect and announce offers
+          echo "Waiting for makers to connect..."
+          sleep 20
+
+          echo "E2E services ready!"
+
+      - name: Run e2e tests (our implementation only)
+        env:
+          BITCOIN_RPC_URL: http://127.0.0.1:18443
+          BITCOIN_RPC_USER: test
+          BITCOIN_RPC_PASSWORD: test
+        run: |
+          # Run e2e tests for our implementation (excludes reference tests)
+          pytest tests/e2e/test_complete_system.py --junitxml=junit/test-results.xml \
+            --cov --cov-report=term-missing --cov-report=xml \
+            -v -s --timeout=300
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "=== Docker compose status ==="
+          docker compose --profile e2e ps
+          echo ""
+          echo "=== Bitcoin logs ==="
+          docker compose logs bitcoin --tail=30
+          echo ""
+          echo "=== Directory logs ==="
+          docker compose logs directory --tail=30
+          echo ""
+          echo "=== Maker1 logs ==="
+          docker compose logs maker1 --tail=50
+          echo ""
+          echo "=== Maker2 logs ==="
+          docker compose logs maker2 --tail=50
+
+      - name: Cleanup
+        if: always()
+        run: docker compose --profile e2e down -v
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: |
+            junit/test-results.xml
+            coverage.xml
+        if: always()
+
+  # ==========================================================================
+  # Reference compatibility tests (our makers + JAM taker)
+  # Uses 'reference' profile which excludes neutrino to avoid conflicts
+  # ==========================================================================
+
+  test-reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+
+      - name: Install all dependencies
+        run: |
+          pip install -e jmcore
+          pip install -e jmwallet
+          pip install -e directory_server[dev]
+          pip install -e orderbook_watcher[dev]
+          pip install -e maker[dev]
+          pip install -e taker[dev]
+          pip install httpx loguru pytest-asyncio pytest-timeout
+
+      - name: "Start reference services"
+        run: |
+          # Start reference profile: bitcoin, directory, maker1, maker2, tor, jam
+          # Does NOT include neutrino to avoid UTXO verification issues
+          docker compose --profile reference up -d --build
 
           # Wait for Bitcoin
           echo "Waiting for Bitcoin..."
@@ -295,8 +387,8 @@ jobs:
 
           # Wait for Tor (uses pre-generated keys, should be fast)
           echo "Waiting for Tor hidden service..."
-          for i in {1..30}; do
-            if docker compose exec -T tor cat /var/lib/tor/hidden_service/directory/hostname 2>/dev/null | grep -q ".onion"; then
+          for i in {1..60}; do
+            if docker compose exec -T tor cat /var/lib/tor/directory/hostname 2>/dev/null | grep -q ".onion"; then
               echo "Tor ready"
               break
             fi
@@ -313,6 +405,111 @@ jobs:
             sleep 5
           done
 
+          # Give makers time to connect and announce offers
+          echo "Waiting for makers to connect..."
+          sleep 30
+
+          echo "Reference services ready!"
+
+      - name: Run reference compatibility tests
+        env:
+          BITCOIN_RPC_URL: http://127.0.0.1:18443
+          BITCOIN_RPC_USER: test
+          BITCOIN_RPC_PASSWORD: test
+        run: |
+          # Run reference tests with reduced timeout
+          pytest tests/e2e/test_reference_coinjoin.py tests/e2e/test_our_maker_reference_taker.py \
+            --junitxml=junit/test-results.xml \
+            --cov --cov-report=term-missing --cov-report=xml \
+            -v -s --timeout=300
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "=== Docker compose status ==="
+          docker compose --profile reference ps
+          echo ""
+          echo "=== Bitcoin logs ==="
+          docker compose logs bitcoin --tail=30
+          echo ""
+          echo "=== Directory logs ==="
+          docker compose logs directory --tail=50
+          echo ""
+          echo "=== Maker1 logs ==="
+          docker compose logs maker1 --tail=50
+          echo ""
+          echo "=== Maker2 logs ==="
+          docker compose logs maker2 --tail=50
+          echo ""
+          echo "=== Tor logs ==="
+          docker compose logs tor --tail=30
+          echo ""
+          echo "=== JAM logs ==="
+          docker compose logs jam --tail=100
+
+      - name: Cleanup
+        if: always()
+        run: docker compose --profile reference down -v
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reference-results
+          path: |
+            junit/test-results.xml
+            coverage.xml
+        if: always()
+
+  # ==========================================================================
+  # Neutrino backend tests (separate from reference tests)
+  # ==========================================================================
+
+  test-neutrino:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+
+      - name: Install all dependencies
+        run: |
+          pip install -e jmcore
+          pip install -e jmwallet
+          pip install -e directory_server[dev]
+          pip install -e orderbook_watcher[dev]
+          pip install -e maker[dev]
+          pip install -e taker[dev]
+          pip install httpx loguru pytest-asyncio pytest-timeout
+
+      - name: "Start neutrino services"
+        run: |
+          # Start neutrino profile: bitcoin, directory, neutrino, maker-neutrino
+          docker compose --profile neutrino up -d --build
+
+          # Wait for Bitcoin
+          echo "Waiting for Bitcoin..."
+          for i in {1..60}; do
+            if docker compose exec -T bitcoin bitcoin-cli -chain=regtest \
+                -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo 2>/dev/null; then
+              echo "Bitcoin ready"
+              break
+            fi
+            echo "Attempt $i/60..."
+            sleep 2
+          done
+
+          # Wait for directory server
+          echo "Waiting for directory server..."
+          for i in {1..30}; do
+            if nc -z localhost 5222 2>/dev/null; then
+              echo "Directory server ready"
+              break
+            fi
+            sleep 2
+          done
+
           # Wait for Neutrino to be ready
           echo "Waiting for Neutrino..."
           for i in {1..30}; do
@@ -323,59 +520,42 @@ jobs:
             sleep 2
           done
 
-          # Give makers time to connect and announce offers
-          echo "Waiting for makers to connect..."
-          sleep 20
+          echo "Neutrino services ready!"
 
-          echo "All services ready!"
-
-      - name: Run all e2e tests
+      - name: Run neutrino backend tests
         env:
           BITCOIN_RPC_URL: http://127.0.0.1:18443
           BITCOIN_RPC_USER: test
           BITCOIN_RPC_PASSWORD: test
           NEUTRINO_URL: http://127.0.0.1:8334
         run: |
-          # Run e2e tests with bitcoin_core backend (default)
-          # Neutrino backend tests also run via test_neutrino_backend.py
-          pytest tests/e2e --junitxml=junit/test-results.xml \
+          # Run neutrino-specific tests
+          pytest tests/e2e/test_neutrino_backend.py --junitxml=junit/test-results.xml \
             --cov --cov-report=term-missing --cov-report=xml \
-            -v -s --timeout=600
+            -v -s --timeout=180
 
       - name: Show logs on failure
         if: failure()
         run: |
           echo "=== Docker compose status ==="
-          docker compose --profile all ps
+          docker compose --profile neutrino ps
           echo ""
           echo "=== Bitcoin logs ==="
           docker compose logs bitcoin --tail=30
           echo ""
-          echo "=== Directory logs ==="
-          docker compose logs directory --tail=30
-          echo ""
-          echo "=== Maker1 logs ==="
-          docker compose logs maker1 --tail=30
-          echo ""
-          echo "=== Maker2 logs ==="
-          docker compose logs maker2 --tail=30
-          echo ""
-          echo "=== Tor logs ==="
-          docker compose logs tor --tail=30
-          echo ""
-          echo "=== JAM logs ==="
-          docker compose logs jam --tail=50
-          echo ""
           echo "=== Neutrino logs ==="
-          docker compose logs neutrino --tail=30
+          docker compose logs neutrino --tail=50
+          echo ""
+          echo "=== Maker-neutrino logs ==="
+          docker compose logs maker-neutrino --tail=50
 
       - name: Cleanup
         if: always()
-        run: docker compose --profile all down -v
+        run: docker compose --profile neutrino down -v
 
       - uses: actions/upload-artifact@v4
         with:
-          name: e2e-results
+          name: neutrino-results
           path: |
             junit/test-results.xml
             coverage.xml

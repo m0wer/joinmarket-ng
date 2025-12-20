@@ -35,9 +35,9 @@ from loguru import logger
 
 
 # Timeouts for reference implementation tests
-# CI environments have slower Tor bootstrapping, so we use generous timeouts
+# Reduced timeouts to fail faster and identify issues
 STARTUP_TIMEOUT = 420  # 7 minutes for all services to start (Tor can be slow in CI)
-COINJOIN_TIMEOUT = 900  # 15 minutes for coinjoin to complete (includes Tor latency)
+COINJOIN_TIMEOUT = 240  # 4 minutes for coinjoin to complete (reduced from 15 min)
 WALLET_FUND_TIMEOUT = 300  # 5 minutes for wallet funding
 
 # Pre-generated deterministic onion address for our directory server
@@ -646,8 +646,22 @@ async def test_complete_reference_coinjoin(reference_services):
     logger.info("Reference coinjoin setup test PASSED")
 
 
+def stop_conflicting_makers() -> None:
+    """Stop any makers that might conflict with reference tests.
+
+    The neutrino maker uses a different blockchain backend and cannot verify
+    UTXOs from the bitcoin-jam node, which causes coinjoin failures when the
+    reference taker picks it up.
+    """
+    conflicting_containers = ["jm-maker-neutrino", "jm-maker"]
+    for container in conflicting_containers:
+        result = run_compose_cmd(["stop", container], check=False)
+        if result.returncode == 0:
+            logger.info(f"Stopped conflicting maker: {container}")
+
+
 @pytest.mark.asyncio
-@pytest.mark.timeout(900)
+@pytest.mark.timeout(300)
 async def test_execute_reference_coinjoin(reference_services):
     """
     Actually execute a coinjoin using the reference taker.
@@ -655,10 +669,14 @@ async def test_execute_reference_coinjoin(reference_services):
     This test requires:
     1. Full protocol compatibility between our implementation and reference
     2. Properly funded maker wallets
-    3. Long timeout for Tor connections
+    3. Reduced timeout (300s) - if it takes longer, something is wrong
     """
     wallet_name = "test_wallet.jmdat"
     wallet_password = "testpassword123"
+
+    # Stop any conflicting makers (e.g., neutrino maker from --profile all)
+    # The neutrino maker can't verify taker UTXOs from bitcoin-jam node
+    stop_conflicting_makers()
 
     # Restart makers to ensure fresh wallet state with new UTXOs
     # This is critical - previous tests may have consumed maker UTXOs
@@ -715,9 +733,9 @@ async def test_execute_reference_coinjoin(reference_services):
 
     logger.info(f"Running sendpayment: {' '.join(cmd)}")
 
-    # This will take a while due to Tor connections
+    # Reduced timeout - if coinjoin takes longer than 240s, something is wrong
     result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=600, check=False
+        cmd, capture_output=True, text=True, timeout=240, check=False
     )
 
     logger.info(f"sendpayment stdout:\n{result.stdout}")

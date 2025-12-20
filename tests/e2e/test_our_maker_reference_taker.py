@@ -209,8 +209,22 @@ async def test_create_and_fund_jam_wallet(our_maker_reference_taker_services):
     assert block_height > 0, "No blocks mined"
 
 
+def stop_conflicting_makers() -> None:
+    """Stop any makers that might conflict with reference tests.
+
+    The neutrino maker uses a different blockchain backend and cannot verify
+    UTXOs from the bitcoin-jam node, which causes coinjoin failures when the
+    reference taker picks it up.
+    """
+    conflicting_containers = ["jm-maker-neutrino", "jm-maker"]
+    for container in conflicting_containers:
+        result = run_compose_cmd(["stop", container], check=False)
+        if result.returncode == 0:
+            logger.info(f"Stopped conflicting maker: {container}")
+
+
 @pytest.mark.asyncio
-@pytest.mark.timeout(COINJOIN_TIMEOUT * 2)
+@pytest.mark.timeout(300)
 async def test_reference_taker_coinjoin_with_our_makers(
     our_maker_reference_taker_services,
 ):
@@ -222,6 +236,10 @@ async def test_reference_taker_coinjoin_with_our_makers(
     """
     wallet_name = "test_maker_wallet.jmdat"
     wallet_password = "testpass123"
+
+    # Stop any conflicting makers (e.g., neutrino maker from --profile all)
+    # The neutrino maker can't verify taker UTXOs from bitcoin-jam node
+    stop_conflicting_makers()
 
     # Restart makers to ensure fresh wallet state with new UTXOs
     # This is critical - previous tests may have consumed maker UTXOs

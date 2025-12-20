@@ -5,40 +5,19 @@ Complete system tests with all JoinMarket components.
 ## Quick Start
 
 ```bash
-# Clean start (IMPORTANT: always use -v to reset blockchain state)
-docker compose --profile all down -v
+# Start services for your test scenario (pick one)
+docker compose --profile e2e up -d --build      # Our implementation only
+docker compose --profile reference up -d --build # Reference compatibility
+docker compose --profile neutrino up -d --build  # Neutrino backend
 
-# Start all services (includes neutrino backend)
-docker compose --profile all up -d --build
-
-# Wait for services to be ready
-echo "Waiting for Bitcoin..."
-until docker compose exec -T bitcoin bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo 2>/dev/null; do
-  sleep 2
-done
-echo "Bitcoin ready"
-
-echo "Waiting for wallet-funder to complete..."
+# Wait for services
 sleep 30
 
-echo "Waiting for Neutrino to sync..."
-until curl -s http://localhost:8334/v1/status | grep -q '"synced":true'; do
-  sleep 2
-done
-echo "Neutrino synced"
-
-# Restart makers to ensure they sync latest blockchain state
-docker compose restart maker1 maker2
-sleep 10  # Wait for makers to resync
-
-# Run tests
-pytest -lv \
-  --cov=jmcore --cov=jmwallet --cov=directory_server \
-  --cov=orderbook_watcher --cov=maker --cov=taker \
-  jmcore orderbook_watcher directory_server jmwallet maker taker tests
+# Run relevant tests
+pytest tests/e2e -v
 
 # Cleanup
-docker compose --profile all down -v
+docker compose --profile <your-profile> down -v
 ```
 
 ## Docker Compose Profiles
@@ -50,57 +29,31 @@ The unified `docker-compose.yml` uses profiles to organize services:
 | (default) | bitcoin, miner, directory, orderbook-watcher | Core infrastructure |
 | `maker` | + maker | Single maker bot |
 | `taker` | + taker | Single taker client |
-| `e2e` | + maker1, maker2 | E2E tests (our implementation) |
-| `reference` | + tor, jam, maker1, maker2 | Reference JAM compatibility tests |
-| `neutrino` | + neutrino, maker-neutrino, taker-neutrino | Light client testing |
-| `all` | e2e + reference + neutrino | **Full test suite** |
+| `e2e` | + maker1, maker2, wallet-funder | E2E tests (our implementation) |
+| `reference` | + tor, jam, bitcoin-jam, maker1, maker2 | Reference JAM compatibility |
+| `neutrino` | + neutrino, maker-neutrino, wallet-funder | Light client testing |
+| `reference-maker` | + jam-maker1, jam-maker2 | Reference makers (rarely needed) |
 
-## Running Tests
+### Important: Don't Mix Neutrino with Reference
 
-### Full Test Suite (Recommended)
+The `neutrino` and `reference` profiles should NOT be run together because:
 
-Run ALL tests including reference compatibility:
+1. The **neutrino maker** advertises offers to the directory server
+2. The **reference taker (JAM)** may pick up these offers
+3. But neutrino connects to the main `bitcoin` node, while JAM's wallet is on `bitcoin-jam`
+4. Result: neutrino maker can't verify JAM's UTXOs and the coinjoin fails
+
+**If you previously ran `--profile all`, stop the neutrino maker first:**
 
 ```bash
-# Clean start (IMPORTANT!)
-docker compose --profile all down -v
-
-# Start all services (includes neutrino)
-docker compose --profile all up -d --build
-
-# Wait for Bitcoin to be ready
-echo "Waiting for Bitcoin..."
-until docker compose exec -T bitcoin bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo 2>/dev/null; do
-  sleep 2
-done
-
-# Wait for wallet funding to complete
-echo "Waiting for wallet funding..."
-sleep 30
-
-# Wait for Neutrino to sync
-echo "Waiting for Neutrino..."
-until curl -s http://localhost:8334/v1/status | grep -q '"synced":true'; do
-  sleep 2
-done
-
-# Restart makers to ensure they have latest blockchain state
-docker compose restart maker1 maker2
-sleep 10
-
-# Run complete test suite
-pytest -lv \
-  --cov=jmcore --cov=jmwallet --cov=directory_server \
-  --cov=orderbook_watcher --cov=maker --cov=taker \
-  jmcore orderbook_watcher directory_server jmwallet maker taker tests
-
-# Cleanup
-docker compose --profile all down -v
+docker stop jm-maker-neutrino
 ```
 
-### E2E Tests Only (Faster)
+## Test Suites
 
-Tests our implementation without reference JAM:
+### 1. E2E Tests (Our Implementation)
+
+Tests our maker/taker implementation without any reference components.
 
 ```bash
 # Clean start
@@ -108,66 +61,135 @@ docker compose --profile e2e down -v
 
 # Start services
 docker compose --profile e2e up -d --build
-sleep 30  # Wait for wallet funding
 
-# Restart makers
+# Wait for services
+echo "Waiting for Bitcoin..."
+until docker compose exec -T bitcoin bitcoin-cli -chain=regtest \
+    -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo 2>/dev/null; do
+  sleep 2
+done
+
+echo "Waiting for wallet funding..."
+sleep 30
+
+# Restart makers to sync latest blockchain state
 docker compose restart maker1 maker2
 sleep 10
 
 # Run tests
-pytest tests/e2e/test_complete_system.py -v
+pytest tests/e2e/test_complete_system.py -v -s
 
 # Cleanup
 docker compose --profile e2e down -v
 ```
 
-### Reference Tests Only
+### 2. Reference Compatibility Tests
 
-Tests compatibility with upstream JoinMarket:
+Tests our makers with the reference JoinMarket taker (JAM).
 
 ```bash
 # Clean start
 docker compose --profile reference down -v
 
-# Start services
+# Start services (includes Tor for onion routing)
 docker compose --profile reference up -d --build
-sleep 30  # Wait for wallet funding
 
-# Restart our makers to ensure they have latest blockchain state
+# Wait for Bitcoin
+echo "Waiting for Bitcoin..."
+until docker compose exec -T bitcoin bitcoin-cli -chain=regtest \
+    -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo 2>/dev/null; do
+  sleep 2
+done
+
+# Wait for Tor hidden service
+echo "Waiting for Tor..."
+until docker compose exec -T tor cat /var/lib/tor/directory/hostname 2>/dev/null | grep -q ".onion"; do
+  sleep 2
+done
+
+echo "Waiting for wallet funding and JAM startup..."
+sleep 60
+
+# Restart makers to sync latest blockchain state
 docker compose restart maker1 maker2
-sleep 10
+sleep 20
 
-# Test our implementation with reference components:
-pytest tests/e2e/test_reference_coinjoin.py -v -s       # Reference maker + taker
-pytest tests/e2e/test_our_maker_reference_taker.py -v -s # Our maker + reference taker
+# Run reference tests
+pytest tests/e2e/test_reference_coinjoin.py tests/e2e/test_our_maker_reference_taker.py -v -s
 
 # Cleanup
 docker compose --profile reference down -v
 ```
 
-### Neutrino Backend Tests
+### 3. Neutrino Backend Tests
 
-Tests the neutrino light client backend:
+Tests the BIP157/158 light client backend.
 
 ```bash
 # Clean start
-docker compose --profile all down -v
+docker compose --profile neutrino down -v
 
-# Start services with neutrino
-docker compose --profile all up -d --build
-sleep 30
+# Start services
+docker compose --profile neutrino up -d --build
 
-# Wait for neutrino to sync (should happen automatically)
-until curl -s http://localhost:8334/v1/status | grep -q '"synced":true'; do
-  echo "Waiting for neutrino sync..."
-  sleep 5
+# Wait for Bitcoin
+echo "Waiting for Bitcoin..."
+until docker compose exec -T bitcoin bitcoin-cli -chain=regtest \
+    -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo 2>/dev/null; do
+  sleep 2
 done
 
+# Wait for Neutrino to sync
+echo "Waiting for Neutrino..."
+until curl -s http://localhost:8334/v1/status 2>/dev/null | grep -q '"synced":true'; do
+  echo "  Neutrino syncing..."
+  sleep 5
+done
+echo "Neutrino synced!"
+
 # Run neutrino tests
-pytest tests/e2e/test_neutrino_backend.py -v
+pytest tests/e2e/test_neutrino_backend.py -v -s
 
 # Cleanup
-docker compose --profile all down -v
+docker compose --profile neutrino down -v
+```
+
+### 4. Full Test Suite (All Unit + Integration)
+
+Run all tests including unit tests for each component:
+
+```bash
+# Start e2e profile for integration tests
+docker compose --profile e2e down -v
+docker compose --profile e2e up -d --build
+sleep 30
+docker compose restart maker1 maker2
+sleep 10
+
+# Run complete test suite
+pytest -lv \
+  --cov=jmcore --cov=jmwallet --cov=directory_server \
+  --cov=orderbook_watcher --cov=maker --cov=taker \
+  jmcore orderbook_watcher directory_server jmwallet maker taker tests/e2e/test_complete_system.py
+
+# Cleanup
+docker compose --profile e2e down -v
+```
+
+## Running Specific Tests
+
+```bash
+# Single test file
+pytest tests/e2e/test_complete_system.py -v
+
+# Single test function
+pytest tests/e2e/test_reference_coinjoin.py::test_execute_reference_coinjoin -v -s
+
+# With timeout override
+pytest tests/e2e/test_reference_coinjoin.py -v --timeout=600
+
+# Skip slow tests
+pytest tests/e2e -v -m "not slow"
 ```
 
 ## Architecture
@@ -189,17 +211,17 @@ docker compose --profile all down -v
 │  │  (auto)     │  └────────────┘  └───────────┘                       │
 │  └─────────────┘                                                      │
 │                                                                       │
-│  Neutrino Profile:                                                    │
-│  ┌──────────────┐                                                     │
-│  │   Neutrino   │ ◄── Light client (BIP157/158)                       │
-│  │   Server     │                                                     │
-│  └──────────────┘                                                     │
+│  Neutrino Profile (run separately!):                                  │
+│  ┌──────────────┐    ┌──────────────────┐                             │
+│  │   Neutrino   │◄───│  Maker-Neutrino  │                             │
+│  │   Server     │    │  (light client)  │                             │
+│  └──────────────┘    └──────────────────┘                             │
 │                                                                       │
-│  Reference Profile Only:                                              │
-│  ┌──────────────┐    ┌──────────────┐                                │
-│  │     Tor      │───►│     JAM      │                                │
-│  │   (.onion)   │    │  (Reference) │                                │
-│  └──────────────┘    └──────────────┘                                │
+│  Reference Profile (run separately!):                                 │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐            │
+│  │ Bitcoin-JAM  │◄───│     Tor      │───►│     JAM      │            │
+│  │  (legacy)    │    │   (.onion)   │    │  (Reference) │            │
+│  └──────────────┘    └──────────────┘    └──────────────┘            │
 │                                                                       │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -207,8 +229,8 @@ docker compose --profile all down -v
 ## Pre-Generated Tor Keys
 
 The reference tests use a **deterministic Tor hidden service** for reproducibility:
-- Onion address: `tsc2niuqhhnl35q4tzpyyuogcxscgxhotjrk3ldaynfsgysoctlgwxqd.onion`
-- Keys stored in: `tests/e2e/reference/tor_keys/`
+- Onion address: `5x6tavdaf6mdvckxw3jmobxmzxqnnsj3uldro5tvdlvo5hebhureysad.onion`
+- Keys stored in: `tests/e2e/reference/tor/data/directory/`
 - No dynamic configuration needed!
 
 ## Test Wallets
@@ -227,6 +249,7 @@ Pre-configured test wallet mnemonics (regtest only!):
 | Service | URL |
 |---------|-----|
 | Bitcoin RPC | http://localhost:18443 |
+| Bitcoin-JAM RPC | http://localhost:18445 (reference profile) |
 | Directory Server | localhost:5222 |
 | Orderbook Watcher | http://localhost:8080 |
 | Neutrino API | http://localhost:8334 |
@@ -254,11 +277,11 @@ curl -s http://localhost:8334/v1/status
 
 - Bitcoin Core must have `blockfilterindex=1` and `peerblockfilters=1` enabled
 - Neutrino needs P2P access to Bitcoin Core on port 18444
-- Tests will fail (not skip) if neutrino is unavailable or not synced
+- Tests will skip if neutrino is unavailable or not synced
 
 ## Troubleshooting
 
-### ⚠️ IMPORTANT: Always Clean Volumes Before Testing
+### IMPORTANT: Always Clean Volumes Before Testing
 
 **Docker volumes persist blockchain state between runs.** If you restart services without cleaning volumes, makers will have outdated wallet state and tests will fail with:
 
@@ -270,10 +293,10 @@ ERROR: outputs unconfirmed or already spent. utxo_data=[None]
 
 ```bash
 # Clean volumes
-docker compose --profile all down -v
+docker compose --profile <profile> down -v
 
 # Start fresh
-docker compose --profile all up -d --build
+docker compose --profile <profile> up -d --build
 sleep 30
 
 # Restart makers to sync latest blockchain
@@ -281,11 +304,29 @@ docker compose restart maker1 maker2
 sleep 10
 ```
 
+### Neutrino Maker Interfering with Reference Tests
+
+If reference tests fail with "Makers who didnt respond" or "UTXO not found":
+
+```bash
+# Check if neutrino maker is running
+docker ps | grep neutrino
+
+# Stop it
+docker stop jm-maker-neutrino
+
+# Re-run reference tests
+pytest tests/e2e/test_reference_coinjoin.py -v -s
+```
+
+The issue is that the neutrino maker can't verify UTXOs from the `bitcoin-jam` node.
+
 ### Check Service Status
 
 ```bash
-docker compose --profile all ps
+docker compose --profile <profile> ps
 docker compose logs <service-name>
+docker compose logs --tail=50 maker1
 ```
 
 ### Neutrino Not Syncing?
@@ -326,14 +367,24 @@ docker compose restart maker1 maker2
 
 ### Reference Tests Failing?
 
-Make sure JAM is running:
+1. Make sure JAM is running:
 ```bash
 docker compose --profile reference ps | grep jam
 ```
 
-If not running, tests should skip automatically. If they fail instead, check:
+2. Check JAM logs:
 ```bash
-docker compose --profile reference logs jam
+docker compose logs jam --tail=100
+```
+
+3. Check Tor is bootstrapped:
+```bash
+docker compose logs tor | grep -i bootstrap
+```
+
+4. Verify our makers see the directory:
+```bash
+docker compose logs maker1 | grep -i "connected\|handshake"
 ```
 
 ### Wallet Has Zero Balance
@@ -347,17 +398,21 @@ docker compose exec bitcoin bitcoin-cli -regtest -rpcuser=test -rpcpassword=test
 
 ## CI/CD
 
-The GitHub Actions workflow runs all tests automatically:
+The GitHub Actions workflow runs tests in separate jobs:
 
-1. **Unit tests**: Each component tested independently
-2. **E2E tests**: Full system integration tests
-3. **Reference tests**: Compatibility with upstream JoinMarket (main branch only)
+| Job | Profile | Tests |
+|-----|---------|-------|
+| `test-e2e` | `e2e` | `test_complete_system.py` |
+| `test-reference` | `reference` | `test_reference_coinjoin.py`, `test_our_maker_reference_taker.py` |
+| `test-neutrino` | `neutrino` | `test_neutrino_backend.py` |
+
+This separation ensures profiles don't interfere with each other.
 
 See `.github/workflows/test.yaml` for details.
 
 ## Security Notes
 
-⚠️ **These are development/test environments only!**
+**These are development/test environments only!**
 
 - Never use on mainnet
 - Never use real mnemonics
@@ -366,4 +421,4 @@ See `.github/workflows/test.yaml` for details.
 
 ---
 
-**Status:** E2E tests fully automated ✓
+**Status:** E2E tests fully automated
