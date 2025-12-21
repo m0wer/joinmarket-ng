@@ -376,6 +376,8 @@ class MakerBot:
                 await self._handle_auth(from_nick, command)
             elif command.startswith("tx"):
                 await self._handle_tx(from_nick, command)
+            elif command.startswith("push"):
+                await self._handle_push(from_nick, command)
             else:
                 logger.debug(f"Unknown command: {command[:20]}...")
 
@@ -596,6 +598,50 @@ class MakerBot:
         except Exception as e:
             logger.error(f"Failed to handle !tx: {e}")
 
+    async def _handle_push(self, taker_nick: str, msg: str) -> None:
+        """Handle !push request from taker.
+
+        The push message contains a base64-encoded signed transaction that the taker
+        wants us to broadcast. This provides privacy benefits as the taker's IP is
+        not linked to the transaction broadcast.
+
+        Per JoinMarket protocol, makers broadcast "unquestioningly" - we already
+        signed this transaction so it must be valid from our perspective. We don't
+        verify or check the result, just broadcast and move on.
+
+        Format: push <base64_transaction>
+        """
+        try:
+            import base64
+
+            parts = msg.split()
+            if len(parts) < 2:
+                logger.warning(f"Invalid !push format from {taker_nick}")
+                return
+
+            tx_b64 = parts[1]
+
+            try:
+                tx_bytes = base64.b64decode(tx_b64)
+                tx_hex = tx_bytes.hex()
+            except Exception as e:
+                logger.error(f"Failed to decode !push transaction: {e}")
+                return
+
+            logger.info(f"Received !push from {taker_nick}, broadcasting transaction...")
+
+            # Broadcast "unquestioningly" - we already signed it, so it's valid
+            # from our perspective. Don't check the result.
+            try:
+                txid = await self.backend.broadcast_transaction(tx_hex)
+                logger.info(f"Broadcast transaction for {taker_nick}: {txid}")
+            except Exception as e:
+                # Log but don't fail - the taker may have a fallback
+                logger.warning(f"Failed to broadcast !push transaction: {e}")
+
+        except Exception as e:
+            logger.error(f"Failed to handle !push: {e}")
+
     async def _send_response(self, taker_nick: str, command: str, data: dict[str, Any]) -> None:
         """Send signed response to taker.
 
@@ -714,6 +760,8 @@ class MakerBot:
                         await self._handle_auth(sender_nick, full_msg)
                     elif cmd == "tx":
                         await self._handle_tx(sender_nick, full_msg)
+                    elif cmd == "push":
+                        await self._handle_push(sender_nick, full_msg)
                     else:
                         logger.debug(f"Unknown direct command from {sender_nick}: {cmd}")
 

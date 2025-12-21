@@ -4,10 +4,27 @@ Configuration for JoinMarket Taker.
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any
 
 from jmcore.models import NetworkType, OfferType
 from pydantic import BaseModel, Field, model_validator
+
+
+class BroadcastPolicy(str, Enum):
+    """
+    Policy for how to broadcast the final CoinJoin transaction.
+
+    Privacy implications:
+    - SELF: Taker broadcasts via own node. Links taker's IP to the transaction.
+    - RANDOM_PEER: Random selection from makers + self. Provides plausible deniability.
+    - NOT_SELF: Only makers can broadcast. Maximum privacy - taker's node never touches tx.
+                WARNING: No fallback if makers fail to broadcast!
+    """
+
+    SELF = "self"
+    RANDOM_PEER = "random-peer"
+    NOT_SELF = "not-self"
 
 
 class MaxCjFee(BaseModel):
@@ -61,6 +78,17 @@ class TakerConfig(BaseModel):
     maker_timeout_sec: int = Field(default=60, ge=10)
     order_wait_time: float = Field(
         default=10.0, ge=1.0, description="Seconds to wait for orderbook"
+    )
+
+    # Broadcast policy (privacy vs reliability tradeoff)
+    tx_broadcast: BroadcastPolicy = Field(
+        default=BroadcastPolicy.RANDOM_PEER,
+        description="How to broadcast the final transaction: self, random-peer, or not-self",
+    )
+    broadcast_timeout_sec: int = Field(
+        default=30,
+        ge=5,
+        description="Timeout waiting for maker to broadcast when delegating",
     )
 
     # Advanced options

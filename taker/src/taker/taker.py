@@ -36,7 +36,7 @@ from jmwallet.wallet.signing import (
 )
 from loguru import logger
 
-from taker.config import Schedule, TakerConfig
+from taker.config import BroadcastPolicy, Schedule, TakerConfig
 from taker.orderbook import OrderbookManager, calculate_cj_fee
 from taker.podle import ExtendedPoDLECommitment, generate_podle_for_coinjoin
 from taker.tx_builder import CoinJoinTxBuilder, build_coinjoin_tx
@@ -1055,12 +1055,149 @@ class Taker:
             return []
 
     async def _phase_broadcast(self) -> str:
-        """Broadcast the signed transaction."""
+        """
+        Broadcast the signed transaction based on the configured policy.
+
+        Privacy implications:
+        - SELF: Taker broadcasts via own node. Links taker's IP to the transaction.
+        - RANDOM_PEER: Random selection from makers + self. Provides plausible deniability.
+        - NOT_SELF: Only makers can broadcast. Maximum privacy - taker's node never touches tx.
+                    WARNING: No fallback if makers fail to broadcast!
+
+        Returns:
+            Transaction ID if successful, empty string otherwise
+        """
+        import base64
+        import random
+
+        policy = self.config.tx_broadcast
+        logger.info(f"Broadcasting with policy: {policy.value}")
+
+        # Encode transaction as base64 for !push message
+        tx_b64 = base64.b64encode(self.final_tx).decode("ascii")
+
+        # Build list of broadcast candidates based on policy
+        maker_nicks = list(self.maker_sessions.keys())
+
+        if policy == BroadcastPolicy.SELF:
+            # Always broadcast via own node
+            return await self._broadcast_self()
+
+        elif policy == BroadcastPolicy.RANDOM_PEER:
+            # Random selection from makers + self
+            candidates = maker_nicks + ["self"]
+            random.shuffle(candidates)
+
+            for candidate in candidates:
+                if candidate == "self":
+                    txid = await self._broadcast_self()
+                    if txid:
+                        return txid
+                else:
+                    txid = await self._broadcast_via_maker(candidate, tx_b64)
+                    if txid:
+                        return txid
+
+            logger.error("All broadcast attempts failed")
+            return ""
+
+        elif policy == BroadcastPolicy.NOT_SELF:
+            # Only makers can broadcast - no self fallback
+            if not maker_nicks:
+                logger.error("NOT_SELF policy but no makers available")
+                return ""
+
+            random.shuffle(maker_nicks)
+
+            for maker_nick in maker_nicks:
+                txid = await self._broadcast_via_maker(maker_nick, tx_b64)
+                if txid:
+                    return txid
+
+            # No fallback for NOT_SELF - log the transaction for manual broadcast
+            logger.error(
+                "All maker broadcast attempts failed. "
+                "Transaction hex (for manual broadcast): "
+                f"{self.final_tx.hex()}"
+            )
+            return ""
+
+        else:
+            # Unknown policy, fallback to self
+            logger.warning(f"Unknown broadcast policy {policy}, falling back to self")
+            return await self._broadcast_self()
+
+    async def _broadcast_self(self) -> str:
+        """Broadcast transaction via our own backend."""
         try:
             txid = await self.backend.broadcast_transaction(self.final_tx.hex())
+            logger.info(f"Broadcast via self successful: {txid}")
             return txid
         except Exception as e:
-            logger.error(f"Broadcast failed: {e}")
+            logger.warning(f"Self-broadcast failed: {e}")
+            return ""
+
+    async def _broadcast_via_maker(self, maker_nick: str, tx_b64: str) -> str:
+        """
+        Request a maker to broadcast the transaction.
+
+        Sends !push command and waits briefly for the transaction to appear.
+        We don't expect a response from the maker - they broadcast unquestioningly.
+
+        Args:
+            maker_nick: The maker's nick to send the push request to
+            tx_b64: Base64-encoded signed transaction
+
+        Returns:
+            Transaction ID if broadcast detected, empty string otherwise
+        """
+        try:
+            logger.info(f"Requesting broadcast via maker: {maker_nick}")
+
+            # Send !push to the maker (unencrypted, like reference implementation)
+            await self.directory_client.send_privmsg(maker_nick, "!push", tx_b64)
+
+            # Wait briefly and check if the transaction was broadcast
+            # We poll mempool/blockchain for the transaction
+            await asyncio.sleep(2)  # Give maker time to broadcast
+
+            # Check if transaction is now visible
+            # Calculate the expected txid from the raw transaction
+            import hashlib
+
+            tx_hash = hashlib.sha256(hashlib.sha256(self.final_tx).digest()).digest()
+            expected_txid = tx_hash[::-1].hex()
+
+            # Try to get the transaction from our backend
+            try:
+                tx_info = await self.backend.get_transaction(expected_txid)
+                if tx_info:
+                    logger.info(
+                        f"Transaction broadcast via {maker_nick} confirmed: {expected_txid}"
+                    )
+                    return expected_txid
+            except Exception:
+                # Transaction not yet visible
+                pass
+
+            # Wait a bit more and try again
+            await asyncio.sleep(self.config.broadcast_timeout_sec - 2)
+
+            try:
+                tx_info = await self.backend.get_transaction(expected_txid)
+                if tx_info:
+                    logger.info(
+                        f"Transaction broadcast via {maker_nick} confirmed: {expected_txid}"
+                    )
+                    return expected_txid
+            except Exception:
+                pass
+
+            logger.warning(f"Broadcast via {maker_nick} not confirmed within timeout")
+            return ""
+
+        except Exception as e:
+            logger.warning(f"Broadcast via maker {maker_nick} failed: {e}")
             return ""
 
     async def run_schedule(self, schedule: Schedule) -> bool:
