@@ -620,7 +620,90 @@ The taker:
 1. Collects all maker signatures
 2. Adds their own signatures to the transaction
 3. Assembles the final witness data
-4. Broadcasts to the Bitcoin network through a maker TODO: check and update the code if necessary
+4. Broadcasts to the Bitcoin network (see broadcast policy below)
+
+#### Broadcast Policy
+
+The taker controls who broadcasts the final transaction via the `tx_broadcast` config option:
+
+| Option | Behavior | Privacy |
+|--------|----------|---------|
+| `self` | Always broadcast via taker's own node | Lower (taker IP linked to tx) |
+| `random-peer` | Random selection from all participants (makers + taker) | Higher (plausible deniability) |
+| `not-self` | Random maker only, never taker's node | Highest (taker IP never linked) |
+
+**Default**: `random-peer`
+
+#### Maker Selection for Broadcast
+
+When `random-peer` or `not-self` is configured:
+
+```python
+n = len(maker_utxo_data)  # Number of makers
+if tx_broadcast == 'random-peer':
+    i = random.randrange(n + 1)  # 0 to n (includes self at index n)
+else:
+    i = random.randrange(n)      # 0 to n-1 (excludes self)
+
+if i == n:
+    push_ourselves()  # Only possible with random-peer
+else:
+    nick_to_use = list(maker_utxo_data.keys())[i]
+```
+
+#### Broadcast Request Message
+
+The `!push` command requests a maker to broadcast:
+
+```
+!push <base64_encoded_transaction>
+```
+
+- **Command**: `!push`
+- **Mode**: Private message (not encrypted)
+- **Payload**: Base64-encoded raw transaction bytes
+
+#### Maker Broadcast Handling
+
+Makers broadcast "unquestioningly" without verification:
+
+```python
+def on_push_tx(self, nick, tx):
+    """Broadcast unquestioningly"""
+    bc_interface.pushtx(tx)
+```
+
+**Rationale**: The maker already signed this transaction, so it's valid from their perspective. Whether the broadcast succeeds or propagates is not the maker's concern.
+
+#### Fallback Mechanism
+
+If the chosen maker fails to broadcast (transaction not seen on network within timeout):
+
+1. **Timeout**: Configurable via `unconfirm_timeout_sec` (default: ~60 seconds)
+2. **Detection**: Taker monitors for `unconfirm_callback` trigger
+3. **Fallback behavior by policy**:
+   - `random-peer`: Falls back to self-broadcast via taker's own node
+   - `not-self`: Transaction NOT broadcast; user must manually broadcast the hex from logs
+   - `self`: N/A (always self-broadcasts initially)
+
+```python
+def handle_unbroadcast_transaction(self, txid, tx):
+    if config.get('POLICY', 'tx_broadcast') == "not-self":
+        # Warn user but do NOT broadcast
+        log.warn("Transaction is NOT broadcast. Manual broadcast required.")
+        return
+    # Fall back to self-broadcast
+    push_ourselves()
+```
+
+#### Privacy Considerations
+
+Broadcasting through a random maker provides privacy because:
+- Taker's IP address is not associated with the transaction at the network level
+- An external observer cannot determine which participant broadcast
+- With `not-self`, the taker's node never touches the final transaction
+
+**Trade-off**: Using `not-self` requires trusting makers to broadcast. If all selected makers fail or refuse, the taker must manually broadcast, potentially compromising privacy.
 
 ### Implementation Reference
 
