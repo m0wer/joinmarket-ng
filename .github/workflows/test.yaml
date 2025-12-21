@@ -32,6 +32,7 @@ on:
 jobs:
   # ==========================================================================
   # Unit tests - run in parallel for speed (no Docker needed)
+  # Uses default marker filter '-m "not docker"' from pytest.ini
   # ==========================================================================
 
   test-jmcore:
@@ -236,6 +237,7 @@ jobs:
 
   # ==========================================================================
   # E2E tests with our implementation (no reference JAM)
+  # Uses pytest marker: -m e2e
   # ==========================================================================
 
   test-e2e:
@@ -335,6 +337,7 @@ jobs:
   # ==========================================================================
   # Reference compatibility tests (our makers + JAM taker)
   # Uses 'reference' profile which excludes neutrino to avoid conflicts
+  # Uses pytest marker: -m reference
   # ==========================================================================
 
   test-reference:
@@ -460,6 +463,7 @@ jobs:
 
   # ==========================================================================
   # Neutrino backend tests (separate from reference tests)
+  # Uses pytest marker: -m neutrino
   # ==========================================================================
 
   test-neutrino:
