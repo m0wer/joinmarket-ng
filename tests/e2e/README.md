@@ -208,14 +208,28 @@ pytest -m "" -v
 
 ### Available Markers
 
+The following pytest markers are configured in `pytest.ini`:
+
 | Marker | Docker Profile | Description |
 |--------|----------------|-------------|
-| `docker` | Any | Base marker for any Docker-dependent test |
-| `e2e` | `e2e` | Our implementation only (maker1, maker2) |
-| `reference` | `reference` | JAM compatibility tests (Tor, JAM) |
-| `neutrino` | `neutrino` | Light client backend tests |
-| `reference_maker` | `reference-maker` | Reference maker + our taker |
-| `slow` | - | Long-running tests (any profile) |
+| `slow` | - | Marks tests as slow (deselect with `-m "not slow"`) |
+| `docker` | Any | Marks tests requiring any Docker services (auto-excluded by default) |
+| `e2e` | `e2e` | Marks tests requiring Docker e2e profile (our implementation only) |
+| `reference` | `reference` | Marks tests requiring Docker reference profile (JAM compatibility) |
+| `neutrino` | `neutrino` | Marks tests requiring Docker neutrino profile (light client) |
+| `reference_maker` | `reference-maker` | Marks tests requiring Docker reference-maker profile |
+
+Additional markers from pytest plugins:
+- `anyio`: Mark coroutine function test to be run asynchronously via anyio
+- `asyncio`: Mark test as a coroutine, runs using an asyncio event loop
+- `timeout(timeout, ...)`: Set timeout for a single test (see pytest-timeout docs)
+- `no_cover`: Disable coverage for this test
+- `filterwarnings(warning)`: Add a warning filter to the test
+- `skip(reason=None)`: Skip test with optional reason
+- `skipif(condition, *, reason=...)`: Skip test if condition is True
+- `xfail(condition, *, reason=..., run=True, raises=None, strict=False)`: Mark test as expected failure
+- `parametrize(argnames, argvalues)`: Call test multiple times with different arguments
+- `usefixtures(fixturename1, ...)`: Mark tests as needing specified fixtures
 
 ### Running Specific Test Files
 
@@ -443,17 +457,26 @@ The GitHub Actions workflow runs tests in separate jobs using pytest markers:
 
 | Job | Profile | Marker | Description |
 |-----|---------|--------|-------------|
-| `test-jmcore`, `test-taker`, etc. | None | `-m "not docker"` | Unit tests (no Docker) |
+| `test-jmcore`, `test-taker`, etc. | None | `-m "not docker"` (default) | Unit tests (no Docker) |
 | `test-e2e` | `e2e` | `-m e2e` | Our implementation |
 | `test-reference` | `reference` | `-m reference` | JAM compatibility |
 | `test-neutrino` | `neutrino` | `-m neutrino` | Light client tests |
 
+**Marker Details:**
+- `slow`: Long-running tests, can be excluded with `-m "not slow"`
+- `docker`: Auto-excluded by default via `pytest.ini` (`-m "not docker"`)
+- `e2e`: Requires e2e Docker profile (our maker/taker implementation)
+- `reference`: Requires reference Docker profile (JAM compatibility tests)
+- `neutrino`: Requires neutrino Docker profile (BIP157/158 light client)
+- `reference_maker`: Requires reference-maker profile (reference makers + our taker)
+
 **Key Points:**
 - Unit tests run by default without Docker (markers auto-exclude Docker tests)
-- Docker tests use profile-specific markers
+- Docker tests use profile-specific markers to match the running services
 - Tests are skipped if the required Docker services aren't running
+- All markers are defined in `pytest.ini`
 
-See `.github/workflows/test.yaml` for details.
+See `.github/workflows/test.yaml` for implementation details.
 
 ## Security Notes
 
