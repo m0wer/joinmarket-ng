@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import contextlib
 import json
 import struct
 from collections.abc import Callable
@@ -184,6 +185,7 @@ class DirectoryClient:
     async def connect(self) -> None:
         """Connect to the directory server and perform handshake."""
         try:
+            logger.debug(f"DirectoryClient.connect: connecting to {self.host}:{self.port}")
             if not self.host.endswith(".onion"):
                 self.connection = await connect_direct(
                     self.host,
@@ -191,6 +193,7 @@ class DirectoryClient:
                     self.max_message_size,
                     self.timeout,
                 )
+                logger.debug("DirectoryClient.connect: direct connection established")
             else:
                 self.connection = await connect_via_tor(
                     self.host,
@@ -200,9 +203,17 @@ class DirectoryClient:
                     self.max_message_size,
                     self.timeout,
                 )
+                logger.debug("DirectoryClient.connect: tor connection established")
+            logger.debug("DirectoryClient.connect: starting handshake")
             await self._handshake()
+            logger.debug("DirectoryClient.connect: handshake complete")
         except Exception as e:
-            logger.error(f"Failed to connect to {self.host}:{self.port}: {e}")
+            logger.error(f"Failed to connect to {self.host}:{self.port}: {e}", exc_info=True)
+            # Clean up connection if handshake failed
+            if self.connection:
+                with contextlib.suppress(Exception):
+                    await self.connection.close()
+                self.connection = None
             raise DirectoryClientError(f"Connection failed: {e}") from e
 
     async def _handshake(self) -> None:
@@ -230,14 +241,18 @@ class DirectoryClient:
             directory=False,
             neutrino_compat=self.neutrino_compat,
         )
+        logger.debug(f"DirectoryClient._handshake: created handshake data: {handshake_data}")
         handshake_msg = {
             "type": MessageType.HANDSHAKE.value,
             "line": json.dumps(handshake_data),
         }
+        logger.debug("DirectoryClient._handshake: sending handshake message")
         await self.connection.send(json.dumps(handshake_msg).encode("utf-8"))
+        logger.debug("DirectoryClient._handshake: handshake sent, waiting for response")
 
         # Receive and parse directory's response
         response_data = await asyncio.wait_for(self.connection.receive(), timeout=self.timeout)
+        logger.debug(f"DirectoryClient._handshake: received response: {response_data[:200]}")
         response = json.loads(response_data.decode("utf-8"))
 
         if response["type"] not in (MessageType.HANDSHAKE.value, MessageType.DN_HANDSHAKE.value):

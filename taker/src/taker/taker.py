@@ -23,7 +23,7 @@ from jmcore.crypto import generate_jm_nick
 from jmcore.directory_client import DirectoryClient
 from jmcore.encryption import CryptoSession
 from jmcore.models import Offer
-from jmcore.protocol import JM_VERSION, parse_utxo_list
+from jmcore.protocol import JM_VERSION, is_v6_nick, parse_utxo_list
 from jmwallet.backends.base import BlockchainBackend
 from jmwallet.wallet.models import UTXOInfo
 from jmwallet.wallet.service import WalletService
@@ -350,9 +350,15 @@ class Taker:
             self.state = TakerState.SELECTING_MAKERS
             logger.info(f"Selecting {n_makers} makers for {self.cj_amount:,} sats...")
 
+            # If using neutrino backend, only select v6 makers (they can send extended UTXO format)
+            min_nick_version = 6 if self.backend.requires_neutrino_metadata() else None
+            if min_nick_version:
+                logger.info("Neutrino backend: filtering for v6 makers only")
+
             selected_offers, total_fee = self.orderbook_manager.select_makers(
                 cj_amount=self.cj_amount,
                 n=n_makers,
+                min_nick_version=min_nick_version,
             )
 
             if len(selected_offers) < self.config.minimum_makers:
@@ -532,40 +538,44 @@ class Taker:
         if not self.podle_commitment:
             return False
 
-        # Check if we need extended format for Neutrino backend
-        use_extended_format = (
-            self.backend.requires_neutrino_metadata()
-            and self.podle_commitment.has_neutrino_metadata()
-        )
+        # Send !auth to each maker with format based on their protocol version (nick).
+        # - J6 makers: Send extended format (txid:vout:scriptpubkey:blockheight)
+        # - J5 makers: Send legacy format (txid:vout)
+        #
+        # This ensures backward compatibility with JAM (v5) while enabling extended
+        # format for our v6 implementation that supports Neutrino backends.
+        has_metadata = self.podle_commitment.has_neutrino_metadata()
 
-        # Create pipe-separated revelation format expected by maker:
-        # Legacy (v5): txid:vout|P|P2|sig|e
-        # Extended (v6): txid:vout:scriptpubkey:blockheight|P|P2|sig|e
-        revelation = self.podle_commitment.to_revelation(extended=use_extended_format)
-        revelation_str = "|".join(
-            [
-                revelation["utxo"],
-                revelation["P"],
-                revelation["P2"],
-                revelation["sig"],
-                revelation["e"],
-            ]
-        )
-
-        if use_extended_format:
-            logger.debug("Using extended UTXO format in !auth for Neutrino compatibility")
-
-        # Send !auth to all makers with ENCRYPTED revelation
         for nick, session in self.maker_sessions.items():
             if session.crypto is None:
                 logger.error(f"No encryption session for {nick}")
                 continue
 
-            # Encrypt the revelation
+            # Determine format based on maker's nick version
+            use_extended = has_metadata and is_v6_nick(nick)
+            revelation = self.podle_commitment.to_revelation(extended=use_extended)
+
+            # Create pipe-separated revelation format:
+            # Legacy (v5): txid:vout|P|P2|sig|e
+            # Extended (v6): txid:vout:scriptpubkey:blockheight|P|P2|sig|e
+            revelation_str = "|".join(
+                [
+                    revelation["utxo"],
+                    revelation["P"],
+                    revelation["P2"],
+                    revelation["sig"],
+                    revelation["e"],
+                ]
+            )
+
+            if use_extended:
+                logger.debug(f"Sending extended UTXO format to v6 maker {nick}")
+            else:
+                logger.debug(f"Sending legacy UTXO format to v5 maker {nick}")
+
+            # Encrypt and send
             encrypted_revelation = session.crypto.encrypt(revelation_str)
-            auth_data = f"{encrypted_revelation}"
-            await self.directory_client.send_privmsg(nick, "!auth", auth_data)
-            logger.debug(f"Sent encrypted !auth to {nick}")
+            await self.directory_client.send_privmsg(nick, "!auth", encrypted_revelation)
 
         # Wait for all !ioauth responses at once
         timeout = self.config.maker_timeout_sec

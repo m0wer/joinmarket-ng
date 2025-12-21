@@ -23,6 +23,7 @@ import pytest_asyncio
 from jmcore.models import NetworkType
 from jmwallet.backends.neutrino import NeutrinoBackend
 from jmwallet.wallet.service import WalletService
+from loguru import logger
 from maker.bot import MakerBot
 from maker.config import MakerConfig
 from taker.config import TakerConfig
@@ -135,7 +136,7 @@ class TestNeutrinoWalletIntegration:
         # Sync should complete without error
         await neutrino_wallet.sync()
         # Balance may be 0 if wallet hasn't received funds
-        balance = await neutrino_wallet.get_balance()
+        balance = await neutrino_wallet.get_total_balance()
         assert balance >= 0
 
     async def test_derive_addresses(self, neutrino_wallet):
@@ -180,7 +181,7 @@ class TestNeutrinoMaker:
         )
 
         # Just verify initialization works
-        bot = MakerBot(config=config, wallet=wallet)
+        bot = MakerBot(wallet=wallet, backend=neutrino_backend, config=config)
         assert bot is not None
 
 
@@ -214,7 +215,7 @@ class TestNeutrinoTaker:
             network=NetworkType.REGTEST,
         )
 
-        taker = Taker(config=config, wallet=wallet)
+        taker = Taker(wallet=wallet, backend=neutrino_backend, config=config)
         assert taker is not None
 
 
@@ -278,20 +279,391 @@ class TestNeutrinoCoinJoin:
     """
 
     @pytest.mark.slow
-    async def test_coinjoin_with_neutrino_maker(
-        self, neutrino_backend, require_docker_services
-    ):
+    async def test_coinjoin_with_neutrino_maker(self, neutrino_backend):
         """Test that a maker using neutrino can participate in CoinJoin.
 
-        This is a placeholder for the full integration test.
-        The actual implementation depends on having the full Docker
-        infrastructure running with funded wallets.
+        This test verifies:
+        - Neutrino backend is operational
+        - Docker neutrino maker (jm-maker-neutrino) is running and has offers
+        - Taker can initiate CoinJoin with the neutrino-based maker
+        - Complete CoinJoin transaction succeeds
+
+        Requires: docker compose --profile neutrino up -d
         """
+        import asyncio
+        import subprocess
+
+        from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
+        from tests.e2e.rpc_utils import ensure_wallet_funded, mine_blocks
+
         # Verify neutrino is synced
         height = await neutrino_backend.get_block_height()
-        assert height > 100, "Need sufficient blockchain height for coinbase maturity"
+        if height < 100:
+            pytest.skip("Need sufficient blockchain height for coinbase maturity")
 
-        # This test would orchestrate a full CoinJoin, but we skip the
-        # actual execution to avoid test infrastructure complexity.
-        # The important thing is that neutrino backend initializes correctly.
-        pytest.skip("Full CoinJoin test requires manual verification")
+        # Check if Docker neutrino maker is running
+        try:
+            result = subprocess.run(
+                ["docker", "inspect", "-f", "{{.State.Running}}", "jm-maker-neutrino"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.stdout.strip() != "true":
+                pytest.skip(
+                    "Docker neutrino maker not running. Start with: "
+                    "docker compose --profile neutrino up -d"
+                )
+        except (
+            subprocess.TimeoutExpired,
+            FileNotFoundError,
+            subprocess.CalledProcessError,
+        ):
+            pytest.skip("Docker not available or neutrino maker not running")
+
+        # Create Bitcoin Core backend for taker
+        bitcoin_backend = BitcoinCoreBackend(
+            rpc_url="http://127.0.0.1:18443",
+            rpc_user="test",
+            rpc_password="test",
+        )
+
+        try:
+            # Verify Bitcoin Core is available
+            core_height = await bitcoin_backend.get_block_height()
+            logger.info(
+                f"Bitcoin Core height: {core_height}, Neutrino height: {height}"
+            )
+        except Exception as e:
+            pytest.skip(f"Bitcoin Core not available: {e}")
+
+        # Create taker wallet with Bitcoin Core backend
+        taker_wallet = WalletService(
+            mnemonic=TAKER_MNEMONIC,
+            backend=bitcoin_backend,
+            network=NetworkType.REGTEST,
+        )
+
+        # Sync taker wallet
+        logger.info("Syncing taker wallet (bitcoin core)...")
+        await taker_wallet.sync()
+        taker_balance = await taker_wallet.get_total_balance()
+        logger.info(f"Taker balance: {taker_balance:,} sats")
+
+        # Fund taker wallet if needed
+        min_balance = 100_000_000  # 1 BTC minimum
+        if taker_balance < min_balance:
+            logger.info("Funding taker wallet...")
+            taker_addr = taker_wallet.get_new_address(mixdepth=0)
+            logger.info(f"Taker address for funding: {taker_addr}")
+            funded = await ensure_wallet_funded(taker_addr, confirmations=2)
+            if funded:
+                await taker_wallet.sync()
+                taker_balance = await taker_wallet.get_total_balance()
+                logger.info(f"Taker balance after funding: {taker_balance:,} sats")
+
+        # Verify we have enough funds
+        if taker_balance < min_balance:
+            await taker_wallet.close()
+            await bitcoin_backend.close()
+            pytest.skip(
+                f"Taker needs at least {min_balance:,} sats, has {taker_balance:,} sats"
+            )
+
+        # Mine some blocks to ensure coinbase maturity
+        logger.info("Mining blocks for coinbase maturity...")
+        await mine_blocks(10, "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080")
+
+        # Create taker with Bitcoin Core backend
+        # Note: Uses TESTNET for protocol network (directory handshakes) but
+        # wallet was created with REGTEST for bitcoin address generation
+        taker_config = TakerConfig(
+            mnemonic=TAKER_MNEMONIC,
+            network=NetworkType.TESTNET,  # Protocol network for directory server
+            directory_servers=["127.0.0.1:5222"],
+            coinjoin_amount=50_000_000,  # 0.5 BTC
+            counterparty_count=1,  # Only need 1 maker for this test
+            minimum_makers=1,  # Allow single maker CoinJoin
+        )
+
+        taker = Taker(
+            wallet=taker_wallet,
+            backend=bitcoin_backend,
+            config=taker_config,
+        )
+
+        try:
+            # Start taker
+            logger.info("Starting taker with Bitcoin Core backend...")
+            await taker.start()
+
+            # Wait for directory server and makers to be ready
+            await asyncio.sleep(5)
+
+            # Fetch orderbook
+            logger.info("Fetching orderbook...")
+            offers = await taker.directory_client.fetch_orderbook(timeout=15.0)
+            logger.info(f"Found {len(offers)} offers in orderbook")
+
+            if len(offers) < 1:
+                logger.warning("No offers found from neutrino maker")
+                pytest.skip(
+                    "No offers available. Ensure jm-maker-neutrino container is running "
+                    "and has funds"
+                )
+
+            # Filter for neutrino maker offers (if we can identify them)
+            logger.info(f"Available offers: {[o.counterparty for o in offers]}")
+
+            # Update orderbook
+            taker.orderbook_manager.update_offers(offers)
+
+            # Get destination address
+            dest_address = taker_wallet.get_new_address(mixdepth=1)
+            logger.info(f"Destination address: {dest_address}")
+
+            # Execute CoinJoin
+            cj_amount = 20_000_000  # 0.2 BTC
+            logger.info(f"Initiating CoinJoin for {cj_amount:,} sats...")
+
+            txid = await taker.do_coinjoin(
+                amount=cj_amount,
+                destination=dest_address,
+                mixdepth=0,
+                counterparty_count=1,
+            )
+
+            # Verify success
+            if txid:
+                logger.info(f"CoinJoin successful! txid: {txid}")
+
+                # Mine blocks to confirm
+                await mine_blocks(1, dest_address)
+
+                # Verify on Bitcoin Core
+                logger.info("Verifying transaction on Bitcoin Core...")
+                tx_info = await bitcoin_backend.get_transaction(txid)
+                assert tx_info is not None, "Transaction should exist on Bitcoin Core"
+
+                logger.info(
+                    "CoinJoin with neutrino-based maker completed successfully!"
+                )
+            else:
+                pytest.fail("CoinJoin failed to return a txid")
+
+        finally:
+            # Cleanup
+            logger.info("Stopping taker...")
+            await taker.stop()
+            await taker_wallet.close()
+            await bitcoin_backend.close()
+
+    @pytest.mark.slow
+    async def test_coinjoin_with_neutrino_taker(self, neutrino_backend):
+        """Test that a taker using neutrino can initiate CoinJoin.
+
+        This test verifies:
+        - Neutrino backend works for taker operations
+        - Taker can sync wallet, select UTXOs, and build transactions with neutrino
+        - Complete CoinJoin transaction succeeds with neutrino-based taker
+        - Docker Bitcoin Core maker is running and can participate
+
+        This complements test_coinjoin_with_neutrino_maker by testing the
+        opposite configuration: neutrino taker + Bitcoin Core maker.
+
+        Requires: docker compose --profile neutrino up -d (for both neutrino backend
+        and jm-maker1/jm-maker2 makers)
+        """
+        import asyncio
+        import subprocess
+
+        from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
+        from tests.e2e.rpc_utils import ensure_wallet_funded, mine_blocks
+
+        # Verify neutrino is synced
+        height = await neutrino_backend.get_block_height()
+        if height < 100:
+            pytest.skip("Need sufficient blockchain height for coinbase maturity")
+
+        # Check if Docker makers are running (we'll use Bitcoin Core-based makers)
+        try:
+            result = subprocess.run(
+                ["docker", "inspect", "-f", "{{.State.Running}}", "jm-maker1"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.stdout.strip() != "true":
+                pytest.skip(
+                    "Docker maker1 not running. Start with: "
+                    "docker compose --profile e2e up -d"
+                )
+        except (
+            subprocess.TimeoutExpired,
+            FileNotFoundError,
+            subprocess.CalledProcessError,
+        ):
+            pytest.skip("Docker not available or makers not running")
+
+        logger.info("Docker makers are running, proceeding with neutrino taker test")
+
+        # Create taker wallet with neutrino backend
+        taker_wallet = WalletService(
+            mnemonic=TAKER_MNEMONIC,
+            backend=neutrino_backend,
+            network=NetworkType.REGTEST,
+        )
+
+        # Sync taker wallet
+        logger.info("Syncing taker wallet (neutrino)...")
+        await taker_wallet.sync()
+        taker_balance = await taker_wallet.get_total_balance()
+        logger.info(f"Taker balance: {taker_balance:,} sats")
+
+        # Fund taker wallet if needed
+        min_balance = 100_000_000  # 1 BTC minimum
+        if taker_balance < min_balance:
+            logger.info("Funding taker wallet with neutrino backend...")
+            taker_addr = taker_wallet.get_new_address(mixdepth=0)
+            logger.info(f"Taker address for funding: {taker_addr}")
+            funded = await ensure_wallet_funded(taker_addr, confirmations=2)
+            if funded:
+                # Give neutrino time to sync the new blocks
+                logger.info("Waiting for neutrino to sync new blocks...")
+                await asyncio.sleep(10)
+
+                # Re-sync wallet multiple times if needed
+                for i in range(5):
+                    await taker_wallet.sync()
+                    taker_balance = await taker_wallet.get_total_balance()
+                    logger.info(
+                        f"Taker balance after funding (attempt {i + 1}): {taker_balance:,} sats"
+                    )
+                    if taker_balance >= min_balance:
+                        break
+                    logger.info("Balance still low, waiting and retrying...")
+                    await asyncio.sleep(5)
+
+        # Verify we have enough funds
+        if taker_balance < min_balance:
+            await taker_wallet.close()
+            pytest.skip(
+                f"Taker needs at least {min_balance:,} sats, has {taker_balance:,} sats. "
+                "Neutrino backend may need more time to sync, or funding failed."
+            )
+
+        logger.info(
+            f"Taker wallet funded with {taker_balance:,} sats via neutrino backend"
+        )
+
+        # Mine some blocks to ensure coinbase maturity for makers
+        logger.info("Mining blocks for coinbase maturity...")
+        await mine_blocks(10, "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080")
+
+        # Create taker with neutrino backend
+        # Note: Uses TESTNET for protocol network (directory handshakes)
+        taker_config = TakerConfig(
+            mnemonic=TAKER_MNEMONIC,
+            network=NetworkType.TESTNET,  # Protocol network for directory server
+            directory_servers=["127.0.0.1:5222"],
+            coinjoin_amount=50_000_000,  # 0.5 BTC
+            counterparty_count=1,  # Only need 1 maker for this test
+            minimum_makers=1,  # Allow single maker CoinJoin
+        )
+
+        taker = Taker(
+            wallet=taker_wallet,
+            backend=neutrino_backend,
+            config=taker_config,
+        )
+
+        try:
+            # Start taker
+            logger.info("Starting taker with neutrino backend...")
+            await taker.start()
+
+            # Wait for directory server and makers to be ready
+            await asyncio.sleep(5)
+
+            # Fetch orderbook
+            logger.info("Fetching orderbook...")
+            offers = await taker.directory_client.fetch_orderbook(timeout=15.0)
+            logger.info(f"Found {len(offers)} offers in orderbook")
+
+            if len(offers) < 1:
+                logger.warning("No offers found from makers")
+                pytest.skip(
+                    "No offers available. Ensure Docker makers are running and have funds"
+                )
+
+            # Log available offers
+            logger.info(f"Available offers: {[o.counterparty for o in offers]}")
+
+            # Update orderbook
+            taker.orderbook_manager.update_offers(offers)
+
+            # Get destination address (using neutrino backend)
+            dest_address = taker_wallet.get_new_address(mixdepth=1)
+            logger.info(f"Destination address (neutrino): {dest_address}")
+
+            # Execute CoinJoin with neutrino taker
+            cj_amount = 20_000_000  # 0.2 BTC
+            logger.info(
+                f"Initiating CoinJoin for {cj_amount:,} sats with neutrino taker..."
+            )
+
+            txid = await taker.do_coinjoin(
+                amount=cj_amount,
+                destination=dest_address,
+                mixdepth=0,
+                counterparty_count=1,
+            )
+
+            # Verify success
+            if txid:
+                logger.info(f"CoinJoin successful with neutrino taker! txid: {txid}")
+
+                # Mine blocks to confirm
+                await mine_blocks(1, dest_address)
+
+                # Verify transaction using Bitcoin Core for comparison
+                bitcoin_backend = BitcoinCoreBackend(
+                    rpc_url="http://127.0.0.1:18443",
+                    rpc_user="test",
+                    rpc_password="test",
+                )
+                try:
+                    logger.info("Verifying transaction on Bitcoin Core...")
+                    tx_info = await bitcoin_backend.get_transaction(txid)
+                    assert tx_info is not None, (
+                        "Transaction should exist on Bitcoin Core"
+                    )
+                    logger.info(
+                        f"Transaction confirmed on Bitcoin Core: {tx_info.confirmations} confirmations"
+                    )
+                finally:
+                    await bitcoin_backend.close()
+
+                # Verify on neutrino backend
+                logger.info("Waiting for neutrino to sync new block...")
+                await asyncio.sleep(5)
+                neutrino_height = await neutrino_backend.get_block_height()
+                logger.info(f"Neutrino height after CoinJoin: {neutrino_height}")
+
+                # Re-sync taker wallet to see the new balance
+                logger.info("Re-syncing taker wallet after CoinJoin...")
+                await taker_wallet.sync()
+                new_balance = await taker_wallet.get_total_balance()
+                logger.info(f"Taker new balance: {new_balance:,} sats")
+
+                logger.info(
+                    "CoinJoin with neutrino-based taker completed successfully! ✓"
+                )
+            else:
+                pytest.fail("CoinJoin failed to return a txid")
+
+        finally:
+            # Cleanup
+            logger.info("Stopping taker...")
+            await taker.stop()
+            await taker_wallet.close()

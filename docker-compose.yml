@@ -608,6 +608,7 @@ services:
       - all
 
   # Maker with neutrino backend
+  # Uses the same mnemonic as maker1 so it gets funded by wallet-funder
   maker-neutrino:
     build:
       context: .
@@ -615,7 +616,7 @@ services:
     container_name: jm-maker-neutrino
     restart: "no"
     environment:
-      - MNEMONIC=${MAKER_NEUTRINO_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
+      - MNEMONIC=avoid whisper mesh corn already blur sudden fine planet chicken hover sniff
       - NETWORK=testnet
       - BITCOIN_NETWORK=regtest
       - BACKEND_TYPE=neutrino

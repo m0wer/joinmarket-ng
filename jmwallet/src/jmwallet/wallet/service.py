@@ -381,6 +381,15 @@ class WalletService:
 
         return max_index + 1
 
+    async def sync(self) -> dict[int, list[UTXOInfo]]:
+        """Sync wallet (alias for sync_all for backward compatibility)."""
+        return await self.sync_all()
+
+    def get_new_address(self, mixdepth: int) -> str:
+        """Get next unused receive address for a mixdepth."""
+        next_index = self.get_next_address_index(mixdepth, 0)
+        return self.get_receive_address(mixdepth, next_index)
+
     async def close(self) -> None:
         """Close backend connection"""
         await self.backend.close()

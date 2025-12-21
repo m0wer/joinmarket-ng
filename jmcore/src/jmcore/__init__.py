@@ -26,6 +26,8 @@ from jmcore.protocol import (
     ProtocolMessage,
     UTXOMetadata,
     format_utxo_list,
+    get_nick_version,
+    is_v6_nick,
     parse_utxo_list,
     peer_supports_neutrino_compat,
 )
@@ -48,6 +50,8 @@ __all__ = [
     "deserialize_revelation",
     "format_utxo_list",
     "generate_podle",
+    "get_nick_version",
+    "is_v6_nick",
     "parse_podle_revelation",
     "parse_utxo_list",
     "peer_supports_neutrino_compat",

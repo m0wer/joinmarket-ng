@@ -76,6 +76,9 @@ class NeutrinoBackend(BlockchainBackend):
         self._filter_header_tip: int = 0
         self._synced: bool = False
 
+        # Track if we've done the initial rescan
+        self._initial_rescan_done: bool = False
+
     async def _api_call(
         self,
         method: str,
@@ -179,6 +182,9 @@ class NeutrinoBackend(BlockchainBackend):
 
         Neutrino will scan the blockchain using compact block filters
         to find transactions relevant to the watched addresses.
+
+        On first call, triggers a full blockchain rescan from genesis to ensure
+        all historical UTXOs are found (critical for wallets funded before neutrino started).
         """
         utxos: list[UTXO] = []
 
@@ -186,8 +192,37 @@ class NeutrinoBackend(BlockchainBackend):
         for address in addresses:
             await self.add_watch_address(address)
 
-        # Wait a moment for filter matching to complete
-        await asyncio.sleep(0.5)
+        # On first UTXO query, trigger a full blockchain rescan to find existing UTXOs
+        # This is critical for wallets that were funded before neutrino was watching them
+        logger.debug(
+            f"get_utxos: _initial_rescan_done={self._initial_rescan_done}, "
+            f"watched_addresses={len(self._watched_addresses)}"
+        )
+        if not self._initial_rescan_done and self._watched_addresses:
+            logger.info(
+                f"Performing initial blockchain rescan for {len(self._watched_addresses)} "
+                "watched addresses (this may take a moment)..."
+            )
+            try:
+                # Trigger rescan from block 0 for all watched addresses
+                await self._api_call(
+                    "POST",
+                    "v1/rescan",
+                    data={
+                        "addresses": list(self._watched_addresses),
+                        "start_height": 0,
+                    },
+                )
+                # Wait for rescan to complete (neutrino processes this asynchronously)
+                # On regtest with ~3000 blocks, this typically takes 5-10 seconds
+                await asyncio.sleep(10.0)
+                self._initial_rescan_done = True
+                logger.info("Initial blockchain rescan completed")
+            except Exception as e:
+                logger.warning(f"Initial rescan failed (will retry on next sync): {e}")
+        else:
+            # Wait a moment for filter matching to complete
+            await asyncio.sleep(0.5)
 
         try:
             # Request UTXO scan for addresses

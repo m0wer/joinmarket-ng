@@ -317,3 +317,105 @@ class TestOrderbookManager:
         orders, fee = manager.select_makers(cj_amount=100_000, n=2, honest_only=True)
         # Only maker1 is honest
         assert len(orders) <= 1
+
+
+class TestFilterOffersByNickVersion:
+    """Tests for filtering offers by nick version (for neutrino takers)."""
+
+    @pytest.fixture
+    def mixed_version_offers(self) -> list[Offer]:
+        """Offers from v5 and v6 makers."""
+        return [
+            Offer(
+                counterparty="J5oldmaker123OOO",  # v5 maker
+                oid=0,
+                ordertype=OfferType.SW0_RELATIVE,
+                minsize=10_000,
+                maxsize=1_000_000,
+                txfee=1000,
+                cjfee="0.001",
+            ),
+            Offer(
+                counterparty="J6newmaker456OOO",  # v6 maker
+                oid=0,
+                ordertype=OfferType.SW0_RELATIVE,
+                minsize=10_000,
+                maxsize=1_000_000,
+                txfee=1000,
+                cjfee="0.001",
+            ),
+            Offer(
+                counterparty="J6another789OOO",  # v6 maker
+                oid=1,
+                ordertype=OfferType.SW0_RELATIVE,
+                minsize=10_000,
+                maxsize=500_000,
+                txfee=500,
+                cjfee="0.0005",
+            ),
+        ]
+
+    def test_filter_no_version_requirement(
+        self, mixed_version_offers: list[Offer], max_cj_fee: MaxCjFee
+    ) -> None:
+        """Without version requirement, all offers pass."""
+        eligible = filter_offers(
+            offers=mixed_version_offers,
+            cj_amount=100_000,
+            max_cj_fee=max_cj_fee,
+            min_nick_version=None,
+        )
+        assert len(eligible) == 3
+
+    def test_filter_v6_only(self, mixed_version_offers: list[Offer], max_cj_fee: MaxCjFee) -> None:
+        """With v6 requirement, only J6 makers pass."""
+        eligible = filter_offers(
+            offers=mixed_version_offers,
+            cj_amount=100_000,
+            max_cj_fee=max_cj_fee,
+            min_nick_version=6,
+        )
+        assert len(eligible) == 2
+        for offer in eligible:
+            assert offer.counterparty.startswith("J6")
+
+    def test_choose_orders_with_version_filter(
+        self, mixed_version_offers: list[Offer], max_cj_fee: MaxCjFee
+    ) -> None:
+        """choose_orders respects min_nick_version."""
+        orders, fee = choose_orders(
+            offers=mixed_version_offers,
+            cj_amount=100_000,
+            n=2,
+            max_cj_fee=max_cj_fee,
+            min_nick_version=6,
+        )
+        assert len(orders) == 2
+        for nick in orders.keys():
+            assert nick.startswith("J6")
+
+    def test_orderbook_manager_with_version_filter(
+        self, mixed_version_offers: list[Offer], max_cj_fee: MaxCjFee
+    ) -> None:
+        """OrderbookManager.select_makers respects min_nick_version."""
+        manager = OrderbookManager(max_cj_fee)
+        manager.update_offers(mixed_version_offers)
+
+        orders, fee = manager.select_makers(cj_amount=100_000, n=2, min_nick_version=6)
+        assert len(orders) == 2
+        for nick in orders.keys():
+            assert nick.startswith("J6")
+
+    def test_not_enough_v6_makers(
+        self, mixed_version_offers: list[Offer], max_cj_fee: MaxCjFee
+    ) -> None:
+        """When not enough v6 makers, return what's available."""
+        orders, fee = choose_orders(
+            offers=mixed_version_offers,
+            cj_amount=100_000,
+            n=5,  # Request more than available v6 makers
+            max_cj_fee=max_cj_fee,
+            min_nick_version=6,
+        )
+        # Only 2 v6 makers available
+        assert len(orders) == 2

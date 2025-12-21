@@ -8,37 +8,38 @@ Protocol Version History:
       - Extended !auth format: txid:vout:scriptpubkey:blockheight
       - Extended !ioauth format: includes scriptpubkey:blockheight per UTXO
 
-Version Negotiation Strategy:
-============================
-Our implementation supports backward compatibility through version range negotiation:
+Nick Format and Version Detection:
+=================================
+JoinMarket nicks encode the protocol version: J{version}{hash}
+- J5xxx: Protocol v5 (JAM compatible, legacy UTXO format only)
+- J6xxx: Protocol v6 (supports extended UTXO format for Neutrino)
 
-1. **Directory Server** (this implementation):
-   - Accepts clients with proto-ver in [JM_VERSION_MIN, JM_VERSION] = [5, 6]
-   - Responds with proto-ver-min=5 and proto-ver-max=6
-   - Tracks each peer's negotiated version for format decisions
-
-2. **Client** (maker/taker):
-   - Sends handshake with proto-ver=6 (current version)
-   - Parses directory's [proto-ver-min, proto-ver-max] range
-   - Negotiated version = min(our_version, directory_max_version)
-   - Falls back to v5 format when connecting to v5-only directories
-
-3. **Feature Negotiation** (neutrino_compat):
-   - Only considered when negotiated version >= 6
-   - Both sides must advertise neutrino_compat in features
-   - When both support it: use extended UTXO format
-   - Otherwise: use legacy format
+This allows peers to determine each other's capabilities without negotiation.
 
 Cross-Version CoinJoin Compatibility:
 ====================================
-When makers and takers have different protocol versions:
+Version compatibility is determined by nick prefix, enabling backward compatibility:
 
-- v5 maker + v5 taker: Legacy format (!auth txid:vout)
-- v6 maker + v6 taker (both neutrino_compat): Extended format
-- v6 maker + v5 taker: Maker uses legacy format (lowest common denominator)
-- v5 maker + v6 taker: Taker expects legacy format from v5 maker
+**Makers (sending !ioauth):**
+- To J6 taker: Send extended UTXO format (txid:vout:scriptpubkey:blockheight)
+- To J5 taker: Send legacy UTXO format (txid:vout)
 
-The negotiated version is per-connection, allowing gradual network migration.
+**Takers (sending !auth):**
+- To J6 maker: Send extended revelation format
+- To J5 maker: Send legacy revelation format
+
+**Takers with Neutrino backend:**
+- Can ONLY work with J6 makers (need extended UTXO format in !ioauth)
+- Filter orderbook to exclude J5 makers during maker selection
+
+**Takers with full node backend:**
+- Can work with both J5 and J6 makers
+- Send appropriate format based on maker's nick
+
+This ensures:
+- Full backward compatibility with JAM (v5) implementations
+- Extended format only used when both peers support v6
+- Neutrino takers automatically select compatible makers
 """
 
 from __future__ import annotations
@@ -64,6 +65,25 @@ NICK_MAX_ENCODED = 14
 
 # Feature flags for capability negotiation
 FEATURE_NEUTRINO_COMPAT = "neutrino_compat"
+
+
+def get_nick_version(nick: str) -> int:
+    """
+    Extract protocol version from a JoinMarket nick.
+
+    Nick format: J{version}{hash} where version is a single digit.
+    Examples: J5abc123... (v5), J6xyz789... (v6)
+
+    Returns JM_VERSION_MIN if version cannot be determined.
+    """
+    if nick and len(nick) >= 2 and nick[0] == "J" and nick[1].isdigit():
+        return int(nick[1])
+    return JM_VERSION_MIN
+
+
+def is_v6_nick(nick: str) -> bool:
+    """Check if a nick indicates protocol version 6 or higher."""
+    return get_nick_version(nick) >= 6
 
 
 @dataclass

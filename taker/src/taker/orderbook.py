@@ -16,6 +16,7 @@ from decimal import Decimal
 from typing import Any
 
 from jmcore.models import Offer, OfferType
+from jmcore.protocol import get_nick_version
 from loguru import logger
 
 from taker.config import MaxCjFee
@@ -70,6 +71,7 @@ def filter_offers(
     max_cj_fee: MaxCjFee,
     ignored_makers: set[str] | None = None,
     allowed_types: set[OfferType] | None = None,
+    min_nick_version: int | None = None,
 ) -> list[Offer]:
     """
     Filter offers based on amount range, fee limits, and other criteria.
@@ -80,6 +82,7 @@ def filter_offers(
         max_cj_fee: Fee limits
         ignored_makers: Set of maker nicks to exclude
         allowed_types: Set of allowed offer types (default: all sw0* types)
+        min_nick_version: Minimum required nick version (e.g., 6 for neutrino takers)
 
     Returns:
         List of eligible offers
@@ -97,6 +100,16 @@ def filter_offers(
         if offer.counterparty in ignored_makers:
             logger.debug(f"Ignoring offer from {offer.counterparty} (in ignored list)")
             continue
+
+        # Filter by nick version (for neutrino takers that need v6 makers)
+        if min_nick_version is not None:
+            nick_version = get_nick_version(offer.counterparty)
+            if nick_version < min_nick_version:
+                logger.debug(
+                    f"Ignoring offer from {offer.counterparty}: "
+                    f"nick version {nick_version} < required {min_nick_version}"
+                )
+                continue
 
         # Filter by offer type
         if offer.ordertype not in allowed_types:
@@ -331,6 +344,7 @@ def choose_orders(
     max_cj_fee: MaxCjFee,
     choose_fn: Callable[[list[Offer], int], list[Offer]] | None = None,
     ignored_makers: set[str] | None = None,
+    min_nick_version: int | None = None,
 ) -> tuple[dict[str, Offer], int]:
     """
     Choose n orders from the orderbook for a CoinJoin.
@@ -342,6 +356,7 @@ def choose_orders(
         max_cj_fee: Fee limits
         choose_fn: Selection algorithm (default: fidelity_bond_weighted_choose)
         ignored_makers: Makers to exclude
+        min_nick_version: Minimum required nick version (e.g., 6 for neutrino takers)
 
     Returns:
         (dict of counterparty -> offer, total_cj_fee)
@@ -355,6 +370,7 @@ def choose_orders(
         cj_amount=cj_amount,
         max_cj_fee=max_cj_fee,
         ignored_makers=ignored_makers,
+        min_nick_version=min_nick_version,
     )
 
     # Dedupe by maker
@@ -390,6 +406,7 @@ def choose_sweep_orders(
     max_cj_fee: MaxCjFee,
     choose_fn: Callable[[list[Offer], int], list[Offer]] | None = None,
     ignored_makers: set[str] | None = None,
+    min_nick_version: int | None = None,
 ) -> tuple[dict[str, Offer], int, int]:
     """
     Choose n orders for a sweep transaction (no change).
@@ -405,6 +422,7 @@ def choose_sweep_orders(
         max_cj_fee: Fee limits
         choose_fn: Selection algorithm
         ignored_makers: Makers to exclude
+        min_nick_version: Minimum required nick version (e.g., 6 for neutrino takers)
 
     Returns:
         (dict of counterparty -> offer, cj_amount, total_cj_fee)
@@ -428,6 +446,7 @@ def choose_sweep_orders(
         cj_amount=estimated_cj_amount,
         max_cj_fee=max_cj_fee,
         ignored_makers=ignored_makers,
+        min_nick_version=min_nick_version,
     )
 
     # Dedupe
@@ -504,6 +523,7 @@ class OrderbookManager:
         cj_amount: int,
         n: int,
         honest_only: bool = False,
+        min_nick_version: int | None = None,
     ) -> tuple[dict[str, Offer], int]:
         """
         Select makers for a CoinJoin.
@@ -512,6 +532,7 @@ class OrderbookManager:
             cj_amount: Target amount
             n: Number of makers
             honest_only: Only select from honest makers
+            min_nick_version: Minimum required nick version (e.g., 6 for neutrino takers)
 
         Returns:
             (selected offers dict, total fee)
@@ -527,6 +548,7 @@ class OrderbookManager:
             n=n,
             max_cj_fee=self.max_cj_fee,
             ignored_makers=self.ignored_makers,
+            min_nick_version=min_nick_version,
         )
 
     def select_makers_for_sweep(
@@ -535,6 +557,7 @@ class OrderbookManager:
         my_txfee: int,
         n: int,
         honest_only: bool = False,
+        min_nick_version: int | None = None,
     ) -> tuple[dict[str, Offer], int, int]:
         """
         Select makers for a sweep CoinJoin.
@@ -544,6 +567,7 @@ class OrderbookManager:
             my_txfee: Taker's tx fee portion
             n: Number of makers
             honest_only: Only select from honest makers
+            min_nick_version: Minimum required nick version (e.g., 6 for neutrino takers)
 
         Returns:
             (selected offers dict, cj_amount, total fee)
@@ -560,4 +584,5 @@ class OrderbookManager:
             n=n,
             max_cj_fee=self.max_cj_fee,
             ignored_makers=self.ignored_makers,
+            min_nick_version=min_nick_version,
         )

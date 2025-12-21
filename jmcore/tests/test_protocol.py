@@ -17,6 +17,8 @@ from jmcore.protocol import (
     create_peerlist_entry,
     format_jm_message,
     format_utxo_list,
+    get_nick_version,
+    is_v6_nick,
     parse_jm_message,
     parse_peer_location,
     parse_peerlist_entry,
@@ -348,3 +350,53 @@ class TestPeerSupportsNeutrinoCompat:
         """Handle missing proto-ver (defaults to 5)."""
         handshake = {"features": {FEATURE_NEUTRINO_COMPAT: True}}
         assert peer_supports_neutrino_compat(handshake) is False
+
+
+class TestNickVersionDetection:
+    """Tests for nick-based version detection functions."""
+
+    def test_get_nick_version_v5(self):
+        """Detect v5 from J5 nick."""
+        assert get_nick_version("J5abc123defOOOO") == 5
+
+    def test_get_nick_version_v6(self):
+        """Detect v6 from J6 nick."""
+        assert get_nick_version("J6xyz789ghiOOOO") == 6
+
+    def test_get_nick_version_v7(self):
+        """Detect future v7 from J7 nick."""
+        assert get_nick_version("J7future123OOOO") == 7
+
+    def test_get_nick_version_empty(self):
+        """Empty nick returns default."""
+        assert get_nick_version("") == JM_VERSION_MIN
+
+    def test_get_nick_version_too_short(self):
+        """Too short nick returns default."""
+        assert get_nick_version("J") == JM_VERSION_MIN
+
+    def test_get_nick_version_no_j_prefix(self):
+        """Nick without J prefix returns default."""
+        assert get_nick_version("X6abcdef") == JM_VERSION_MIN
+
+    def test_get_nick_version_non_digit(self):
+        """Nick with non-digit version returns default."""
+        assert get_nick_version("JXabcdef") == JM_VERSION_MIN
+
+    def test_is_v6_nick_true(self):
+        """J6 nick is v6."""
+        assert is_v6_nick("J6abcdef123OOOO") is True
+
+    def test_is_v6_nick_higher(self):
+        """J7+ nick is also v6 compatible."""
+        assert is_v6_nick("J7future123OOOO") is True
+
+    def test_is_v6_nick_false(self):
+        """J5 nick is not v6."""
+        assert is_v6_nick("J5oldmaker12OOO") is False
+
+    def test_is_v6_nick_invalid(self):
+        """Invalid nick is not v6."""
+        assert is_v6_nick("") is False
+        assert is_v6_nick("invalid") is False
+        assert is_v6_nick("J") is False

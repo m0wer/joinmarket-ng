@@ -148,10 +148,17 @@ done
 echo "Neutrino synced!"
 
 # Run neutrino tests
-pytest tests/e2e/test_neutrino_backend.py -v -s
+# Note: Some tests require BOTH neutrino AND e2e profiles
+pytest tests/e2e/test_neutrino_backend.py -m "neutrino and not slow" -v  # Basic tests
+pytest tests/e2e/test_neutrino_backend.py::TestNeutrinoCoinJoin::test_coinjoin_with_neutrino_maker -m slow -v  # CoinJoin with neutrino maker
+
+# For neutrino taker test, also start e2e profile for Bitcoin Core makers:
+docker compose --profile e2e up -d
+sleep 10
+pytest tests/e2e/test_neutrino_backend.py::TestNeutrinoCoinJoin::test_coinjoin_with_neutrino_taker -m slow -v
 
 # Cleanup
-docker compose --profile neutrino down -v
+docker compose --profile neutrino --profile e2e down -v
 ```
 
 ### 4. Full Test Suite (All Unit + Integration)

@@ -18,7 +18,7 @@ from typing import Any
 
 from jmcore.encryption import CryptoSession
 from jmcore.models import NetworkType, Offer
-from jmcore.protocol import UTXOMetadata, format_utxo_list
+from jmcore.protocol import UTXOMetadata, format_utxo_list, is_v6_nick
 from jmwallet.backends.base import BlockchainBackend
 from jmwallet.wallet.models import UTXOInfo
 from jmwallet.wallet.service import WalletService
@@ -83,8 +83,9 @@ class CoinJoinSession:
         self.taker_nacl_pk = ""  # Taker's NaCl pubkey (hex) for btc_sig
         self.created_at = time.time()
 
-        # Protocol v6: Track if peer supports extended UTXO metadata
-        self.peer_supports_v6 = False
+        # Protocol v6: Determine peer version from nick (J6xxx = v6, J5xxx = v5)
+        # This determines whether to send extended UTXO format in !ioauth
+        self.peer_supports_v6 = is_v6_nick(taker_nick)
 
         # E2E encryption session with taker
         self.crypto = CryptoSession()
@@ -195,9 +196,8 @@ class CoinJoinSession:
             taker_scriptpubkey = parsed_rev.get("scriptpubkey")
             taker_blockheight = parsed_rev.get("blockheight")
 
-            # Track if taker sent extended format (v6 capable)
+            # Log if taker sent extended format (useful for debugging)
             if taker_scriptpubkey and taker_blockheight is not None:
-                self.peer_supports_v6 = True
                 logger.debug("Taker sent extended UTXO format (v6)")
 
             # Verify the taker's UTXO exists on the blockchain

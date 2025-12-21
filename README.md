@@ -28,7 +28,23 @@ All components are fully implemented. Future work will focus on improvements, op
 - Nostr relays for offer broadcasting
 - CoinJoinXT and Lightning Network integration: https://www.youtube.com/watch?v=YS0MksuMl9k
 
-All components maintain backwards compatibility with the reference implementation.
+### Compatibility Note
+
+This implementation uses protocol v6 with extended UTXO format for Neutrino support. It is **fully backward-compatible** with the reference JoinMarket implementation (JAM) through nick-based version detection.
+
+**Version detection via nick format:**
+- J5xxx nicks: Protocol v5 (JAM compatible, legacy UTXO format)
+- J6xxx nicks: Protocol v6 (extended UTXO format for Neutrino)
+
+**Compatibility matrix:**
+| Taker Backend | Maker Type | Status |
+|--------------|------------|--------|
+| Full node | J5 (JAM) | ✅ Works - sends legacy format |
+| Full node | J6 (ours) | ✅ Works - sends extended format |
+| Neutrino | J5 (JAM) | ❌ Not supported - auto-filtered |
+| Neutrino | J6 (ours) | ✅ Works - both use extended format |
+
+Neutrino takers automatically filter out J5 makers during orderbook selection since they require the extended UTXO format that only v6 makers can provide.
 
 ## Project Structure
 
