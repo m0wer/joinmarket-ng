@@ -361,6 +361,11 @@ jobs:
           pip install httpx loguru pytest-asyncio pytest-timeout
 
       - name: "Start reference services"
+        env:
+          # Use CI-specific Tor hidden service key from GitHub secrets
+          # This ensures CI runs don't conflict with each other or developer machines
+          # If the secret is not set, Tor will generate a random key
+          TOR_HS_ED25519_SECRET_KEY_BASE64: ${{ secrets.TOR_HS_ED25519_SECRET_KEY_BASE64 }}
         run: |
           # Start reference profile: bitcoin, directory, maker1, maker2, tor, jam
           # Does NOT include neutrino to avoid UTXO verification issues
@@ -388,13 +393,15 @@ jobs:
             sleep 2
           done
 
-          # Wait for Tor (uses pre-generated keys, should be fast)
+          # Wait for Tor (may generate new key, give it extra time)
           echo "Waiting for Tor hidden service..."
-          for i in {1..60}; do
+          for i in {1..90}; do
             if docker compose exec -T tor cat /var/lib/tor/directory/hostname 2>/dev/null | grep -q ".onion"; then
-              echo "Tor ready"
+              ONION=$(docker compose exec -T tor cat /var/lib/tor/directory/hostname 2>/dev/null | tr -d '[:space:]')
+              echo "Tor ready with onion address: $ONION"
               break
             fi
+            echo "Attempt $i/90: Waiting for Tor..."
             sleep 2
           done
 

@@ -288,12 +288,57 @@ pytest -m "e2e and not slow" -v
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-## Pre-Generated Tor Keys
+## Tor Hidden Service Keys
 
-The reference tests use a **deterministic Tor hidden service** for reproducibility:
-- Onion address: `5x6tavdaf6mdvckxw3jmobxmzxqnnsj3uldro5tvdlvo5hebhureysad.onion`
-- Keys stored in: `tests/e2e/reference/tor/data/directory/`
-- No dynamic configuration needed!
+The reference tests use a Tor hidden service to expose the directory server. The
+onion address is **generated dynamically** at container startup to avoid conflicts
+when multiple instances run simultaneously (e.g., CI pipelines + developer machines).
+
+### How It Works
+
+1. **Default (Local Development)**: Tor generates a random onion address each time
+2. **CI (GitHub Actions)**: Uses a unique key from `TOR_HS_ED25519_SECRET_KEY_BASE64` secret
+3. **Dynamic Discovery**: Tests automatically discover the onion address from the Tor container
+
+### Setting Up CI Secrets
+
+For GitHub Actions, generate a unique key and add it as a repository secret:
+
+```bash
+# Generate Tor hidden service keys
+pip install cryptography  # or: pip install pynacl
+python scripts/generate_tor_keys.py ./ci-tor-keys
+
+# The script outputs the base64-encoded key to set as a secret:
+# export TOR_HS_ED25519_SECRET_KEY_BASE64='...'
+
+# Add to GitHub:
+# Settings > Secrets and variables > Actions > New repository secret
+# Name: TOR_HS_ED25519_SECRET_KEY_BASE64
+# Value: (the base64 string from the script output)
+```
+
+### Using a Persistent Key Locally
+
+If you want the same onion address across restarts (e.g., for debugging):
+
+```bash
+# Generate keys once
+python scripts/generate_tor_keys.py ~/.jm-tor-keys
+
+# Export the secret key before starting Docker
+export TOR_HS_ED25519_SECRET_KEY_BASE64=$(base64 -w0 ~/.jm-tor-keys/hs_ed25519_secret_key)
+
+# Start services (will use your key)
+docker compose --profile reference up -d
+```
+
+Or add to a `.env` file (not committed to git):
+
+```bash
+# .env (gitignored)
+TOR_HS_ED25519_SECRET_KEY_BASE64=<your-base64-key>
+```
 
 ## Test Wallets
 

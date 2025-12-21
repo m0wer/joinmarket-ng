@@ -43,9 +43,38 @@ STARTUP_TIMEOUT = 420  # 7 minutes for all services to start (Tor can be slow in
 COINJOIN_TIMEOUT = 240  # 4 minutes for coinjoin to complete (reduced from 15 min)
 WALLET_FUND_TIMEOUT = 300  # 5 minutes for wallet funding
 
-# Pre-generated deterministic onion address for our directory server
-# Keys stored in tests/e2e/reference/tor_keys/
-DIRECTORY_ONION = "5x6tavdaf6mdvckxw3jmobxmzxqnnsj3uldro5tvdlvo5hebhureysad.onion"
+
+def get_directory_onion() -> str | None:
+    """
+    Get the directory server onion address from the Tor container.
+
+    The onion address is dynamically generated at container startup,
+    so we need to read it from the Tor data volume.
+    """
+    compose_file = get_compose_file()
+    cmd = [
+        "docker",
+        "compose",
+        "-f",
+        str(compose_file),
+        "exec",
+        "-T",
+        "tor",
+        "cat",
+        "/var/lib/tor/directory/hostname",
+    ]
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=10, check=False
+    )
+
+    if result.returncode == 0:
+        onion = result.stdout.strip()
+        if onion.endswith(".onion"):
+            logger.info(f"Discovered directory onion address: {onion}")
+            return onion
+
+    logger.warning(f"Could not get onion address: {result.stderr}")
+    return None
 
 
 def get_compose_file() -> Path:
@@ -505,8 +534,16 @@ def reference_services():
             "Check logs with: docker compose --profile reference logs"
         )
 
+    # Get the dynamically generated onion address
+    onion_address = get_directory_onion()
+    if not onion_address:
+        pytest.skip(
+            "Could not discover directory onion address. "
+            "Ensure Tor container is running and healthy."
+        )
+
     yield {
-        "onion_address": DIRECTORY_ONION,
+        "onion_address": onion_address,
     }
 
     # Cleanup is optional - tests can leave services running for debugging

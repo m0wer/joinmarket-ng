@@ -370,24 +370,38 @@ services:
       - all
 
   # Tor hidden service for directory server (exposes directory via .onion)
-  # Uses pre-generated keys for deterministic onion address
-  # Init container copies keys to a Docker volume with correct ownership
+  #
+  # Key management options (in order of priority):
+  #   1. Environment variable: Set TOR_HS_ED25519_SECRET_KEY_BASE64 with base64-encoded key
+  #      This is used by CI with GitHub secrets to ensure unique keys per environment
+  #   2. Auto-generation: If no key is provided, Tor generates a random one
+  #      This is the default for local development to avoid conflicts
+  #
+  # To generate your own persistent key for local development:
+  #   python scripts/generate_tor_keys.py ./my-tor-keys
+  #   export TOR_HS_ED25519_SECRET_KEY_BASE64=$(base64 -w0 ./my-tor-keys/hs_ed25519_secret_key)
+  #
   tor-init:
     image: busybox:latest
     container_name: jm-tor-init
+    environment:
+      - TOR_HS_ED25519_SECRET_KEY_BASE64=${TOR_HS_ED25519_SECRET_KEY_BASE64:-}
     command: >
       sh -c "
         mkdir -p /var/lib/tor/directory &&
-        cp -f /source-keys/hs_ed25519_secret_key /var/lib/tor/directory/ &&
-        cp -f /source-keys/hs_ed25519_public_key /var/lib/tor/directory/ &&
-        cp -f /source-keys/hostname /var/lib/tor/directory/ &&
+        if [ -n \"$$TOR_HS_ED25519_SECRET_KEY_BASE64\" ]; then
+          echo 'Using provided Tor hidden service key from environment...' &&
+          echo \"$$TOR_HS_ED25519_SECRET_KEY_BASE64\" | base64 -d > /var/lib/tor/directory/hs_ed25519_secret_key &&
+          echo 'Tor key decoded successfully'
+        else
+          echo 'No TOR_HS_ED25519_SECRET_KEY_BASE64 set - Tor will generate a random key'
+        fi &&
         chown -R 1000:1000 /var/lib/tor &&
-        chmod 700 /var/lib/tor/directory &&
-        chmod 600 /var/lib/tor/directory/* &&
-        echo 'Tor keys copied successfully'
+        chmod 700 /var/lib/tor/directory 2>/dev/null || true &&
+        chmod 600 /var/lib/tor/directory/* 2>/dev/null || true &&
+        echo 'Tor init completed'
       "
     volumes:
-      - ./tests/e2e/reference/tor/data/directory:/source-keys:ro
       - tor-data:/var/lib/tor
     profiles:
       - reference
@@ -419,24 +433,43 @@ services:
       - reference
       - all
 
-  # Init container for JAM config files to avoid read-only mount issues
+  # Init container for JAM config files
+  # Waits for Tor to generate the hostname, then injects it into the config
   jam-config-init:
     image: busybox:latest
     container_name: jm-jam-config-init
     command: >
       sh -c "
+        echo 'Waiting for Tor hostname to be generated...' &&
+        for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+          if [ -f /var/lib/tor/directory/hostname ]; then
+            ONION_ADDR=$$(cat /var/lib/tor/directory/hostname | tr -d '[:space:]') &&
+            echo \"Found onion address: $$ONION_ADDR\" &&
+            break
+          fi
+          echo \"Attempt $$i/30: Waiting for hostname...\" &&
+          sleep 2
+        done &&
+        if [ -z \"$$ONION_ADDR\" ]; then
+          echo 'ERROR: Tor hostname not found after 60 seconds' &&
+          exit 1
+        fi &&
         mkdir -p /jam /maker1 /maker2 &&
-        cp -f /source-config/joinmarket.cfg /jam/joinmarket.cfg &&
-        cp -f /source-config/joinmarket.cfg /maker1/joinmarket.cfg &&
-        cp -f /source-config/joinmarket.cfg /maker2/joinmarket.cfg &&
+        sed \"s/DIRECTORY_ONION_PLACEHOLDER/$$ONION_ADDR/g\" /source-config/joinmarket.cfg.template > /jam/joinmarket.cfg &&
+        cp -f /jam/joinmarket.cfg /maker1/joinmarket.cfg &&
+        cp -f /jam/joinmarket.cfg /maker2/joinmarket.cfg &&
         chmod 644 /jam/joinmarket.cfg /maker1/joinmarket.cfg /maker2/joinmarket.cfg &&
-        echo 'JAM configs copied successfully'
+        echo 'JAM configs created with onion address: '$$ONION_ADDR
       "
     volumes:
-      - ./tests/e2e/reference/joinmarket.cfg:/source-config/joinmarket.cfg:ro
+      - ./tests/e2e/reference/joinmarket.cfg.template:/source-config/joinmarket.cfg.template:ro
+      - tor-data:/var/lib/tor:ro
       - jam-data:/jam
       - jam-maker1-data:/maker1
       - jam-maker2-data:/maker2
+    depends_on:
+      tor:
+        condition: service_healthy
     profiles:
       - reference
       - all
