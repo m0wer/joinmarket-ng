@@ -1019,8 +1019,6 @@ python -m piptools compile -Uv requirements.in -o requirements.txt
 
 To run all unit tests with coverage:
 
-TODO: verify
-
 ```bash
 pytest -lv \
   --cov=jmcore \
