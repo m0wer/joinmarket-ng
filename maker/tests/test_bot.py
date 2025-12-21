@@ -372,5 +372,119 @@ class TestHiddenServiceListener:
         assert "J5taker123" not in bot.direct_connections, "Connection should be cleaned up"
 
 
+class TestHandlePush:
+    """Tests for _handle_push method."""
+
+    @pytest.fixture
+    def mock_wallet(self):
+        """Create a mock wallet service."""
+        wallet = MagicMock()
+        wallet.mixdepth_count = 5
+        wallet.utxo_cache = {}
+        return wallet
+
+    @pytest.fixture
+    def mock_backend(self):
+        """Create a mock blockchain backend."""
+        from unittest.mock import AsyncMock
+
+        backend = MagicMock()
+        backend.broadcast_transaction = AsyncMock(return_value="txid123abc")
+        return backend
+
+    @pytest.fixture
+    def config(self):
+        """Create a test maker config."""
+        return MakerConfig(
+            mnemonic="test " * 12,
+            directory_servers=["localhost:5222"],
+            network=NetworkType.REGTEST,
+        )
+
+    @pytest.fixture
+    def maker_bot(self, mock_wallet, mock_backend, config):
+        """Create a MakerBot instance for testing."""
+        bot = MakerBot(
+            wallet=mock_wallet,
+            backend=mock_backend,
+            config=config,
+        )
+        return bot
+
+    @pytest.mark.asyncio
+    async def test_handle_push_broadcasts_transaction(self, maker_bot):
+        """Test that !push broadcasts the transaction."""
+        import base64
+
+        # Create a dummy transaction (minimal valid format)
+        tx_bytes = bytes.fromhex("0100000000010000000000")
+        tx_b64 = base64.b64encode(tx_bytes).decode("ascii")
+
+        await maker_bot._handle_push("J6taker123", f"push {tx_b64}")
+
+        # Verify broadcast was called with the decoded transaction
+        maker_bot.backend.broadcast_transaction.assert_called_once_with(tx_bytes.hex())
+
+    @pytest.mark.asyncio
+    async def test_handle_push_invalid_format(self, maker_bot):
+        """Test that invalid !push format is handled gracefully."""
+        # Missing transaction data
+        await maker_bot._handle_push("J6taker123", "push")
+
+        # Should not call broadcast
+        maker_bot.backend.broadcast_transaction.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_handle_push_invalid_base64(self, maker_bot):
+        """Test that invalid base64 is handled gracefully."""
+        await maker_bot._handle_push("J6taker123", "push not_valid_base64!!!")
+
+        # Should not call broadcast (decoding fails)
+        maker_bot.backend.broadcast_transaction.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_handle_push_broadcast_failure_logged(self, maker_bot, caplog):
+        """Test that broadcast failure is logged but doesn't raise."""
+        import base64
+        from unittest.mock import AsyncMock
+
+        # Make broadcast fail
+        maker_bot.backend.broadcast_transaction = AsyncMock(side_effect=Exception("Network error"))
+
+        tx_bytes = bytes.fromhex("0100000000010000000000")
+        tx_b64 = base64.b64encode(tx_bytes).decode("ascii")
+
+        # Should not raise
+        await maker_bot._handle_push("J6taker123", f"push {tx_b64}")
+
+        # Broadcast was attempted
+        maker_bot.backend.broadcast_transaction.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_handle_push_via_privmsg(self, maker_bot):
+        """Test that !push is routed correctly from privmsg."""
+        import base64
+
+        # Set up the bot with a mock _handle_push
+        push_called = False
+
+        async def mock_handle_push(taker_nick: str, msg: str) -> None:
+            nonlocal push_called
+            push_called = True
+            assert taker_nick == "J6taker123"
+            assert "push" in msg
+
+        maker_bot._handle_push = mock_handle_push
+
+        # Simulate a privmsg with !push
+        tx_bytes = bytes.fromhex("0100000000010000000000")
+        tx_b64 = base64.b64encode(tx_bytes).decode("ascii")
+        line = f"J6taker123!{maker_bot.nick}!!push {tx_b64}"
+
+        await maker_bot._handle_privmsg(line)
+
+        assert push_called, "_handle_push should have been called"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
