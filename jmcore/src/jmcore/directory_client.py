@@ -27,9 +27,11 @@ from jmcore.network import TCPConnection, connect_direct, connect_via_tor
 from jmcore.protocol import (
     COMMAND_PREFIX,
     JM_VERSION,
+    JM_VERSION_MIN,
     MessageType,
     create_handshake_request,
     parse_peerlist_entry,
+    peer_supports_neutrino_compat,
 )
 
 
@@ -132,6 +134,7 @@ class DirectoryClient:
         timeout: float = 30.0,
         max_message_size: int = 2097152,
         on_disconnect: Callable[[], None] | None = None,
+        neutrino_compat: bool = False,
     ) -> None:
         """
         Initialize DirectoryClient.
@@ -147,6 +150,7 @@ class DirectoryClient:
             timeout: Connection timeout in seconds
             max_message_size: Maximum message size in bytes
             on_disconnect: Callback when connection drops
+            neutrino_compat: Advertise support for Neutrino-compatible UTXO metadata
         """
         self.host = host
         self.port = port
@@ -165,6 +169,11 @@ class DirectoryClient:
         self.initial_orderbook_received = False
         self.last_orderbook_request_time: float = 0.0
         self.last_offer_received_time: float | None = None
+        self.neutrino_compat = neutrino_compat
+
+        # Version negotiation state (set after handshake)
+        self.negotiated_version: int | None = None
+        self.directory_neutrino_compat: bool = False
 
         # Timing intervals
         self.peerlist_check_interval = 1800.0
@@ -197,15 +206,29 @@ class DirectoryClient:
             raise DirectoryClientError(f"Connection failed: {e}") from e
 
     async def _handshake(self) -> None:
-        """Perform directory server handshake."""
+        """
+        Perform directory server handshake with version negotiation.
+
+        The handshake establishes the negotiated protocol version:
+        - We send our version (JM_VERSION = 6)
+        - Directory responds with its supported range [proto-ver-min, proto-ver-max]
+        - Negotiated version = min(our_version, directory_max_version)
+
+        This allows:
+        - v6 client connecting to v5 directory: negotiates v5
+        - v6 client connecting to v6 directory: negotiates v6
+        - v5 client connecting to v6 directory: negotiates v5 (directory accepts v5-v6)
+        """
         if not self.connection:
             raise DirectoryClientError("Not connected")
 
+        # Send our handshake with current version and features
         handshake_data = create_handshake_request(
             nick=self.nick,
             location=self.location,
             network=self.network,
             directory=False,
+            neutrino_compat=self.neutrino_compat,
         )
         handshake_msg = {
             "type": MessageType.HANDSHAKE.value,
@@ -213,6 +236,7 @@ class DirectoryClient:
         }
         await self.connection.send(json.dumps(handshake_msg).encode("utf-8"))
 
+        # Receive and parse directory's response
         response_data = await asyncio.wait_for(self.connection.receive(), timeout=self.timeout)
         response = json.loads(response_data.decode("utf-8"))
 
@@ -223,7 +247,40 @@ class DirectoryClient:
         if not handshake_response.get("accepted", False):
             raise DirectoryClientError("Handshake rejected")
 
-        logger.info(f"Handshake successful with {self.host}:{self.port} (nick: {self.nick})")
+        # Extract directory's version range
+        # v5 directories may only send "proto-ver" (single value)
+        # v6+ directories send "proto-ver-min" and "proto-ver-max"
+        dir_ver_min = handshake_response.get("proto-ver-min")
+        dir_ver_max = handshake_response.get("proto-ver-max")
+
+        if dir_ver_min is None or dir_ver_max is None:
+            # Legacy v5 directory: only sends single proto-ver
+            dir_version = handshake_response.get("proto-ver", 5)
+            dir_ver_min = dir_ver_max = dir_version
+
+        # Negotiate: use highest version both sides support
+        # Our range: [JM_VERSION_MIN, JM_VERSION] = [5, 6]
+        # Directory range: [dir_ver_min, dir_ver_max]
+        overlap_min = max(JM_VERSION_MIN, dir_ver_min)
+        overlap_max = min(JM_VERSION, dir_ver_max)
+
+        if overlap_min > overlap_max:
+            raise DirectoryClientError(
+                f"No compatible protocol version: we support [{JM_VERSION_MIN}, {JM_VERSION}], "
+                f"directory supports [{dir_ver_min}, {dir_ver_max}]"
+            )
+
+        # Use highest compatible version
+        self.negotiated_version = overlap_max
+
+        # Check if directory supports Neutrino-compatible metadata
+        self.directory_neutrino_compat = peer_supports_neutrino_compat(handshake_response)
+
+        logger.info(
+            f"Handshake successful with {self.host}:{self.port} (nick: {self.nick}, "
+            f"negotiated_version: v{self.negotiated_version}, "
+            f"neutrino_compat: {self.directory_neutrino_compat})"
+        )
 
     async def get_peerlist(self) -> list[str]:
         """
@@ -703,3 +760,29 @@ class DirectoryClient:
     def get_current_bonds(self) -> list[FidelityBond]:
         """Get the current list of cached fidelity bonds."""
         return list(self.bonds.values())
+
+    def supports_extended_utxo_format(self) -> bool:
+        """
+        Check if we should use extended UTXO format with this directory.
+
+        Extended format (txid:vout:scriptpubkey:blockheight) is used when:
+        - Negotiated version >= 6
+        - Both sides advertise neutrino_compat feature
+
+        Returns:
+            True if extended UTXO format should be used
+        """
+        if self.negotiated_version is None:
+            return False
+        return (
+            self.negotiated_version >= 6 and self.neutrino_compat and self.directory_neutrino_compat
+        )
+
+    def get_negotiated_version(self) -> int:
+        """
+        Get the negotiated protocol version.
+
+        Returns:
+            Negotiated version (5 or 6), or JM_VERSION_MIN if not yet negotiated
+        """
+        return self.negotiated_version if self.negotiated_version is not None else JM_VERSION_MIN

@@ -7,6 +7,38 @@ Protocol Version History:
       - Adds neutrino_compat feature flag in handshake
       - Extended !auth format: txid:vout:scriptpubkey:blockheight
       - Extended !ioauth format: includes scriptpubkey:blockheight per UTXO
+
+Version Negotiation Strategy:
+============================
+Our implementation supports backward compatibility through version range negotiation:
+
+1. **Directory Server** (this implementation):
+   - Accepts clients with proto-ver in [JM_VERSION_MIN, JM_VERSION] = [5, 6]
+   - Responds with proto-ver-min=5 and proto-ver-max=6
+   - Tracks each peer's negotiated version for format decisions
+
+2. **Client** (maker/taker):
+   - Sends handshake with proto-ver=6 (current version)
+   - Parses directory's [proto-ver-min, proto-ver-max] range
+   - Negotiated version = min(our_version, directory_max_version)
+   - Falls back to v5 format when connecting to v5-only directories
+
+3. **Feature Negotiation** (neutrino_compat):
+   - Only considered when negotiated version >= 6
+   - Both sides must advertise neutrino_compat in features
+   - When both support it: use extended UTXO format
+   - Otherwise: use legacy format
+
+Cross-Version CoinJoin Compatibility:
+====================================
+When makers and takers have different protocol versions:
+
+- v5 maker + v5 taker: Legacy format (!auth txid:vout)
+- v6 maker + v6 taker (both neutrino_compat): Extended format
+- v6 maker + v5 taker: Maker uses legacy format (lowest common denominator)
+- v5 maker + v6 taker: Taker expects legacy format from v5 maker
+
+The negotiated version is per-connection, allowing gradual network migration.
 """
 
 from __future__ import annotations

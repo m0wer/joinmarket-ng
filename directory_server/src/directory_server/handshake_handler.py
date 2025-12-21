@@ -12,6 +12,7 @@ from jmcore.protocol import (
     JM_VERSION_MIN,
     NOT_SERVING_ONION_HOSTNAME,
     create_handshake_response,
+    peer_supports_neutrino_compat,
 )
 from loguru import logger
 
@@ -21,10 +22,13 @@ class HandshakeError(Exception):
 
 
 class HandshakeHandler:
-    def __init__(self, network: NetworkType, server_nick: str, motd: str):
+    def __init__(
+        self, network: NetworkType, server_nick: str, motd: str, neutrino_compat: bool = False
+    ):
         self.network = network
         self.server_nick = server_nick
         self.motd = motd
+        self.neutrino_compat = neutrino_compat
 
     def process_handshake(self, handshake_data: str, peer_location: str) -> tuple[PeerInfo, dict]:
         try:
@@ -58,6 +62,12 @@ class HandshakeHandler:
 
             onion_address, port = self._parse_location(location_string)
 
+            # Determine negotiated version (highest both support)
+            negotiated_version = min(proto_ver, JM_VERSION)
+
+            # Check if peer supports Neutrino-compatible UTXO metadata
+            peer_neutrino_compat = peer_supports_neutrino_compat(hs)
+
             peer_info = PeerInfo(
                 nick=nick,
                 onion_address=onion_address,
@@ -66,15 +76,22 @@ class HandshakeHandler:
                 is_directory=False,
                 network=peer_network,
                 features=features,
+                protocol_version=negotiated_version,
+                neutrino_compat=peer_neutrino_compat,
             )
 
             response = create_handshake_response(
-                nick=self.server_nick, network=self.network.value, accepted=True, motd=self.motd
+                nick=self.server_nick,
+                network=self.network.value,
+                accepted=True,
+                motd=self.motd,
+                neutrino_compat=self.neutrino_compat,
             )
 
             logger.info(
                 f"Handshake accepted: {nick} from {peer_network.value} "
-                f"at {peer_info.location_string}"
+                f"at {peer_info.location_string} "
+                f"(v{negotiated_version}, neutrino={peer_neutrino_compat})"
             )
 
             return (peer_info, response)

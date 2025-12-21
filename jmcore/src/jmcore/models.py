@@ -35,6 +35,8 @@ class PeerInfo(BaseModel):
     network: NetworkType = NetworkType.MAINNET
     last_seen: datetime | None = None
     features: dict[str, Any] = Field(default_factory=dict)
+    protocol_version: int = Field(default=5, ge=5, le=10)  # Negotiated protocol version
+    neutrino_compat: bool = False  # True if peer supports extended UTXO metadata
 
     @field_validator("onion_address")
     @classmethod
@@ -59,6 +61,10 @@ class PeerInfo(BaseModel):
         if self.onion_address == "NOT-SERVING-ONION":
             return "NOT-SERVING-ONION"
         return f"{self.onion_address}:{self.port}"
+
+    def supports_extended_utxo(self) -> bool:
+        """Check if this peer supports extended UTXO format."""
+        return self.protocol_version >= 6 and self.neutrino_compat
 
     model_config = {"frozen": False}
 

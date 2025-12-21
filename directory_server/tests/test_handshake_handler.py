@@ -221,3 +221,191 @@ def test_create_rejection_response(handler):
 
     assert response["accepted"] is False
     assert "Rejected: Test rejection" in response["motd"]
+
+
+class TestVersionNegotiation:
+    """Tests for protocol version negotiation during handshake."""
+
+    @pytest.fixture
+    def handler(self):
+        return HandshakeHandler(
+            network=NetworkType.MAINNET, server_nick="test_directory", motd="Test Server"
+        )
+
+    def test_v5_client_negotiates_v5(self, handler):
+        """A v5 client connecting to v6 server should negotiate v5."""
+        handshake_data = json.dumps(
+            {
+                "app-name": "joinmarket",
+                "directory": False,
+                "location-string": "abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx.onion:5222",
+                "proto-ver": 5,  # Client is v5
+                "features": {},
+                "nick": "v5_client",
+                "network": "mainnet",
+            }
+        )
+
+        peer_info, response = handler.process_handshake(handshake_data, "127.0.0.1:12345")
+
+        # Should negotiate v5 (min of client v5 and server v6)
+        assert peer_info.protocol_version == 5
+        assert peer_info.neutrino_compat is False
+
+    def test_v6_client_negotiates_v6(self, handler):
+        """A v6 client connecting to v6 server should negotiate v6."""
+        handshake_data = json.dumps(
+            {
+                "app-name": "joinmarket",
+                "directory": False,
+                "location-string": "abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx.onion:5222",
+                "proto-ver": 6,  # Client is v6
+                "features": {},
+                "nick": "v6_client",
+                "network": "mainnet",
+            }
+        )
+
+        peer_info, response = handler.process_handshake(handshake_data, "127.0.0.1:12345")
+
+        # Should negotiate v6
+        assert peer_info.protocol_version == 6
+        assert peer_info.neutrino_compat is False  # No neutrino_compat feature flag
+
+    def test_v6_client_with_neutrino_compat(self, handler):
+        """A v6 client with neutrino_compat feature should have it recorded."""
+        handshake_data = json.dumps(
+            {
+                "app-name": "joinmarket",
+                "directory": False,
+                "location-string": "abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx.onion:5222",
+                "proto-ver": 6,
+                "features": {"neutrino_compat": True},
+                "nick": "neutrino_client",
+                "network": "mainnet",
+            }
+        )
+
+        peer_info, response = handler.process_handshake(handshake_data, "127.0.0.1:12345")
+
+        assert peer_info.protocol_version == 6
+        assert peer_info.neutrino_compat is True
+
+    def test_v5_client_with_neutrino_compat_ignored(self, handler):
+        """A v5 client claiming neutrino_compat should have it ignored."""
+        handshake_data = json.dumps(
+            {
+                "app-name": "joinmarket",
+                "directory": False,
+                "location-string": "abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx.onion:5222",
+                "proto-ver": 5,
+                "features": {"neutrino_compat": True},  # Invalid for v5
+                "nick": "confused_client",
+                "network": "mainnet",
+            }
+        )
+
+        peer_info, response = handler.process_handshake(handshake_data, "127.0.0.1:12345")
+
+        # neutrino_compat should be False because proto_ver < 6
+        assert peer_info.protocol_version == 5
+        assert peer_info.neutrino_compat is False
+
+
+class TestNeutrinoCompatServer:
+    """Tests for directory server with neutrino_compat enabled."""
+
+    @pytest.fixture
+    def neutrino_handler(self):
+        return HandshakeHandler(
+            network=NetworkType.MAINNET,
+            server_nick="neutrino_directory",
+            motd="Neutrino Server",
+            neutrino_compat=True,
+        )
+
+    def test_server_advertises_neutrino_compat(self, neutrino_handler):
+        """Server with neutrino_compat should advertise it in response."""
+        handshake_data = json.dumps(
+            {
+                "app-name": "joinmarket",
+                "directory": False,
+                "location-string": "NOT-SERVING-ONION",
+                "proto-ver": 6,
+                "features": {},
+                "nick": "test_client",
+                "network": "mainnet",
+            }
+        )
+
+        peer_info, response = neutrino_handler.process_handshake(handshake_data, "127.0.0.1:12345")
+
+        assert response["features"]["neutrino_compat"] is True
+
+    def test_server_without_neutrino_compat(self, handler):
+        """Server without neutrino_compat should not advertise it."""
+        handshake_data = json.dumps(
+            {
+                "app-name": "joinmarket",
+                "directory": False,
+                "location-string": "NOT-SERVING-ONION",
+                "proto-ver": 6,
+                "features": {},
+                "nick": "test_client",
+                "network": "mainnet",
+            }
+        )
+
+        peer_info, response = handler.process_handshake(handshake_data, "127.0.0.1:12345")
+
+        # No neutrino_compat in features
+        assert response.get("features", {}).get("neutrino_compat") is not True
+
+
+class TestPeerInfoVersionSupport:
+    """Tests for PeerInfo version-related methods."""
+
+    def test_supports_extended_utxo_v6_with_neutrino(self):
+        """PeerInfo with v6 and neutrino_compat should support extended UTXO."""
+        from jmcore.models import PeerInfo, PeerStatus
+
+        peer = PeerInfo(
+            nick="test",
+            onion_address="NOT-SERVING-ONION",
+            port=-1,
+            status=PeerStatus.CONNECTED,
+            protocol_version=6,
+            neutrino_compat=True,
+        )
+
+        assert peer.supports_extended_utxo() is True
+
+    def test_not_supports_extended_utxo_v6_without_neutrino(self):
+        """PeerInfo with v6 but no neutrino_compat should not support extended UTXO."""
+        from jmcore.models import PeerInfo, PeerStatus
+
+        peer = PeerInfo(
+            nick="test",
+            onion_address="NOT-SERVING-ONION",
+            port=-1,
+            status=PeerStatus.CONNECTED,
+            protocol_version=6,
+            neutrino_compat=False,
+        )
+
+        assert peer.supports_extended_utxo() is False
+
+    def test_not_supports_extended_utxo_v5(self):
+        """PeerInfo with v5 should not support extended UTXO."""
+        from jmcore.models import PeerInfo, PeerStatus
+
+        peer = PeerInfo(
+            nick="test",
+            onion_address="NOT-SERVING-ONION",
+            port=-1,
+            status=PeerStatus.CONNECTED,
+            protocol_version=5,
+            neutrino_compat=True,  # Even with this flag, v5 shouldn't support it
+        )
+
+        assert peer.supports_extended_utxo() is False
