@@ -2,30 +2,6 @@
 
 This document consolidates the JoinMarket protocol specification, implementation details, architecture, and testing guide for the modern Python refactored implementation.
 
-## Table of Contents
-
-1. [Overview](#overview)
-2. [Architecture](#architecture)
-3. [Design Principles](#design-principles)
-4. [Component Architecture](#component-architecture)
-5. [Wallet Design](#wallet-design)
-6. [Neutrino Light Client](#neutrino-light-client)
-7. [Messaging Protocol](#messaging-protocol)
-8. [CoinJoin Protocol Flow](#coinjoin-protocol-flow)
-9. [Encryption Protocol](#encryption-protocol)
-10. [PoDLE (Proof of Discrete Log Equivalence)](#podle-proof-of-discrete-log-equivalence)
-11. [Fidelity Bonds](#fidelity-bonds)
-12. [Transaction Types](#transaction-types)
-13. [Offer System](#offer-system)
-14. [Technology Stack](#technology-stack)
-15. [Performance Characteristics](#performance-characteristics)
-16. [Security Model](#security-model)
-17. [Testing Strategy](#testing-strategy)
-18. [Testing Guide](#testing-guide)
-19. [Protocol Implementation Details](#protocol-implementation-details)
-
----
-
 ## Overview
 
 JoinMarket is a decentralized CoinJoin implementation that allows Bitcoin users to improve their transaction privacy through collaborative transactions. The protocol consists of two main participant types:
@@ -125,40 +101,40 @@ Each module has one clear purpose:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         JoinMarket System                                │
+│                         JoinMarket System                               │
 ├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
+│                                                                         │
 │  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │                      Directory Server                            │    │
+│  │                      Directory Server                           │    │
 │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │    │
 │  │  │  Connection  │  │    Peer      │  │   Message    │           │    │
 │  │  │   Manager    │──│  Registry    │──│    Router    │           │    │
 │  │  └──────────────┘  └──────────────┘  └──────────────┘           │    │
 │  └─────────────────────────────────────────────────────────────────┘    │
-│                            ▲                                             │
-│                            │ connects                                    │
+│                            ▲                                            │
+│                            │ connects                                   │
 │         ┌──────────────────┼──────────────────┐                         │
-│         │                  │                  │                          │
-│         ▼                  ▼                  ▼                          │
+│         │                  │                  │                         │
+│         ▼                  ▼                  ▼                         │
 │  ┌─────────────┐   ┌──────────────┐   ┌──────────────┐                  │
 │  │   Maker     │   │  Orderbook   │   │   Taker      │                  │
 │  │    Bot      │   │   Watcher    │   │    Bot       │                  │
 │  └─────────────┘   └──────────────┘   └──────────────┘                  │
-│         │                                     │                          │
-│         │                                     │                          │
-│         ▼                                     ▼                          │
+│         │                                     │                         │
+│         │                                     │                         │
+│         ▼                                     ▼                         │
 │  ┌─────────────────────────────────────────────────┐                    │
-│  │                    jmwallet                      │                    │
+│  │                    jmwallet                     │                    │
 │  │  ┌──────────────┐  ┌──────────────┐             │                    │
 │  │  │  BIP32/39/84 │  │   Backends   │             │                    │
 │  │  │    Wallet    │  │ (Core, SPV)  │             │                    │
 │  │  └──────────────┘  └──────────────┘             │                    │
 │  └─────────────────────────────────────────────────┘                    │
-│                            │                                             │
-│                            │ uses                                        │
-│                            ▼                                             │
+│                            │                                            │
+│                            │ uses                                       │
+│                            ▼                                            │
 │  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │                          jmcore                                  │    │
+│  │                          jmcore                                 │    │
 │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │    │
 │  │  │   Protocol   │  │    Models    │  │    Crypto    │           │    │
 │  │  │   Messages   │  │  (Pydantic)  │  │  Primitives  │           │    │
@@ -168,7 +144,7 @@ Each module has one clear purpose:
 │  │  │  Primitives  │  │    Calc      │                             │    │
 │  │  └──────────────┘  └──────────────┘                             │    │
 │  └─────────────────────────────────────────────────────────────────┘    │
-│                                                                          │
+│                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -294,22 +270,22 @@ The Neutrino server (written in Go) provides a REST API for wallet integration:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                      Neutrino Server (Go)                        │
-│               github.com/m0wer/neutrino-api                      │
+│                      Neutrino Server (Go)                       │
+│               github.com/m0wer/neutrino-api                     │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
+│                                                                 │
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐       │
 │  │   P2P Node   │    │   Filter     │    │   REST API   │       │
 │  │  (btcsuite)  │────│    Store     │────│   Handler    │       │
 │  └──────────────┘    └──────────────┘    └──────────────┘       │
-│         │                                        │               │
+│         │                                       │               │
 │         │  BIP157/158                           │ HTTP          │
-│         ▼                                        ▼               │
+│         ▼                                       ▼               │
 │  ┌──────────────┐                        ┌──────────────┐       │
 │  │   Bitcoin    │                        │   Python     │       │
 │  │   Network    │                        │   Backend    │       │
 │  └──────────────┘                        └──────────────┘       │
-│                                                                  │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -440,7 +416,7 @@ The nick format enables:
 Taker                          Directory                        Maker
   |                                |                               |
   |--- PUBMSG !orderbook --------->|                               |
-  |                                |--- Broadcast ----------------->|
+  |                                |--- Broadcast ---------------->|
   |                                |                               |
   |<------------- PRIVMSG !sw0reloffer ... (per maker) ------------|
 ```
@@ -512,13 +488,13 @@ The taker:
 1. Collects all maker signatures
 2. Adds their own signatures to the transaction
 3. Assembles the final witness data
-4. Broadcasts to the Bitcoin network
+4. Broadcasts to the Bitcoin network through a maker TODO: check and update the code if necessary
 
 ### Implementation Reference
 
 The protocol flow is implemented in:
-- `taker/src/taker/taker.py:292-449` - `do_coinjoin()` method
-- `maker/src/maker/bot.py:265-377` - Message handlers
+- `taker/src/taker/taker.py` - `do_coinjoin()` method
+- `maker/src/maker/bot.py` - Message handlers
 - `maker/src/maker/coinjoin.py` - CoinJoin session state machine
 
 ---
@@ -802,56 +778,46 @@ def calculate_cj_fee(offer: Offer, cj_amount: int) -> int:
 
 ---
 
-## Technology Stack
+## Development
 
-### Core Technologies
+### Dependency Management
 
-- **Python 3.14+**: Modern Python with type hints
-- **Go**: Neutrino server implementation
-- **AsyncIO**: High-performance async networking
-- **Pydantic**: Type-safe data validation
-- **Loguru**: Structured logging
+This project uses [pip-tools](https://github.com/jazzband/pip-tools) to pin dependencies for reproducible builds and security.
 
-### Development Tools
+```bash
+# Install pip-tools
+pip install pip-tools
 
-- **Ruff**: Fast linting and formatting
-- **MyPy**: Static type checking
-- **Pytest**: Testing framework
-- **Pre-commit**: Git hooks for quality
+# Update pinned dependencies (run this after changing pyproject.toml)
+# In jmcore:
+cd jmcore
+python -m piptools compile -Uv pyproject.toml -o requirements.txt
 
-### Infrastructure
+# In directory_server (uses requirements.in for local jmcore dependency):
+cd directory_server
+python -m piptools compile -Uv requirements.in -o requirements.txt
+```
 
-- **Docker**: Containerization
-- **Tor**: Onion service privacy
-- **Systemd**: Service management (production)
+**Note**: The directory_server uses a `requirements.in` file to properly handle the local jmcore dependency with `-e ../jmcore`. The pinned `requirements.txt` files are used in Docker builds for reproducible deployments.
 
----
+### Running Tests
 
-## Performance Characteristics
+To run all unit tests with coverage:
 
-### Latency
+TODO: verify
 
-- **Handshake**: < 100ms (local), < 500ms (over Tor)
-- **Message routing**: < 10ms (local), < 100ms (over Tor)
-- **Peer lookup**: O(1) with dict-based registry
+```bash
+pytest -lv \
+  --cov=jmcore \
+  --cov=jmwallet \
+  --cov=directory_server \
+  --cov=orderbook_watcher \
+  --cov=maker \
+  --cov=taker \
+  jmcore orderbook_watcher directory_server jmwallet maker taker tests
+```
 
-### Throughput
-
-- **Connections**: 1000+ concurrent (tested)
-- **Messages**: 10,000+ msg/sec (local)
-- **Bandwidth**: Limited by Tor (~1 MB/s typical)
-
-### Memory
-
-- **Base usage**: ~50 MB
-- **Per peer**: ~5 KB
-- **1000 peers**: ~55 MB total
-
-### Scalability
-
-- Horizontal: Multiple directory servers (independent)
-- Vertical: Single server handles 1000+ peers
-- Bottleneck: Tor network, not implementation
+For E2E tests, see the [E2E README](./tests/e2e/README.md).
 
 ---
 
@@ -887,378 +853,6 @@ The following modules are security-critical and have been designed to prevent lo
 | `maker/tx_verification.py` | Verifies CoinJoin transactions before signing | 100% |
 | `jmwallet/wallet/signing.py` | Transaction signing | 95% |
 | `jmcore/podle.py` | Anti-sybil proof verification | 90%+ |
-
----
-
-## Testing Strategy
-
-### Unit Tests
-
-- All core components
-- Mock external dependencies
-- Test edge cases and errors
-- 80%+ coverage target
-
-### Integration Tests
-
-- Component interactions
-- Real connections (localhost)
-- Error propagation
-- Network scenarios
-
-### Performance Tests
-
-- Load testing
-- Memory profiling
-- Latency benchmarks (future)
-
----
-
-## Testing Guide
-
-### Prerequisites
-
-- Docker and Docker Compose
-- Python 3.14+ with project dependencies
-- Bitcoin Core regtest via Docker
-
-### Setup
-
-```bash
-# Start infrastructure
-docker compose up -d bitcoin directory-server
-
-# Verify
-docker ps
-```
-
-### Test Wallets
-
-**Maker 1**
-- Mnemonic: `avoid whisper mesh corn already blur sudden fine planet chicken hover sniff`
-- CJ fee: 0.03%
-
-**Maker 2**
-- Mnemonic: `minute faint grape plate stock mercy tent world space opera apple rocket`
-- CJ fee: 0.025%
-
-**Taker**
-- Mnemonic: `burden notable love elephant orbit couch message galaxy elevator exile drop toilet`
-
-### Running a Test CoinJoin
-
-1. **Start makers**:
-```bash
-PYTHONPATH="jmcore/src:jmwallet/src:maker/src" python3 -m maker.cli start \
-  --mnemonic "avoid whisper..." \
-  --network regtest \
-  --directory-servers 127.0.0.1:5222
-```
-
-2. **Run taker**:
-```bash
-PYTHONPATH="jmcore/src:jmwallet/src:taker/src" python3 -m taker.cli coinjoin \
-  --mnemonic "burden notable..." \
-  --network regtest \
-  --amount 50000000 \
-  --counterparties 2
-```
-
-3. **Expected output**:
-```
-14:00:19 | INFO | Starting CoinJoin: 50000000 sats -> INTERNAL
-14:00:29 | INFO | Fetched 2 offers and 0 fidelity bonds
-14:00:29 | INFO | Selected 2 makers, total fee: 27,500 sats
-14:00:29 | INFO | Phase 1: Sending !fill to makers...
-14:00:34 | INFO | Phase 2: Sending !auth and receiving !ioauth...
-14:00:39 | INFO | Phase 3: Building transaction...
-14:00:44 | INFO | Phase 4: Collecting signatures...
-14:00:44 | INFO | Phase 5: Broadcasting transaction...
-14:00:44 | INFO | CoinJoin COMPLETE! txid: <txid>
-```
-
-### Verifying the Transaction
-
-```bash
-bitcoin-cli -regtest getrawtransaction <txid> true
-```
-
-Expected structure:
-- **3 inputs**: 1 from taker + 2 from makers
-- **6 outputs**: 3 equal CoinJoin outputs + 3 change outputs
-
-### Common Issues
-
-1. **"Peerlist empty"**: Normal for NOT-SERVING-ONION mode
-2. **Signature verification failed**: Check scriptCode format (25 bytes, no length prefix)
-3. **Input index mismatch**: Use input_index_map for shuffled transactions
-
----
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `jmcore/src/jmcore/protocol.py` | Protocol constants and message types |
-| `jmcore/src/jmcore/crypto.py` | Cryptographic primitives, nick generation, ECDSA signing |
-| `jmcore/src/jmcore/podle.py` | PoDLE generation and verification |
-| `maker/src/maker/bot.py` | Maker message handling and protocol state |
-| `maker/src/maker/coinjoin.py` | Maker CoinJoin session and transaction signing |
-| `maker/src/maker/encryption.py` | NaCl encryption session management |
-| `taker/src/taker/taker.py` | Taker CoinJoin orchestration |
-| `taker/src/taker/tx_builder.py` | Transaction construction |
-| `jmwallet/src/jmwallet/wallet/signing.py` | P2WPKH signing utilities |
-| `jmwallet/src/jmwallet/backends/neutrino.py` | Neutrino backend client |
-
----
-
-## Protocol Implementation Details
-
-This section documents the exact protocol details discovered through E2E testing with the reference JoinMarket (JAM) implementation.
-
-### Message Signing and Verification
-
-All JoinMarket messages are signed to prevent spoofing. The signature format is:
-
-```
-<message_content> <signing_pubkey_hex> <signature_base64>
-```
-
-**Critical**: The signature is computed over `message_content + hostid`, NOT the full message with command. The `hostid` is currently hardcoded to `1` in JoinMarket.
-
-```python
-# Correct signing (maker side)
-data_to_sign = msg_content + hostid  # e.g., "nacl_pubkey_hex" + "1"
-signature = nick_identity.sign_message(msg_content, hostid)
-```
-
-### NaCl Encryption Setup
-
-The encryption uses NaCl (libsodium) Box for authenticated encryption:
-
-1. **Key Exchange**: Each party generates an ephemeral Curve25519 keypair
-2. **Fill Message**: Taker sends their NaCl pubkey in `!fill`
-3. **Pubkey Response**: Maker sends their NaCl pubkey in `!pubkey`
-4. **Box Creation**: Both derive shared secret via ECDH
-
-**Critical Implementation Detail**: The taker must use the **same keypair** for all makers in a CoinJoin session. When the taker receives each maker's pubkey, they create a new NaCl Box using:
-- The **original taker keypair** (sent in `!fill` to all makers)
-- The **maker's pubkey** (received in `!pubkey`)
-
-```python
-# WRONG: Creating new keypair per maker breaks encryption
-for nick in makers:
-    crypto = CryptoSession()  # New keypair - WRONG!
-    crypto.setup_encryption(maker_pubkey)
-
-# CORRECT: Reuse original taker keypair
-taker_crypto = CryptoSession()
-taker_pubkey = taker_crypto.get_pubkey_hex()
-# Send taker_pubkey in !fill to all makers
-
-for nick in makers:
-    # Reuse taker's private key, create new box with maker's pubkey
-    crypto = CryptoSession.__new__(CryptoSession)
-    crypto.keypair = taker_crypto.keypair  # Reuse!
-    crypto.box = None
-    crypto.counterparty_pubkey = ""
-    crypto.setup_encryption(maker_pubkey)
-    maker_sessions[nick].crypto = crypto
-```
-
-```python
-# Create NaCl Box for encryption
-from nacl.public import PrivateKey, PublicKey, Box
-
-our_private = PrivateKey.generate()
-our_public = our_private.public_key
-their_public = PublicKey(bytes.fromhex(counterparty_pubkey_hex))
-box = Box(our_private, their_public)
-
-# Encrypt
-encrypted = box.encrypt(plaintext.encode())
-encrypted_b64 = base64.b64encode(encrypted).decode()
-
-# Decrypt
-encrypted_bytes = base64.b64decode(encrypted_b64)
-decrypted = box.decrypt(encrypted_bytes).decode()
-```
-
-### Auth Message Format
-
-The `!auth` message contains the PoDLE revelation, encrypted:
-
-**Plaintext format** (pipe-separated):
-```
-txid:vout|P_hex|P2_hex|sig_hex|e_hex
-```
-
-Example:
-```
-abc123def456...:0|03a1b2c3...|02d4e5f6...|1234abcd...|5678efgh...
-```
-
-The taker encrypts this with the maker's NaCl pubkey and sends it.
-
-### ioauth Message Format
-
-The `!ioauth` message from maker to taker contains:
-
-**Plaintext format** (space-separated):
-```
-utxo_list auth_pub cj_addr change_addr btc_sig
-```
-
-Where:
-- `utxo_list`: Comma-separated list of `txid:vout` pairs (or single utxo)
-- `auth_pub`: EC public key (hex) from one of the maker's UTXOs
-- `cj_addr`: Maker's CoinJoin output address
-- `change_addr`: Maker's change output address
-- `btc_sig`: ECDSA signature (base64) of the maker's NaCl pubkey
-
-**Critical**: The `btc_sig` is the maker signing **their own NaCl pubkey** (not the taker's!):
-
-```python
-# Maker signs their own NaCl pubkey to prove UTXO ownership
-our_nacl_pk_hex = our_nacl_public_key.encode().hex()
-btc_sig = ecdsa_sign(our_nacl_pk_hex, auth_hd_key.get_private_key_bytes())
-```
-
-This binds the encryption channel to a Bitcoin key the maker controls.
-
-### PoDLE Schnorr Signature Convention
-
-The PoDLE uses a specific Schnorr signature variant:
-
-**Generation** (reference implementation convention):
-```python
-# Generate random nonce k
-k = random_scalar()
-
-# Compute commitments
-Kg = k * G
-Kj = k * J  # J is the NUMS point
-
-# Compute challenge
-e = sha256(Kg || Kj || P || P2)
-
-# Compute signature (ADDITION, not subtraction!)
-s = (k + e * private_key) % N
-```
-
-**Verification**:
-```python
-# Verify: Kg = s*G - e*P (SUBTRACTION!)
-sG = s * G
-minus_e = (-e) % N
-minus_eP = minus_e * P
-Kg_check = sG + minus_eP  # = s*G - e*P
-
-# Similarly for Kj
-minus_eP2 = minus_e * P2
-Kj_check = s*J + minus_eP2  # = s*J - e*P2
-
-# Verify challenge
-e_check = sha256(Kg_check || Kj_check || P || P2)
-assert e_check == e
-```
-
-**Key insight**: The formula is `s = k + e*x` with verification `Kg = s*G - e*P`. This is opposite to some Schnorr variants that use `s = k - e*x` with `Kg = s*G + e*P`.
-
-### ECDSA Bitcoin Message Signing
-
-For `btc_sig` in `!ioauth`, use Bitcoin's message signing format:
-
-```python
-def ecdsa_sign(message: str, private_key_bytes: bytes) -> str:
-    """Sign message using Bitcoin message format."""
-    # Bitcoin message format: double SHA256 with prefix
-    prefix = b"\x18Bitcoin Signed Message:\n"
-    message_bytes = message.encode()
-
-    # Length-prefixed message
-    prefixed = prefix + len(message_bytes).to_bytes(1, 'big') + message_bytes
-    message_hash = hashlib.sha256(hashlib.sha256(prefixed).digest()).digest()
-
-    # Sign with secp256k1
-    private_key = coincurve.PrivateKey(private_key_bytes)
-    signature = private_key.sign_recoverable(message_hash, hasher=None)
-
-    return base64.b64encode(signature).decode()
-```
-
-### Transaction Message Format
-
-The `!tx` message contains the unsigned transaction:
-
-**Plaintext**: Base64-encoded raw transaction bytes
-**Encrypted**: Using NaCl Box, then base64-encoded again
-
-```python
-# Taker sends tx
-tx_bytes = bytes.fromhex(tx_hex)
-tx_b64 = base64.b64encode(tx_bytes).decode()
-encrypted = session.crypto.encrypt(tx_b64)  # Returns base64
-```
-
-### Signature Response Format
-
-The `!sig` message contains maker signatures:
-
-**Plaintext**: Base64-encoded signature (one per input)
-**Multiple inputs**: Multiple `!sig` messages sent, one per input
-
-```python
-# Maker sends signatures
-for sig_b64 in signatures:
-    encrypted_sig = session.crypto.encrypt(sig_b64)
-    await send_message(taker_nick, "sig", encrypted_sig)
-```
-
-### Input Index Mapping in CoinJoin
-
-CoinJoin transactions have shuffled inputs. The maker must find their input indices:
-
-```python
-def find_input_indices(tx_inputs: list, our_utxos: list[tuple[str, int]]) -> dict:
-    """Map our UTXOs to actual input indices in the transaction."""
-    input_map = {}
-    for idx, inp in enumerate(tx_inputs):
-        # Transaction inputs store txid in little-endian
-        txid_be = inp.txid[::-1].hex()
-        key = (txid_be, inp.vout)
-        if key in our_utxos:
-            input_map[key] = idx
-    return input_map
-```
-
-### Complete Protocol Sequence
-
-```
-Taker                           Maker
-  |                               |
-  |--- !fill (oid, amt, taker_pk, commit) -->|  PLAINTEXT
-  |<-- !pubkey (maker_nacl_pk) ---|          PLAINTEXT + signature
-  |                               |
-  |--- !auth (encrypted reveal) ->|          ENCRYPTED
-  |<-- !ioauth (encrypted) -------|          ENCRYPTED + signature
-  |                               |
-  |--- !tx (encrypted tx_b64) --->|          ENCRYPTED
-  |<-- !sig (encrypted sig_b64) --|          ENCRYPTED (one per input)
-  |                               |
-  [Taker broadcasts final tx]
-```
-
-### Error Handling
-
-Common failure modes and their causes:
-
-| Error | Cause | Solution |
-|-------|-------|----------|
-| "Commitment does not match" | Wrong PoDLE formula | Use `s = k + e*x` convention |
-| "btc_sig verification failed" | Signing wrong data | Sign OUR NaCl pubkey, not theirs |
-| "Decryption failed" | Wrong key exchange | Ensure both sides use same NaCl keys |
-| "Input not found in tx" | LE/BE txid confusion | Convert txid bytes to big-endian |
 
 ---
 
