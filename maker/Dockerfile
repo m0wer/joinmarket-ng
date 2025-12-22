@@ -50,13 +50,13 @@ ENV TX_FEE_CONTRIBUTION=1000
 ENV CJ_FEE_RELATIVE=0.0002
 ENV CJ_FEE_ABSOLUTE=500
 ENV OFFER_TYPE=sw0reloffer
-ENV BACKEND_TYPE=bitcoin_core
+ENV BACKEND_TYPE=full_node
 
 # Tor settings (for connecting to directory servers)
 ENV TOR_SOCKS_HOST=127.0.0.1
 ENV TOR_SOCKS_PORT=9050
 
-# Bitcoin Core RPC (when using bitcoin_core backend)
+# Bitcoin Core RPC (when using full_node backend)
 ENV BITCOIN_RPC_URL=http://localhost:8332
 ENV BITCOIN_RPC_USER=
 ENV BITCOIN_RPC_PASSWORD=
@@ -83,7 +83,7 @@ CMD ["sh", "-c", "\
     FIDELITY_BOND_ARGS=\"\"; \
     if [ -n \"${FIDELITY_BOND_LOCKTIMES}\" ]; then \
         for lt in $(echo \"${FIDELITY_BOND_LOCKTIMES}\" | tr ',' ' '); do \
-            FIDELITY_BOND_ARGS=\"${FIDELITY_BOND_ARGS} --fidelity-bond-locktimes ${lt}\"; \
+            FIDELITY_BOND_ARGS=\"${FIDELITY_BOND_ARGS} --fidelity-bond-locktime ${lt}\"; \
         done; \
     fi; \
     jm-maker start \

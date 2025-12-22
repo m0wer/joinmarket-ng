@@ -5,7 +5,7 @@ Tests neutrino light client backend functionality:
 - Basic blockchain operations (height, transactions, fees)
 - UTXO discovery and watching addresses
 - Maker and taker operation with neutrino backend
-- Cross-backend compatibility (bitcoin_core + neutrino)
+- Cross-backend compatibility (full_node + neutrino)
 - Fidelity bonds with neutrino backend
 
 Requires: docker compose --profile neutrino up -d
@@ -70,7 +70,7 @@ async def neutrino_backend(neutrino_url: str):
     # Verify neutrino is available
     try:
         height = await backend.get_block_height()
-        if height < 0:
+        if height <= 0:
             pytest.skip(f"Neutrino not ready, height: {height}")
     except Exception as e:
         pytest.skip(f"Neutrino server not available: {e}")

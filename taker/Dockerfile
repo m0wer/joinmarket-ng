@@ -56,7 +56,7 @@ ENV MAX_CJ_FEE_ABS=5000
 ENV TOR_SOCKS_HOST=127.0.0.1
 ENV TOR_SOCKS_PORT=9050
 
-# Bitcoin Core RPC (when using bitcoin_core backend)
+# Bitcoin Core RPC (when using full_node backend)
 ENV BITCOIN_RPC_URL=http://localhost:8332
 ENV BITCOIN_RPC_USER=
 ENV BITCOIN_RPC_PASSWORD=
