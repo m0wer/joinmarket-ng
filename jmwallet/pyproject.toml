@@ -5,8 +5,10 @@ description = "JoinMarket wallet library with pluggable blockchain backends"
 requires-python = ">=3.11"
 dependencies = [
     "coincurve==20.0.0",
+    "cryptography>=42.0.0",
     "httpx>=0.25.0",
     "loguru>=0.7.0",
+    "mnemonic>=0.21",
     "pydantic>=2.0.0",
     "typer>=0.9.0",
 ]

@@ -25,6 +25,7 @@ from jmcore.encryption import CryptoSession
 from jmcore.models import Offer
 from jmcore.protocol import JM_VERSION, is_v6_nick, parse_utxo_list
 from jmwallet.backends.base import BlockchainBackend
+from jmwallet.history import append_history_entry, create_taker_history_entry
 from jmwallet.wallet.models import UTXOInfo
 from jmwallet.wallet.service import WalletService
 from jmwallet.wallet.signing import (
@@ -256,6 +257,10 @@ class Taker:
 
         # Current CoinJoin session data
         self.cj_amount = 0
+        self.cj_destination: str = ""  # Destination address for history
+        self.cj_mixdepth: int = 0  # Source mixdepth for history
+        self.cj_total_maker_fee: int = 0  # Total maker fees for history
+        self.cj_mining_fee: int = 0  # Mining fee for history
         self.maker_sessions: dict[str, MakerSession] = {}
         self.podle_commitment: ExtendedPoDLECommitment | None = None
         self.unsigned_tx: bytes = b""
@@ -456,6 +461,31 @@ class Taker:
 
             self.state = TakerState.COMPLETE
             logger.info(f"CoinJoin COMPLETE! txid: {self.txid}")
+
+            # Record transaction in history
+            try:
+                maker_nicks = list(self.maker_sessions.keys())
+                selected_utxo_tuples = [(u.txid, u.vout) for u in self.selected_utxos]
+
+                history_entry = create_taker_history_entry(
+                    maker_nicks=maker_nicks,
+                    cj_amount=self.cj_amount,
+                    total_maker_fees=self.cj_total_maker_fee,
+                    mining_fee=self.cj_mining_fee,
+                    destination=self.cj_destination,
+                    source_mixdepth=self.cj_mixdepth,
+                    selected_utxos=selected_utxo_tuples,
+                    txid=self.txid,
+                    broadcast_method="self",
+                    network=self.config.network.value,
+                )
+                append_history_entry(history_entry)
+                logger.debug(
+                    f"Recorded CoinJoin in history: "
+                    f"cost {self.cj_total_maker_fee + self.cj_mining_fee} sats"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to record CoinJoin history: {e}")
 
             return self.txid
 
@@ -850,6 +880,12 @@ class Taker:
                 tx_fee=tx_fee,
                 network=network,
             )
+
+            # Store info for history tracking
+            self.cj_destination = destination
+            self.cj_mixdepth = mixdepth
+            self.cj_total_maker_fee = total_maker_fee
+            self.cj_mining_fee = tx_fee
 
             logger.info(f"Built unsigned tx: {len(self.unsigned_tx)} bytes")
             return True

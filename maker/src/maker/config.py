@@ -50,6 +50,9 @@ class MakerConfig(BaseModel):
     # These should match locktimes used when creating bond UTXOs
     fidelity_bond_locktimes: list[int] = Field(default_factory=list)
 
+    # Selected fidelity bond (txid, vout) - if not set, largest bond is used automatically
+    selected_fidelity_bond: tuple[str, int] | None = None
+
     model_config = {"frozen": False}
 
     @model_validator(mode="after")
