@@ -5,6 +5,9 @@ Maker bot CLI using Typer.
 from __future__ import annotations
 
 import asyncio
+import os
+from pathlib import Path
+from typing import Annotated
 
 import typer
 from jmcore.models import NetworkType, get_default_directory_nodes
@@ -19,8 +22,57 @@ from maker.config import MakerConfig
 app = typer.Typer(add_completion=False)
 
 
-def run_async(coro):
+def run_async(coro):  # type: ignore[no-untyped-def]
     return asyncio.run(coro)
+
+
+def load_mnemonic(
+    mnemonic: str | None,
+    mnemonic_file: Path | None,
+    password: str | None,
+) -> str:
+    """
+    Load mnemonic from argument, file, or environment variable.
+
+    Priority:
+    1. --mnemonic argument
+    2. --mnemonic-file argument
+    3. MNEMONIC environment variable
+
+    Args:
+        mnemonic: Direct mnemonic string
+        mnemonic_file: Path to mnemonic file
+        password: Password for encrypted file
+
+    Returns:
+        The mnemonic phrase
+
+    Raises:
+        ValueError: If no mnemonic source is available
+    """
+    if mnemonic:
+        return mnemonic
+
+    if mnemonic_file:
+        if not mnemonic_file.exists():
+            raise ValueError(f"Mnemonic file not found: {mnemonic_file}")
+
+        # Import the mnemonic loading utilities from jmwallet
+        from jmwallet.cli import load_mnemonic_file
+
+        try:
+            return load_mnemonic_file(mnemonic_file, password)
+        except ValueError:
+            # File is encrypted, need password
+            if password is None:
+                password = typer.prompt("Enter mnemonic file password", hide_input=True)
+            return load_mnemonic_file(mnemonic_file, password)
+
+    env_mnemonic = os.environ.get("MNEMONIC")
+    if env_mnemonic:
+        return env_mnemonic
+
+    raise ValueError("Mnemonic required. Use --mnemonic, --mnemonic-file, or MNEMONIC env var")
 
 
 def create_wallet_service(config: MakerConfig) -> WalletService:
@@ -59,43 +111,76 @@ def create_wallet_service(config: MakerConfig) -> WalletService:
 
 @app.command()
 def start(
-    mnemonic: str = typer.Option(..., help="BIP39 mnemonic phrase"),
-    network: NetworkType = typer.Option(NetworkType.MAINNET, case_sensitive=False),
-    bitcoin_network: NetworkType | None = typer.Option(
-        None,
-        case_sensitive=False,
-        help="Bitcoin network for address generation (defaults to --network)",
-    ),
-    backend_type: str = typer.Option("full_node", help="Backend type: full_node | neutrino"),
-    rpc_url: str | None = typer.Option(
-        None, envvar="BITCOIN_RPC_URL", help="Bitcoin full node RPC URL"
-    ),
-    rpc_user: str | None = typer.Option(
-        None, envvar="BITCOIN_RPC_USER", help="Bitcoin full node RPC username"
-    ),
-    rpc_password: str | None = typer.Option(
-        None, envvar="BITCOIN_RPC_PASSWORD", help="Bitcoin full node RPC password"
-    ),
-    neutrino_url: str | None = typer.Option(
-        None, envvar="NEUTRINO_URL", help="Neutrino REST API URL"
-    ),
-    min_size: int = typer.Option(100_000, help="Minimum CoinJoin size in sats"),
-    cj_fee_relative: str = typer.Option("0.001", help="Relative coinjoin fee (e.g., 0.001 = 0.1%)"),
-    cj_fee_absolute: int = typer.Option(
-        500, help="Absolute coinjoin fee in sats (used with absolute offer type)"
-    ),
-    tx_fee_contribution: int = typer.Option(0, help="Tx fee contribution in sats"),
-    directory_servers: list[str] = typer.Option(
-        None,
-        envvar="DIRECTORY_SERVERS",
-        help="Directory servers host:port (multiple allowed). Defaults to mainnet directory nodes.",
-    ),
-    fidelity_bond_locktimes: list[int] = typer.Option(
-        [],
-        help="Fidelity bond locktimes (Unix timestamps) to scan for",
-    ),
-):
+    mnemonic: Annotated[
+        str | None, typer.Option(help="BIP39 mnemonic phrase", envvar="MNEMONIC")
+    ] = None,
+    mnemonic_file: Annotated[
+        Path | None, typer.Option("--mnemonic-file", "-f", help="Path to mnemonic file")
+    ] = None,
+    password: Annotated[
+        str | None, typer.Option("--password", "-p", help="Password for encrypted mnemonic file")
+    ] = None,
+    network: Annotated[NetworkType, typer.Option(case_sensitive=False)] = NetworkType.MAINNET,
+    bitcoin_network: Annotated[
+        NetworkType | None,
+        typer.Option(
+            case_sensitive=False,
+            help="Bitcoin network for address generation (defaults to --network)",
+        ),
+    ] = None,
+    backend_type: Annotated[
+        str, typer.Option(help="Backend type: full_node | neutrino")
+    ] = "full_node",
+    rpc_url: Annotated[
+        str | None, typer.Option(envvar="BITCOIN_RPC_URL", help="Bitcoin full node RPC URL")
+    ] = None,
+    rpc_user: Annotated[
+        str | None, typer.Option(envvar="BITCOIN_RPC_USER", help="Bitcoin full node RPC username")
+    ] = None,
+    rpc_password: Annotated[
+        str | None,
+        typer.Option(envvar="BITCOIN_RPC_PASSWORD", help="Bitcoin full node RPC password"),
+    ] = None,
+    neutrino_url: Annotated[
+        str | None, typer.Option(envvar="NEUTRINO_URL", help="Neutrino REST API URL")
+    ] = None,
+    min_size: Annotated[int, typer.Option(help="Minimum CoinJoin size in sats")] = 100_000,
+    cj_fee_relative: Annotated[
+        str, typer.Option(help="Relative coinjoin fee (e.g., 0.001 = 0.1%)")
+    ] = "0.001",
+    cj_fee_absolute: Annotated[
+        int, typer.Option(help="Absolute coinjoin fee in sats (used with absolute offer type)")
+    ] = 500,
+    tx_fee_contribution: Annotated[int, typer.Option(help="Tx fee contribution in sats")] = 0,
+    directory_servers: Annotated[
+        list[str] | None,
+        typer.Option(
+            envvar="DIRECTORY_SERVERS",
+            help="Directory servers host:port. Defaults to mainnet directory nodes.",
+        ),
+    ] = None,
+    fidelity_bond_locktimes: Annotated[
+        list[int],
+        typer.Option("--fidelity-bond-locktime", "-L", help="Fidelity bond locktimes to scan for"),
+    ] = [],  # noqa: B006
+    fidelity_bond: Annotated[
+        str | None,
+        typer.Option(
+            "--fidelity-bond",
+            "-B",
+            help="Specific fidelity bond to use (format: txid:vout). "
+            "If not specified, the largest bond is selected automatically.",
+        ),
+    ] = None,
+) -> None:
     """Start the maker bot."""
+    # Load mnemonic
+    try:
+        resolved_mnemonic = load_mnemonic(mnemonic, mnemonic_file, password)
+    except ValueError as e:
+        logger.error(str(e))
+        raise typer.Exit(1)
+
     # Use bitcoin_network for address generation, default to network if not specified
     actual_bitcoin_network = bitcoin_network or network
 
@@ -104,7 +189,7 @@ def start(
         directory_servers if directory_servers else get_default_directory_nodes(network)
     )
 
-    backend_config = {}
+    backend_config: dict[str, str] = {}
     if backend_type == "full_node":
         backend_config = {
             "rpc_url": rpc_url or "http://127.0.0.1:8332",
@@ -118,7 +203,7 @@ def start(
         }
 
     config = MakerConfig(
-        mnemonic=mnemonic,
+        mnemonic=resolved_mnemonic,
         network=network,
         bitcoin_network=actual_bitcoin_network,
         backend_type=backend_type,
@@ -128,13 +213,26 @@ def start(
         cj_fee_relative=cj_fee_relative,
         cj_fee_absolute=cj_fee_absolute,
         tx_fee_contribution=tx_fee_contribution,
-        fidelity_bond_locktimes=fidelity_bond_locktimes,
+        fidelity_bond_locktimes=list(fidelity_bond_locktimes),
     )
 
     wallet = create_wallet_service(config)
     bot = MakerBot(wallet, wallet.backend, config)
 
-    async def run_bot():
+    # Store the specific fidelity bond selection if provided
+    if fidelity_bond:
+        # Parse txid:vout format
+        try:
+            parts = fidelity_bond.split(":")
+            if len(parts) != 2:
+                raise ValueError("Invalid format")
+            config.selected_fidelity_bond = (parts[0], int(parts[1]))
+            logger.info(f"Using specified fidelity bond: {fidelity_bond}")
+        except (ValueError, IndexError):
+            logger.error(f"Invalid fidelity bond format: {fidelity_bond}. Use txid:vout")
+            raise typer.Exit(1)
+
+    async def run_bot() -> None:
         try:
             await bot.start()
             while True:
@@ -153,19 +251,34 @@ def start(
 
 @app.command()
 def generate_address(
-    mnemonic: str = typer.Option(..., help="BIP39 mnemonic"),
-    network: NetworkType = typer.Option(NetworkType.MAINNET, case_sensitive=False),
-    bitcoin_network: NetworkType | None = typer.Option(
-        None,
-        case_sensitive=False,
-        help="Bitcoin network for address generation (defaults to --network)",
-    ),
-    backend_type: str = typer.Option("full_node"),
-):
+    mnemonic: Annotated[str | None, typer.Option(help="BIP39 mnemonic", envvar="MNEMONIC")] = None,
+    mnemonic_file: Annotated[
+        Path | None, typer.Option("--mnemonic-file", "-f", help="Path to mnemonic file")
+    ] = None,
+    password: Annotated[
+        str | None, typer.Option("--password", "-p", help="Password for encrypted mnemonic file")
+    ] = None,
+    network: Annotated[NetworkType, typer.Option(case_sensitive=False)] = NetworkType.MAINNET,
+    bitcoin_network: Annotated[
+        NetworkType | None,
+        typer.Option(
+            case_sensitive=False,
+            help="Bitcoin network for address generation (defaults to --network)",
+        ),
+    ] = None,
+    backend_type: Annotated[str, typer.Option()] = "full_node",
+) -> None:
     """Generate a new receive address."""
+    # Load mnemonic
+    try:
+        resolved_mnemonic = load_mnemonic(mnemonic, mnemonic_file, password)
+    except ValueError as e:
+        logger.error(str(e))
+        raise typer.Exit(1)
+
     actual_bitcoin_network = bitcoin_network or network
     config = MakerConfig(
-        mnemonic=mnemonic,
+        mnemonic=resolved_mnemonic,
         network=network,
         bitcoin_network=actual_bitcoin_network,
         backend_type=backend_type,
@@ -175,5 +288,5 @@ def generate_address(
     typer.echo(address)
 
 
-def main():  # pragma: no cover
+def main() -> None:  # pragma: no cover
     app()

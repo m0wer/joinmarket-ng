@@ -5,8 +5,10 @@ Command-line interface for JoinMarket Taker.
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
+from typing import Annotated
 
 import typer
 from jmcore.models import NetworkType, get_default_directory_nodes
@@ -35,64 +37,148 @@ def setup_logging(level: str) -> None:
     )
 
 
+def load_mnemonic(
+    mnemonic: str | None,
+    mnemonic_file: Path | None,
+    password: str | None,
+) -> str:
+    """
+    Load mnemonic from argument, file, or environment variable.
+
+    Priority:
+    1. --mnemonic argument
+    2. --mnemonic-file argument
+    3. MNEMONIC environment variable
+
+    Args:
+        mnemonic: Direct mnemonic string
+        mnemonic_file: Path to mnemonic file
+        password: Password for encrypted file
+
+    Returns:
+        The mnemonic phrase
+
+    Raises:
+        ValueError: If no mnemonic source is available
+    """
+    if mnemonic:
+        return mnemonic
+
+    if mnemonic_file:
+        if not mnemonic_file.exists():
+            raise ValueError(f"Mnemonic file not found: {mnemonic_file}")
+
+        # Import the mnemonic loading utilities from jmwallet
+        from jmwallet.cli import load_mnemonic_file
+
+        try:
+            return load_mnemonic_file(mnemonic_file, password)
+        except ValueError:
+            # File is encrypted, need password
+            if password is None:
+                password = typer.prompt("Enter mnemonic file password", hide_input=True)
+            return load_mnemonic_file(mnemonic_file, password)
+
+    env_mnemonic = os.environ.get("MNEMONIC")
+    if env_mnemonic:
+        return env_mnemonic
+
+    raise ValueError("Mnemonic required. Use --mnemonic, --mnemonic-file, or MNEMONIC env var")
+
+
 @app.command()
 def coinjoin(
-    amount: int = typer.Option(..., "--amount", "-a", help="Amount in sats (0 for sweep)"),
-    destination: str = typer.Option(
-        "INTERNAL",
-        "--destination",
-        "-d",
-        help="Destination address (or 'INTERNAL' for next mixdepth)",
-    ),
-    mixdepth: int = typer.Option(0, "--mixdepth", "-m", help="Source mixdepth"),
-    counterparties: int = typer.Option(3, "--counterparties", "-n", help="Number of makers"),
-    mnemonic: str = typer.Option(
-        None, "--mnemonic", envvar="MNEMONIC", help="Wallet mnemonic phrase"
-    ),
-    network: str = typer.Option("mainnet", "--network", help="Protocol network for handshakes"),
-    bitcoin_network: str = typer.Option(
-        None, "--bitcoin-network", help="Bitcoin network for addresses (defaults to --network)"
-    ),
-    backend_type: str = typer.Option(
-        "full_node", "--backend", "-b", help="Backend type: full_node | neutrino"
-    ),
-    rpc_url: str = typer.Option(
-        "http://127.0.0.1:8332",
-        "--rpc-url",
-        envvar="BITCOIN_RPC_URL",
-        help="Bitcoin full node RPC URL",
-    ),
-    rpc_user: str = typer.Option(
-        "", "--rpc-user", envvar="BITCOIN_RPC_USER", help="Bitcoin full node RPC user"
-    ),
-    rpc_password: str = typer.Option(
-        "", "--rpc-password", envvar="BITCOIN_RPC_PASSWORD", help="Bitcoin full node RPC password"
-    ),
-    neutrino_url: str = typer.Option(
-        "http://127.0.0.1:8334",
-        "--neutrino-url",
-        envvar="NEUTRINO_URL",
-        help="Neutrino REST API URL",
-    ),
-    directory_servers: str = typer.Option(
-        None,
-        "--directory",
-        "-D",
-        envvar="DIRECTORY_SERVERS",
-        help="Directory servers (comma-separated). Defaults to mainnet directory nodes.",
-    ),
-    max_abs_fee: int = typer.Option(500, "--max-abs-fee", help="Max absolute fee in sats"),
-    max_rel_fee: str = typer.Option("0.001", "--max-rel-fee", help="Max relative fee (0.001=0.1%)"),
-    bondless_makers_allowance: float = typer.Option(
-        0.125, "--bondless-allowance", help="Fraction of time to choose makers randomly (0.0-1.0)"
-    ),
-    log_level: str = typer.Option("INFO", "--log-level", "-l", help="Log level"),
+    amount: Annotated[int, typer.Option("--amount", "-a", help="Amount in sats (0 for sweep)")],
+    destination: Annotated[
+        str,
+        typer.Option(
+            "--destination",
+            "-d",
+            help="Destination address (or 'INTERNAL' for next mixdepth)",
+        ),
+    ] = "INTERNAL",
+    mixdepth: Annotated[int, typer.Option("--mixdepth", "-m", help="Source mixdepth")] = 0,
+    counterparties: Annotated[
+        int, typer.Option("--counterparties", "-n", help="Number of makers")
+    ] = 3,
+    mnemonic: Annotated[
+        str | None, typer.Option("--mnemonic", envvar="MNEMONIC", help="Wallet mnemonic phrase")
+    ] = None,
+    mnemonic_file: Annotated[
+        Path | None, typer.Option("--mnemonic-file", "-f", help="Path to mnemonic file")
+    ] = None,
+    password: Annotated[
+        str | None, typer.Option("--password", "-p", help="Password for encrypted mnemonic file")
+    ] = None,
+    network: Annotated[
+        str, typer.Option("--network", help="Protocol network for handshakes")
+    ] = "mainnet",
+    bitcoin_network: Annotated[
+        str | None,
+        typer.Option(
+            "--bitcoin-network", help="Bitcoin network for addresses (defaults to --network)"
+        ),
+    ] = None,
+    backend_type: Annotated[
+        str, typer.Option("--backend", "-b", help="Backend type: full_node | neutrino")
+    ] = "full_node",
+    rpc_url: Annotated[
+        str,
+        typer.Option(
+            "--rpc-url",
+            envvar="BITCOIN_RPC_URL",
+            help="Bitcoin full node RPC URL",
+        ),
+    ] = "http://127.0.0.1:8332",
+    rpc_user: Annotated[
+        str,
+        typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER", help="Bitcoin full node RPC user"),
+    ] = "",
+    rpc_password: Annotated[
+        str,
+        typer.Option(
+            "--rpc-password", envvar="BITCOIN_RPC_PASSWORD", help="Bitcoin full node RPC password"
+        ),
+    ] = "",
+    neutrino_url: Annotated[
+        str,
+        typer.Option(
+            "--neutrino-url",
+            envvar="NEUTRINO_URL",
+            help="Neutrino REST API URL",
+        ),
+    ] = "http://127.0.0.1:8334",
+    directory_servers: Annotated[
+        str | None,
+        typer.Option(
+            "--directory",
+            "-D",
+            envvar="DIRECTORY_SERVERS",
+            help="Directory servers (comma-separated). Defaults to mainnet directory nodes.",
+        ),
+    ] = None,
+    max_abs_fee: Annotated[
+        int, typer.Option("--max-abs-fee", help="Max absolute fee in sats")
+    ] = 500,
+    max_rel_fee: Annotated[
+        str, typer.Option("--max-rel-fee", help="Max relative fee (0.001=0.1%)")
+    ] = "0.001",
+    bondless_makers_allowance: Annotated[
+        float,
+        typer.Option(
+            "--bondless-allowance", help="Fraction of time to choose makers randomly (0.0-1.0)"
+        ),
+    ] = 0.125,
+    log_level: Annotated[str, typer.Option("--log-level", "-l", help="Log level")] = "INFO",
 ) -> None:
     """Execute a single CoinJoin transaction."""
     setup_logging(log_level)
 
-    if not mnemonic:
-        logger.error("Mnemonic required. Set via --mnemonic or MNEMONIC env var")
+    # Load mnemonic
+    try:
+        resolved_mnemonic = load_mnemonic(mnemonic, mnemonic_file, password)
+    except ValueError as e:
+        logger.error(str(e))
         raise typer.Exit(1)
 
     # Parse network
@@ -131,7 +217,7 @@ def coinjoin(
 
     # Build config
     config = TakerConfig(
-        mnemonic=mnemonic,
+        mnemonic=resolved_mnemonic,
         network=network_type,
         bitcoin_network=bitcoin_network_type,
         backend_type=backend_type,
@@ -213,46 +299,65 @@ async def _run_coinjoin(
 
 @app.command()
 def tumble(
-    schedule_file: Path = typer.Argument(..., help="Path to schedule JSON file"),
-    mnemonic: str = typer.Option(
-        None, "--mnemonic", envvar="MNEMONIC", help="Wallet mnemonic phrase"
-    ),
-    network: str = typer.Option("mainnet", "--network", help="Bitcoin network"),
-    backend_type: str = typer.Option(
-        "full_node", "--backend", "-b", help="Backend type: full_node | neutrino"
-    ),
-    rpc_url: str = typer.Option(
-        "http://127.0.0.1:8332",
-        "--rpc-url",
-        envvar="BITCOIN_RPC_URL",
-        help="Bitcoin full node RPC URL",
-    ),
-    rpc_user: str = typer.Option(
-        "", "--rpc-user", envvar="BITCOIN_RPC_USER", help="Bitcoin full node RPC user"
-    ),
-    rpc_password: str = typer.Option(
-        "", "--rpc-password", envvar="BITCOIN_RPC_PASSWORD", help="Bitcoin full node RPC password"
-    ),
-    neutrino_url: str = typer.Option(
-        "http://127.0.0.1:8334",
-        "--neutrino-url",
-        envvar="NEUTRINO_URL",
-        help="Neutrino REST API URL",
-    ),
-    directory_servers: str = typer.Option(
-        None,
-        "--directory",
-        "-D",
-        envvar="DIRECTORY_SERVERS",
-        help="Directory servers (comma-separated). Defaults to mainnet directory nodes.",
-    ),
-    log_level: str = typer.Option("INFO", "--log-level", "-l", help="Log level"),
+    schedule_file: Annotated[Path, typer.Argument(help="Path to schedule JSON file")],
+    mnemonic: Annotated[
+        str | None, typer.Option("--mnemonic", envvar="MNEMONIC", help="Wallet mnemonic phrase")
+    ] = None,
+    mnemonic_file: Annotated[
+        Path | None, typer.Option("--mnemonic-file", "-f", help="Path to mnemonic file")
+    ] = None,
+    password: Annotated[
+        str | None, typer.Option("--password", "-p", help="Password for encrypted mnemonic file")
+    ] = None,
+    network: Annotated[str, typer.Option("--network", help="Bitcoin network")] = "mainnet",
+    backend_type: Annotated[
+        str, typer.Option("--backend", "-b", help="Backend type: full_node | neutrino")
+    ] = "full_node",
+    rpc_url: Annotated[
+        str,
+        typer.Option(
+            "--rpc-url",
+            envvar="BITCOIN_RPC_URL",
+            help="Bitcoin full node RPC URL",
+        ),
+    ] = "http://127.0.0.1:8332",
+    rpc_user: Annotated[
+        str,
+        typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER", help="Bitcoin full node RPC user"),
+    ] = "",
+    rpc_password: Annotated[
+        str,
+        typer.Option(
+            "--rpc-password", envvar="BITCOIN_RPC_PASSWORD", help="Bitcoin full node RPC password"
+        ),
+    ] = "",
+    neutrino_url: Annotated[
+        str,
+        typer.Option(
+            "--neutrino-url",
+            envvar="NEUTRINO_URL",
+            help="Neutrino REST API URL",
+        ),
+    ] = "http://127.0.0.1:8334",
+    directory_servers: Annotated[
+        str | None,
+        typer.Option(
+            "--directory",
+            "-D",
+            envvar="DIRECTORY_SERVERS",
+            help="Directory servers (comma-separated). Defaults to mainnet directory nodes.",
+        ),
+    ] = None,
+    log_level: Annotated[str, typer.Option("--log-level", "-l", help="Log level")] = "INFO",
 ) -> None:
     """Run a tumbler schedule of CoinJoins."""
     setup_logging(log_level)
 
-    if not mnemonic:
-        logger.error("Mnemonic required. Set via --mnemonic or MNEMONIC env var")
+    # Load mnemonic
+    try:
+        resolved_mnemonic = load_mnemonic(mnemonic, mnemonic_file, password)
+    except ValueError as e:
+        logger.error(str(e))
         raise typer.Exit(1)
 
     if not schedule_file.exists():
@@ -300,7 +405,7 @@ def tumble(
 
     # Build config
     config = TakerConfig(
-        mnemonic=mnemonic,
+        mnemonic=resolved_mnemonic,
         network=network_type,
         backend_type=backend_type,
         backend_config=backend_config,

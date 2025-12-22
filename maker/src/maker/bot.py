@@ -20,12 +20,18 @@ from jmcore.models import Offer
 from jmcore.network import HiddenServiceListener, TCPConnection
 from jmcore.protocol import COMMAND_PREFIX, JM_VERSION
 from jmwallet.backends.base import BlockchainBackend
+from jmwallet.history import append_history_entry, create_maker_history_entry
 from jmwallet.wallet.service import WalletService
 from loguru import logger
 
 from maker.coinjoin import CoinJoinSession
 from maker.config import MakerConfig
-from maker.fidelity import FidelityBondInfo, create_fidelity_bond_proof, get_best_fidelity_bond
+from maker.fidelity import (
+    FidelityBondInfo,
+    create_fidelity_bond_proof,
+    find_fidelity_bonds,
+    get_best_fidelity_bond,
+)
 from maker.offers import OfferManager
 
 # Default hostid for onion network (matches reference implementation)
@@ -92,7 +98,29 @@ class MakerBot:
             logger.info(f"Wallet synced. Total balance: {total_balance:,} sats")
 
             # Find fidelity bond for proof generation
-            self.fidelity_bond = get_best_fidelity_bond(self.wallet)
+            # If a specific bond is selected in config, use it; otherwise use the best one
+            if self.config.selected_fidelity_bond:
+                # User specified a specific bond
+                sel_txid, sel_vout = self.config.selected_fidelity_bond
+                bonds = find_fidelity_bonds(self.wallet)
+                self.fidelity_bond = next(
+                    (b for b in bonds if b.txid == sel_txid and b.vout == sel_vout), None
+                )
+                if self.fidelity_bond:
+                    logger.info(
+                        f"Using selected fidelity bond: {sel_txid[:16]}...:{sel_vout}, "
+                        f"value={self.fidelity_bond.value:,} sats, "
+                        f"bond_value={self.fidelity_bond.bond_value:,}"
+                    )
+                else:
+                    logger.warning(
+                        f"Selected fidelity bond {sel_txid[:16]}...:{sel_vout} not found, "
+                        "falling back to best available"
+                    )
+                    self.fidelity_bond = get_best_fidelity_bond(self.wallet)
+            else:
+                # Auto-select the best (largest bond value) fidelity bond
+                self.fidelity_bond = get_best_fidelity_bond(self.wallet)
             if self.fidelity_bond:
                 logger.info(
                     f"Fidelity bond found: {self.fidelity_bond.txid[:16]}..., "
@@ -581,6 +609,29 @@ class MakerBot:
                 for sig in signatures:
                     await self._send_response(taker_nick, "sig", {"signature": sig})
                 logger.info(f"CoinJoin with {taker_nick} COMPLETE ✓ (sent {len(signatures)} sigs)")
+
+                # Record transaction in history
+                try:
+                    fee_received = session.offer.calculate_fee(session.amount)
+                    txfee_contribution = session.offer.txfee
+                    our_utxos = list(session.our_utxos.keys())
+
+                    history_entry = create_maker_history_entry(
+                        taker_nick=taker_nick,
+                        cj_amount=session.amount,
+                        fee_received=fee_received,
+                        txfee_contribution=txfee_contribution,
+                        cj_address=session.cj_address,
+                        our_utxos=our_utxos,
+                        txid=response.get("txid"),
+                        network=self.config.network.value,
+                    )
+                    append_history_entry(history_entry)
+                    net = fee_received - txfee_contribution
+                    logger.debug(f"Recorded CoinJoin in history: net fee {net} sats")
+                except Exception as e:
+                    logger.warning(f"Failed to record CoinJoin history: {e}")
+
                 del self.active_sessions[taker_nick]
 
                 # Re-sync wallet to update UTXO set after CoinJoin
