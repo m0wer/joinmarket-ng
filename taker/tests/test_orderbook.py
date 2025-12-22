@@ -112,7 +112,7 @@ class TestIsFeeWithinLimits:
     """Tests for is_fee_within_limits."""
 
     def test_within_limits(self, max_cj_fee: MaxCjFee) -> None:
-        """Test fee within limits."""
+        """Test relative fee within limits."""
         offer = Offer(
             counterparty="maker",
             oid=0,
@@ -120,13 +120,13 @@ class TestIsFeeWithinLimits:
             minsize=10_000,
             maxsize=1_000_000,
             txfee=1000,
-            cjfee="0.001",  # 0.1%
+            cjfee="0.001",  # 0.1% - checked against rel_fee limit
         )
-        # 0.1% of 100,000 = 100, within both limits
+        # 0.001 <= 0.1 (rel_fee), so it passes
         assert is_fee_within_limits(offer, 100_000, max_cj_fee) is True
 
     def test_exceeds_absolute_limit(self) -> None:
-        """Test fee exceeds absolute limit."""
+        """Test absolute fee exceeds absolute limit."""
         max_fee = MaxCjFee(abs_fee=1000, rel_fee="0.01")
         offer = Offer(
             counterparty="maker",
@@ -135,12 +135,12 @@ class TestIsFeeWithinLimits:
             minsize=10_000,
             maxsize=1_000_000,
             txfee=1000,
-            cjfee=5000,  # > 1000 limit
+            cjfee=5000,  # 5000 > 1000 abs_fee limit
         )
         assert is_fee_within_limits(offer, 100_000, max_fee) is False
 
     def test_exceeds_relative_limit(self) -> None:
-        """Test fee exceeds relative limit."""
+        """Test relative fee exceeds relative limit."""
         max_fee = MaxCjFee(abs_fee=50_000, rel_fee="0.0005")  # 0.05%
         offer = Offer(
             counterparty="maker",
@@ -149,9 +149,41 @@ class TestIsFeeWithinLimits:
             minsize=10_000,
             maxsize=1_000_000,
             txfee=1000,
-            cjfee="0.001",  # 0.1% > 0.05%
+            cjfee="0.001",  # 0.001 > 0.0005 rel_fee limit
         )
         assert is_fee_within_limits(offer, 100_000, max_fee) is False
+
+    def test_absolute_within_abs_limit_even_if_high_for_amount(self) -> None:
+        """Test that absolute offers are only checked against abs limit, not amount."""
+        max_fee = MaxCjFee(abs_fee=10_000, rel_fee="0.001")  # 0.1%
+        offer = Offer(
+            counterparty="maker",
+            oid=0,
+            ordertype=OfferType.SW0_ABSOLUTE,
+            minsize=10_000,
+            maxsize=1_000_000,
+            txfee=1000,
+            cjfee=5000,  # 5000 <= 10000 abs_fee, so it passes
+        )
+        # Even though 5000/100000 = 5% which exceeds the 0.1% rel_fee limit,
+        # absolute offers are only checked against abs_fee
+        assert is_fee_within_limits(offer, 100_000, max_fee) is True
+
+    def test_relative_within_rel_limit_even_if_high_absolute(self) -> None:
+        """Test that relative offers are only checked against rel limit, not absolute."""
+        max_fee = MaxCjFee(abs_fee=100, rel_fee="0.01")  # 1%
+        offer = Offer(
+            counterparty="maker",
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=10_000,
+            maxsize=10_000_000,
+            txfee=1000,
+            cjfee="0.005",  # 0.5% - within 1% rel_fee limit
+        )
+        # At 10M sats, this would be 50,000 sats which exceeds abs_fee=100
+        # But relative offers are only checked against rel_fee
+        assert is_fee_within_limits(offer, 10_000_000, max_fee) is True
 
 
 class TestFilterOffers:

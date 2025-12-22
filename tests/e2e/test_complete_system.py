@@ -587,7 +587,7 @@ async def test_taker_config_validation(taker_config):
 
     # Test default MaxCjFee
     max_fee = MaxCjFee()
-    assert max_fee.abs_fee == 50_000
+    assert max_fee.abs_fee == 500
     assert max_fee.rel_fee == "0.001"
 
     # Test custom config

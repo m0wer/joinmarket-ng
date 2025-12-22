@@ -43,26 +43,25 @@ def is_fee_within_limits(offer: Offer, cj_amount: int, max_cj_fee: MaxCjFee) -> 
     """
     Check if an offer's fee is within the configured limits.
 
+    For absolute offers: check cjfee <= abs_fee
+    For relative offers: check cjfee <= rel_fee
+
+    It's a logical OR - an offer passes if it meets either limit for its type.
+
     Args:
         offer: The maker's offer
-        cj_amount: The CoinJoin amount
+        cj_amount: The CoinJoin amount (not used in the new logic)
         max_cj_fee: Fee limits configuration
 
     Returns:
         True if fee is acceptable
     """
-    fee = calculate_cj_fee(offer, cj_amount)
-
-    # Check absolute fee limit
-    if fee > max_cj_fee.abs_fee:
-        return False
-
-    # Check relative fee limit
-    max_rel = int(Decimal(max_cj_fee.rel_fee) * Decimal(cj_amount))
-    if fee > max_rel:
-        return False
-
-    return True
+    if offer.ordertype in (OfferType.SW0_ABSOLUTE, OfferType.SWA_ABSOLUTE):
+        # For absolute offers, check against absolute limit directly
+        return int(offer.cjfee) <= max_cj_fee.abs_fee
+    else:
+        # For relative offers, check against relative limit directly
+        return Decimal(str(offer.cjfee)) <= Decimal(max_cj_fee.rel_fee)
 
 
 def filter_offers(
