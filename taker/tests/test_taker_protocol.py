@@ -158,7 +158,8 @@ async def test_taker_initialization(mock_wallet, mock_backend, mock_config):
     assert taker.backend == mock_backend
     assert taker.config == mock_config
     assert taker.state == TakerState.IDLE
-    assert taker.nick.startswith("J6")
+    # v5 nicks for reference implementation compatibility
+    assert taker.nick.startswith("J5")
     assert len(taker.maker_sessions) == 0
 
 

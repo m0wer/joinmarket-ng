@@ -1,60 +1,67 @@
 """
 JoinMarket protocol definitions, message types, and serialization.
 
-Protocol Version History:
-- v5: Original JoinMarket protocol (reference implementation compatible)
-- v6: Extended UTXO metadata for Neutrino/light client support
-      - Adds neutrino_compat feature flag in handshake
-      - Extended !auth format: txid:vout:scriptpubkey:blockheight
-      - Extended !ioauth format: includes scriptpubkey:blockheight per UTXO
+Feature Flag System
+===================
+This implementation uses feature flags for capability negotiation instead of
+protocol version bumping. This allows incremental feature adoption while
+maintaining full compatibility with the reference implementation (JAM).
 
-Nick Format and Version Detection:
-=================================
+Features are advertised in the handshake `features` dict and negotiated
+per-CoinJoin session via extended !fill/!pubkey messages.
+
+Available Features:
+- neutrino_compat: Extended UTXO metadata (scriptpubkey, blockheight) for
+  light client verification. Required for Neutrino backend takers.
+- push_encrypted: Encrypted !push command with session binding. Prevents
+  abuse of makers as unauthenticated broadcast bots.
+
+Feature Dependencies:
+- neutrino_compat: No dependencies
+- push_encrypted: Requires active NaCl encryption session (implicit)
+
+Nick Format:
+============
 JoinMarket nicks encode the protocol version: J{version}{hash}
-- J5xxx: Protocol v5 (JAM compatible, legacy UTXO format only)
-- J6xxx: Protocol v6 (supports extended UTXO format for Neutrino)
+All nicks use version 5 for maximum compatibility with reference implementation.
+Feature detection happens via handshake and !fill/!pubkey exchange, not nick.
 
-This allows peers to determine each other's capabilities without negotiation.
+Cross-Implementation Compatibility:
+===================================
+**Our Implementation ↔ Reference (JAM):**
+- We use J5 nicks and proto-ver=5 in handshake
+- Features field is ignored by reference implementation
+- Legacy UTXO format used unless both peers advertise neutrino_compat
+- Graceful fallback to v5 behavior for all features
 
-Cross-Version CoinJoin Compatibility:
-====================================
-Version compatibility is determined by nick prefix, enabling backward compatibility:
+**Feature Negotiation During CoinJoin:**
+- Taker advertises features in !fill (optional JSON suffix)
+- Maker responds with features in !pubkey (optional JSON suffix)
+- Extended formats used only when both peers support the feature
 
-**Makers (sending !ioauth):**
-- To J6 taker: Send extended UTXO format (txid:vout:scriptpubkey:blockheight)
-- To J5 taker: Send legacy UTXO format (txid:vout)
-
-**Takers (sending !auth):**
-- To J6 maker: Send extended revelation format
-- To J5 maker: Send legacy revelation format
-
-**Takers with Neutrino backend:**
-- Can ONLY work with J6 makers (need extended UTXO format in !ioauth)
-- Filter orderbook to exclude J5 makers during maker selection
-
-**Takers with full node backend:**
-- Can work with both J5 and J6 makers
-- Send appropriate format based on maker's nick
-
-This ensures:
-- Full backward compatibility with JAM (v5) implementations
-- Extended format only used when both peers support v6
-- Neutrino takers automatically select compatible makers
+**Peerlist Feature Extension:**
+Our directory server extends the peerlist format to include features:
+- Legacy format: nick;location (or nick;location;D for disconnected)
+- Extended format: nick;location;F:feature1,feature2 (features as comma-separated list)
+The extended format is backward compatible - legacy clients will ignore the F: suffix.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any
 
 from pydantic import BaseModel
 
-# Protocol version: v6 adds Neutrino-compatible UTXO metadata
-JM_VERSION = 6
-JM_VERSION_MIN = 5  # Minimum version for backward compatibility
+# Protocol version: v5 for full reference implementation compatibility
+# Features are negotiated separately via the features dict
+JM_VERSION = 5
+# JM_VERSION_MIN is kept as an alias for backward compatibility.
+# Since we only support v5, min == max.
+JM_VERSION_MIN = JM_VERSION
 
 COMMAND_PREFIX = "!"
 NICK_PEERLOCATOR_SEPARATOR = ";"
@@ -63,8 +70,126 @@ NOT_SERVING_ONION_HOSTNAME = "NOT-SERVING-ONION"
 NICK_HASH_LENGTH = 10
 NICK_MAX_ENCODED = 14
 
-# Feature flags for capability negotiation
+# Feature flag constants
 FEATURE_NEUTRINO_COMPAT = "neutrino_compat"
+FEATURE_PUSH_ENCRYPTED = "push_encrypted"
+
+# Feature dependencies: feature -> list of required features
+FEATURE_DEPENDENCIES: dict[str, list[str]] = {
+    FEATURE_NEUTRINO_COMPAT: [],
+    FEATURE_PUSH_ENCRYPTED: [],  # Requires NaCl session, but that's implicit
+}
+
+# All known features
+ALL_FEATURES = {FEATURE_NEUTRINO_COMPAT, FEATURE_PUSH_ENCRYPTED}
+
+
+@dataclass
+class FeatureSet:
+    """
+    Represents a set of protocol features advertised by a peer.
+
+    Used for feature negotiation during handshake and CoinJoin sessions.
+    """
+
+    features: set[str] = field(default_factory=set)
+
+    @classmethod
+    def from_handshake(cls, handshake_data: dict[str, Any]) -> FeatureSet:
+        """Extract features from a handshake payload."""
+        features_dict = handshake_data.get("features", {})
+        # Only include features that are set to True
+        features = {k for k, v in features_dict.items() if v is True}
+        return cls(features=features)
+
+    @classmethod
+    def from_list(cls, feature_list: list[str]) -> FeatureSet:
+        """Create from a list of feature names."""
+        return cls(features=set(feature_list))
+
+    @classmethod
+    def from_comma_string(cls, s: str) -> FeatureSet:
+        """Parse from comma-separated string (e.g., 'neutrino_compat,push_encrypted')."""
+        if not s or not s.strip():
+            return cls(features=set())
+        return cls(features={f.strip() for f in s.split(",") if f.strip()})
+
+    def to_dict(self) -> dict[str, bool]:
+        """Convert to dict for JSON serialization."""
+        return dict.fromkeys(sorted(self.features), True)
+
+    def to_comma_string(self) -> str:
+        """Convert to comma-separated string."""
+        return ",".join(sorted(self.features))
+
+    def supports(self, feature: str) -> bool:
+        """Check if this set includes a specific feature."""
+        return feature in self.features
+
+    def supports_neutrino_compat(self) -> bool:
+        """Check if neutrino_compat is supported."""
+        return FEATURE_NEUTRINO_COMPAT in self.features
+
+    def supports_push_encrypted(self) -> bool:
+        """Check if push_encrypted is supported."""
+        return FEATURE_PUSH_ENCRYPTED in self.features
+
+    def validate_dependencies(self) -> tuple[bool, str]:
+        """Check that all feature dependencies are satisfied."""
+        for feature in self.features:
+            deps = FEATURE_DEPENDENCIES.get(feature, [])
+            for dep in deps:
+                if dep not in self.features:
+                    return False, f"Feature '{feature}' requires '{dep}'"
+        return True, ""
+
+    def intersection(self, other: FeatureSet) -> FeatureSet:
+        """Return features supported by both sets."""
+        return FeatureSet(features=self.features & other.features)
+
+    def __bool__(self) -> bool:
+        """True if any features are set."""
+        return bool(self.features)
+
+    def __contains__(self, feature: str) -> bool:
+        return feature in self.features
+
+    def __iter__(self):
+        return iter(self.features)
+
+    def __len__(self) -> int:
+        return len(self.features)
+
+
+@dataclass
+class RequiredFeatures:
+    """
+    Features that this peer requires from counterparties.
+
+    Used to filter incompatible peers during maker selection.
+    """
+
+    required: set[str] = field(default_factory=set)
+
+    @classmethod
+    def for_neutrino_taker(cls) -> RequiredFeatures:
+        """Create requirements for a taker using Neutrino backend."""
+        return cls(required={FEATURE_NEUTRINO_COMPAT})
+
+    @classmethod
+    def none(cls) -> RequiredFeatures:
+        """No required features."""
+        return cls(required=set())
+
+    def is_compatible(self, peer_features: FeatureSet) -> tuple[bool, str]:
+        """Check if peer supports all required features."""
+        missing = self.required - peer_features.features
+        if missing:
+            return False, f"Missing required features: {missing}"
+        return True, ""
+
+    def __bool__(self) -> bool:
+        return bool(self.required)
 
 
 def get_nick_version(nick: str) -> int:
@@ -74,15 +199,20 @@ def get_nick_version(nick: str) -> int:
     Nick format: J{version}{hash} where version is a single digit.
     Examples: J5abc123... (v5), J6xyz789... (v6)
 
-    Returns JM_VERSION_MIN if version cannot be determined.
+    Returns JM_VERSION (5) if version cannot be determined.
     """
     if nick and len(nick) >= 2 and nick[0] == "J" and nick[1].isdigit():
         return int(nick[1])
-    return JM_VERSION_MIN
+    return JM_VERSION
 
 
 def is_v6_nick(nick: str) -> bool:
-    """Check if a nick indicates protocol version 6 or higher."""
+    """
+    Check if a nick indicates protocol version 6 or higher.
+
+    DEPRECATED: Use feature-based detection instead.
+    This function is kept for backward compatibility during transition.
+    """
     return get_nick_version(nick) >= 6
 
 
@@ -102,11 +232,11 @@ class UTXOMetadata:
     blockheight: int | None = None  # Block height where UTXO was confirmed
 
     def to_legacy_str(self) -> str:
-        """Format as legacy v5 string: txid:vout"""
+        """Format as legacy string: txid:vout"""
         return f"{self.txid}:{self.vout}"
 
     def to_extended_str(self) -> str:
-        """Format as extended v6 string: txid:vout:scriptpubkey:blockheight"""
+        """Format as extended string: txid:vout:scriptpubkey:blockheight"""
         if self.scriptpubkey is None or self.blockheight is None:
             return self.to_legacy_str()
         return f"{self.txid}:{self.vout}:{self.scriptpubkey}:{self.blockheight}"
@@ -234,6 +364,7 @@ def create_handshake_request(
     network: str,
     directory: bool = False,
     neutrino_compat: bool = False,
+    features: FeatureSet | None = None,
 ) -> dict[str, Any]:
     """
     Create a handshake request message.
@@ -244,20 +375,24 @@ def create_handshake_request(
         network: Bitcoin network (mainnet, testnet, signet, regtest)
         directory: True if this is a directory server
         neutrino_compat: True to advertise Neutrino-compatible UTXO metadata support
+        features: FeatureSet to advertise (overrides neutrino_compat if provided)
 
     Returns:
         Handshake request payload dict
     """
-    features: dict[str, Any] = {}
-    if neutrino_compat:
-        features[FEATURE_NEUTRINO_COMPAT] = True
+    if features is not None:
+        features_dict = features.to_dict()
+    else:
+        features_dict = {}
+        if neutrino_compat:
+            features_dict[FEATURE_NEUTRINO_COMPAT] = True
 
     return {
         "app-name": "joinmarket",
         "directory": directory,
         "location-string": location,
         "proto-ver": JM_VERSION,
-        "features": features,
+        "features": features_dict,
         "nick": nick,
         "network": network,
     }
@@ -269,6 +404,7 @@ def create_handshake_response(
     accepted: bool = True,
     motd: str = "JoinMarket Directory Server",
     neutrino_compat: bool = False,
+    features: FeatureSet | None = None,
 ) -> dict[str, Any]:
     """
     Create a handshake response message.
@@ -279,20 +415,24 @@ def create_handshake_response(
         accepted: Whether the connection is accepted
         motd: Message of the day
         neutrino_compat: True to advertise Neutrino-compatible UTXO metadata support
+        features: FeatureSet to advertise (overrides neutrino_compat if provided)
 
     Returns:
         Handshake response payload dict
     """
-    features: dict[str, Any] = {}
-    if neutrino_compat:
-        features[FEATURE_NEUTRINO_COMPAT] = True
+    if features is not None:
+        features_dict = features.to_dict()
+    else:
+        features_dict = {}
+        if neutrino_compat:
+            features_dict[FEATURE_NEUTRINO_COMPAT] = True
 
     return {
         "app-name": "joinmarket",
         "directory": True,
-        "proto-ver-min": JM_VERSION_MIN,
+        "proto-ver-min": JM_VERSION,
         "proto-ver-max": JM_VERSION,
-        "features": features,
+        "features": features_dict,
         "accepted": accepted,
         "nick": nick,
         "network": network,
@@ -310,10 +450,6 @@ def peer_supports_neutrino_compat(handshake_data: dict[str, Any]) -> bool:
     Returns:
         True if peer advertises neutrino_compat feature
     """
-    proto_ver = handshake_data.get("proto-ver", 5)
-    if proto_ver < 6:
-        return False
-
     features = handshake_data.get("features", {})
     return features.get(FEATURE_NEUTRINO_COMPAT, False)
 
@@ -331,20 +467,53 @@ def parse_peer_location(location: str) -> tuple[str, int]:
         raise ValueError(f"Invalid location string: {location}") from e
 
 
-def create_peerlist_entry(nick: str, location: str, disconnected: bool = False) -> str:
+def create_peerlist_entry(
+    nick: str,
+    location: str,
+    disconnected: bool = False,
+    features: FeatureSet | None = None,
+) -> str:
+    """
+    Create a peerlist entry string.
+
+    Format:
+    - Legacy: nick;location or nick;location;D
+    - Extended: nick;location;F:feature1,feature2 or nick;location;D;F:feature1,feature2
+
+    The F: prefix is used to identify the features field and maintain backward compatibility.
+    """
     entry = f"{nick}{NICK_PEERLOCATOR_SEPARATOR}{location}"
     if disconnected:
         entry += f"{NICK_PEERLOCATOR_SEPARATOR}D"
+    if features and features.features:
+        entry += f"{NICK_PEERLOCATOR_SEPARATOR}F:{features.to_comma_string()}"
     return entry
 
 
-def parse_peerlist_entry(entry: str) -> tuple[str, str, bool]:
+def parse_peerlist_entry(entry: str) -> tuple[str, str, bool, FeatureSet]:
+    """
+    Parse a peerlist entry string.
+
+    Returns:
+        Tuple of (nick, location, disconnected, features)
+    """
     parts = entry.split(NICK_PEERLOCATOR_SEPARATOR)
-    if len(parts) == 2:
-        return (parts[0], parts[1], False)
-    elif len(parts) == 3 and parts[2] == "D":
-        return (parts[0], parts[1], True)
-    raise ValueError(f"Invalid peerlist entry: {entry}")
+    if len(parts) < 2:
+        raise ValueError(f"Invalid peerlist entry: {entry}")
+
+    nick = parts[0]
+    location = parts[1]
+    disconnected = False
+    features = FeatureSet()
+
+    # Parse remaining parts
+    for part in parts[2:]:
+        if part == "D":
+            disconnected = True
+        elif part.startswith("F:"):
+            features = FeatureSet.from_comma_string(part[2:])
+
+    return (nick, location, disconnected, features)
 
 
 def format_jm_message(from_nick: str, to_nick: str, cmd: str, message: str) -> str:

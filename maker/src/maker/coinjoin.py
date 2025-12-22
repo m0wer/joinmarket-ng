@@ -18,7 +18,11 @@ from typing import Any
 
 from jmcore.encryption import CryptoSession
 from jmcore.models import NetworkType, Offer
-from jmcore.protocol import UTXOMetadata, format_utxo_list, is_v6_nick
+from jmcore.protocol import (
+    UTXOMetadata,
+    format_utxo_list,
+    get_nick_version,
+)
 from jmwallet.backends.base import BlockchainBackend
 from jmwallet.wallet.models import UTXOInfo
 from jmwallet.wallet.service import WalletService
@@ -85,9 +89,12 @@ class CoinJoinSession:
         self.created_at = time.time()
         self.session_timeout_sec = session_timeout_sec
 
-        # Protocol v6: Determine peer version from nick (J6xxx = v6, J5xxx = v5)
-        # This determines whether to send extended UTXO format in !ioauth
-        self.peer_supports_v6 = is_v6_nick(taker_nick)
+        # Feature detection for extended UTXO format (neutrino_compat)
+        # Currently using nick-based detection as fallback:
+        # - J6+ nicks are assumed to support extended format
+        # - J5 nicks use legacy format (reference implementation compatibility)
+        # TODO: Future work - negotiate features during !fill/!pubkey exchange
+        self.peer_neutrino_compat = get_nick_version(taker_nick) >= 6
 
         # E2E encryption session with taker
         self.crypto = CryptoSession()
@@ -280,12 +287,12 @@ class CoinJoinSession:
                 for (txid, vout), utxo_info in utxos_dict.items()
             ]
 
-            # Use extended format if peer supports v6 protocol
-            utxo_list_str = format_utxo_list(utxo_metadata_list, extended=self.peer_supports_v6)
-            if self.peer_supports_v6:
-                logger.debug("Using extended UTXO format for v6 peer")
+            # Use extended format if peer supports neutrino_compat
+            utxo_list_str = format_utxo_list(utxo_metadata_list, extended=self.peer_neutrino_compat)
+            if self.peer_neutrino_compat:
+                logger.debug("Using extended UTXO format for neutrino_compat peer")
             else:
-                logger.debug("Using legacy UTXO format for v5 peer")
+                logger.debug("Using legacy UTXO format for legacy peer")
 
             # Get EC key for our first UTXO to sign taker's encryption key
             # This proves we own the UTXO we're contributing

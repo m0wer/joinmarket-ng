@@ -28,7 +28,6 @@ from jmcore.network import TCPConnection, connect_direct, connect_via_tor
 from jmcore.protocol import (
     COMMAND_PREFIX,
     JM_VERSION,
-    JM_VERSION_MIN,
     MessageType,
     create_handshake_request,
     parse_peerlist_entry,
@@ -218,17 +217,11 @@ class DirectoryClient:
 
     async def _handshake(self) -> None:
         """
-        Perform directory server handshake with version negotiation.
+        Perform directory server handshake with feature negotiation.
 
-        The handshake establishes the negotiated protocol version:
-        - We send our version (JM_VERSION = 6)
-        - Directory responds with its supported range [proto-ver-min, proto-ver-max]
-        - Negotiated version = min(our_version, directory_max_version)
-
-        This allows:
-        - v6 client connecting to v5 directory: negotiates v5
-        - v6 client connecting to v6 directory: negotiates v6
-        - v5 client connecting to v6 directory: negotiates v5 (directory accepts v5-v6)
+        We use proto-ver=5 for reference implementation compatibility.
+        Features like neutrino_compat are negotiated independently via
+        the features dict in the handshake payload.
         """
         if not self.connection:
             raise DirectoryClientError("Not connected")
@@ -252,7 +245,7 @@ class DirectoryClient:
 
         # Receive and parse directory's response
         response_data = await asyncio.wait_for(self.connection.receive(), timeout=self.timeout)
-        logger.debug(f"DirectoryClient._handshake: received response: {response_data[:200]}")
+        logger.debug(f"DirectoryClient._handshake: received response: {response_data[:200]!r}")
         response = json.loads(response_data.decode("utf-8"))
 
         if response["type"] not in (MessageType.HANDSHAKE.value, MessageType.DN_HANDSHAKE.value):
@@ -263,30 +256,24 @@ class DirectoryClient:
             raise DirectoryClientError("Handshake rejected")
 
         # Extract directory's version range
-        # v5 directories may only send "proto-ver" (single value)
-        # v6+ directories send "proto-ver-min" and "proto-ver-max"
+        # Reference directories only send "proto-ver" (single value, typically 5)
         dir_ver_min = handshake_response.get("proto-ver-min")
         dir_ver_max = handshake_response.get("proto-ver-max")
 
         if dir_ver_min is None or dir_ver_max is None:
-            # Legacy v5 directory: only sends single proto-ver
+            # Reference directory: only sends single proto-ver
             dir_version = handshake_response.get("proto-ver", 5)
             dir_ver_min = dir_ver_max = dir_version
 
-        # Negotiate: use highest version both sides support
-        # Our range: [JM_VERSION_MIN, JM_VERSION] = [5, 6]
-        # Directory range: [dir_ver_min, dir_ver_max]
-        overlap_min = max(JM_VERSION_MIN, dir_ver_min)
-        overlap_max = min(JM_VERSION, dir_ver_max)
-
-        if overlap_min > overlap_max:
+        # Verify compatibility with our version (we only support v5)
+        if not (dir_ver_min <= JM_VERSION <= dir_ver_max):
             raise DirectoryClientError(
-                f"No compatible protocol version: we support [{JM_VERSION_MIN}, {JM_VERSION}], "
+                f"No compatible protocol version: we support v{JM_VERSION}, "
                 f"directory supports [{dir_ver_min}, {dir_ver_max}]"
             )
 
-        # Use highest compatible version
-        self.negotiated_version = overlap_max
+        # Use v5 (our only supported version)
+        self.negotiated_version = JM_VERSION
 
         # Check if directory supports Neutrino-compatible metadata
         self.directory_neutrino_compat = peer_supports_neutrino_compat(handshake_response)
@@ -349,7 +336,7 @@ class DirectoryClient:
         peers = []
         for entry in peerlist_str.split(","):
             try:
-                nick, location, disconnected = parse_peerlist_entry(entry)
+                nick, location, disconnected, _features = parse_peerlist_entry(entry)
                 logger.debug(f"Parsed peer: {nick} at {location}, disconnected={disconnected}")
                 if not disconnected:
                     peers.append(nick)
@@ -780,24 +767,20 @@ class DirectoryClient:
         """
         Check if we should use extended UTXO format with this directory.
 
-        Extended format (txid:vout:scriptpubkey:blockheight) is used when:
-        - Negotiated version >= 6
-        - Both sides advertise neutrino_compat feature
+        Extended format (txid:vout:scriptpubkey:blockheight) is used when
+        both sides advertise neutrino_compat feature. Protocol version
+        is not checked - features are negotiated independently.
 
         Returns:
             True if extended UTXO format should be used
         """
-        if self.negotiated_version is None:
-            return False
-        return (
-            self.negotiated_version >= 6 and self.neutrino_compat and self.directory_neutrino_compat
-        )
+        return self.neutrino_compat and self.directory_neutrino_compat
 
     def get_negotiated_version(self) -> int:
         """
         Get the negotiated protocol version.
 
         Returns:
-            Negotiated version (5 or 6), or JM_VERSION_MIN if not yet negotiated
+            Negotiated version (always 5 with feature-based approach)
         """
-        return self.negotiated_version if self.negotiated_version is not None else JM_VERSION_MIN
+        return self.negotiated_version if self.negotiated_version is not None else JM_VERSION

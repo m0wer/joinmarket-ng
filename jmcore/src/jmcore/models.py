@@ -121,8 +121,10 @@ class PeerInfo(BaseModel):
         return f"{self.onion_address}:{self.port}"
 
     def supports_extended_utxo(self) -> bool:
-        """Check if this peer supports extended UTXO format."""
-        return self.protocol_version >= 6 and self.neutrino_compat
+        """Check if this peer supports extended UTXO format (neutrino_compat)."""
+        # With feature-based detection, we check the neutrino_compat flag
+        # which is set from the features dict during handshake
+        return self.neutrino_compat
 
     model_config = {"frozen": False}
 

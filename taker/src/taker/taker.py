@@ -23,7 +23,7 @@ from jmcore.crypto import generate_jm_nick
 from jmcore.directory_client import DirectoryClient
 from jmcore.encryption import CryptoSession
 from jmcore.models import Offer
-from jmcore.protocol import JM_VERSION, is_v6_nick, parse_utxo_list
+from jmcore.protocol import JM_VERSION, get_nick_version, parse_utxo_list
 from jmwallet.backends.base import BlockchainBackend
 from jmwallet.history import append_history_entry, create_taker_history_entry
 from jmwallet.wallet.models import UTXOInfo
@@ -214,7 +214,8 @@ class MakerSession:
     responded_fill: bool = False
     responded_auth: bool = False
     responded_sig: bool = False
-    supports_v6: bool = False  # Protocol v6: supports extended UTXO metadata
+    supports_v6: bool = False  # Deprecated: use neutrino_compat
+    neutrino_compat: bool = False  # Supports extended UTXO metadata
 
 
 class Taker:
@@ -583,13 +584,17 @@ class Taker:
                 logger.error(f"No encryption session for {nick}")
                 continue
 
-            # Determine format based on maker's nick version
-            use_extended = has_metadata and is_v6_nick(nick)
+            # Determine format based on maker's feature support
+            # Currently using nick-based detection as fallback:
+            # - J6+ nicks are assumed to support extended format (neutrino_compat)
+            # - J5 nicks use legacy format (reference implementation compatibility)
+            # TODO: Future work - negotiate features during !fill/!pubkey exchange
+            use_extended = has_metadata and get_nick_version(nick) >= 6
             revelation = self.podle_commitment.to_revelation(extended=use_extended)
 
             # Create pipe-separated revelation format:
-            # Legacy (v5): txid:vout|P|P2|sig|e
-            # Extended (v6): txid:vout:scriptpubkey:blockheight|P|P2|sig|e
+            # Legacy: txid:vout|P|P2|sig|e
+            # Extended (neutrino_compat): txid:vout:scriptpubkey:blockheight|P|P2|sig|e
             revelation_str = "|".join(
                 [
                     revelation["utxo"],
@@ -601,9 +606,9 @@ class Taker:
             )
 
             if use_extended:
-                logger.debug(f"Sending extended UTXO format to v6 maker {nick}")
+                logger.debug(f"Sending extended UTXO format to neutrino_compat maker {nick}")
             else:
-                logger.debug(f"Sending legacy UTXO format to v5 maker {nick}")
+                logger.debug(f"Sending legacy UTXO format to legacy maker {nick}")
 
             # Encrypt and send
             encrypted_revelation = session.crypto.encrypt(revelation_str)
@@ -696,11 +701,11 @@ class Taker:
                     session.utxos = []
                     utxo_metadata_list = parse_utxo_list(utxo_list_str)
 
-                    # Track if maker sent extended format
+                    # Track if maker sent extended format (neutrino_compat)
                     has_extended = any(u.has_neutrino_metadata() for u in utxo_metadata_list)
                     if has_extended:
-                        session.supports_v6 = True
-                        logger.debug(f"Maker {nick} sent extended UTXO format (v6)")
+                        session.neutrino_compat = True
+                        logger.debug(f"Maker {nick} sent extended UTXO format (neutrino_compat)")
 
                     for utxo_meta in utxo_metadata_list:
                         txid = utxo_meta.txid

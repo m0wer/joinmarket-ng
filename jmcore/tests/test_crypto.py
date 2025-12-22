@@ -33,7 +33,8 @@ def test_base58_encode():
 
 def test_generate_jm_nick():
     nick = generate_jm_nick()
-    assert nick.startswith("J6")
+    # v5 nicks for reference implementation compatibility
+    assert nick.startswith("J5")
     # Check general structure if possible, but it's hash based
 
 

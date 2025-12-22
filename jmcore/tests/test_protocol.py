@@ -66,14 +66,16 @@ def test_peerlist_entry_creation():
 
 
 def test_peerlist_entry_parsing():
-    nick, location, disco = parse_peerlist_entry("nick1;test.onion:5222")
+    nick, location, disco, features = parse_peerlist_entry("nick1;test.onion:5222")
     assert nick == "nick1"
     assert location == "test.onion:5222"
     assert not disco
+    assert len(features) == 0
 
-    nick, location, disco = parse_peerlist_entry("nick2;test.onion:5222;D")
+    nick, location, disco, features = parse_peerlist_entry("nick2;test.onion:5222;D")
     assert nick == "nick2"
     assert disco
+    assert len(features) == 0
 
 
 def test_jm_message_formatting():
@@ -263,9 +265,9 @@ class TestProtocolVersion:
     """Tests for protocol version constants."""
 
     def test_version_numbers(self):
-        """Verify version constants."""
-        assert JM_VERSION == 6
-        assert JM_VERSION_MIN == 5
+        """Verify version constants - v5 for reference compatibility."""
+        assert JM_VERSION == 5
+        assert JM_VERSION_MIN == 5  # min == max since we only support v5
 
     def test_feature_flag_constant(self):
         """Verify feature flag constant."""
@@ -281,7 +283,7 @@ class TestHandshakeRequest:
             nick="J5TestNick", location="test.onion:5222", network="mainnet"
         )
         assert hs["nick"] == "J5TestNick"
-        assert hs["proto-ver"] == 6
+        assert hs["proto-ver"] == 5  # v5 for reference compatibility
         assert hs["features"] == {}
         assert hs["directory"] is False
 
@@ -313,7 +315,7 @@ class TestHandshakeResponse:
         """Create basic handshake response."""
         hs = create_handshake_response(nick="J5DirServer", network="mainnet")
         assert hs["proto-ver-min"] == 5
-        assert hs["proto-ver-max"] == 6
+        assert hs["proto-ver-max"] == 5  # min == max since we only support v5
         assert hs["accepted"] is True
         assert hs["features"] == {}
 
@@ -331,25 +333,25 @@ class TestPeerSupportsNeutrinoCompat:
         handshake = {"proto-ver": 5, "features": {}}
         assert peer_supports_neutrino_compat(handshake) is False
 
-    def test_v6_peer_without_feature(self):
-        """v6 peer without feature flag does not support."""
-        handshake = {"proto-ver": 6, "features": {}}
-        assert peer_supports_neutrino_compat(handshake) is False
-
-    def test_v6_peer_with_feature(self):
-        """v6 peer with feature flag supports."""
-        handshake = {"proto-ver": 6, "features": {FEATURE_NEUTRINO_COMPAT: True}}
+    def test_v5_peer_with_feature(self):
+        """v5 peer with feature flag supports neutrino_compat."""
+        handshake = {"proto-ver": 5, "features": {FEATURE_NEUTRINO_COMPAT: True}}
         assert peer_supports_neutrino_compat(handshake) is True
+
+    def test_peer_without_feature(self):
+        """Peer without feature flag does not support."""
+        handshake = {"proto-ver": 5, "features": {}}
+        assert peer_supports_neutrino_compat(handshake) is False
 
     def test_missing_features_key(self):
         """Handle missing features key gracefully."""
-        handshake = {"proto-ver": 6}
+        handshake = {"proto-ver": 5}
         assert peer_supports_neutrino_compat(handshake) is False
 
-    def test_missing_proto_ver(self):
-        """Handle missing proto-ver (defaults to 5)."""
+    def test_missing_proto_ver_with_feature(self):
+        """Feature detection works even without proto-ver."""
         handshake = {"features": {FEATURE_NEUTRINO_COMPAT: True}}
-        assert peer_supports_neutrino_compat(handshake) is False
+        assert peer_supports_neutrino_compat(handshake) is True
 
 
 class TestNickVersionDetection:

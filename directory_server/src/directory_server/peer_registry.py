@@ -122,6 +122,7 @@ class PeerRegistry:
         connected = 0
         passive = 0
         active = 0
+        neutrino_compat = 0
 
         for p in list(self._peers.values()):
             if p.status == PeerStatus.HANDSHAKED and not p.is_directory:
@@ -130,10 +131,22 @@ class PeerRegistry:
                     passive += 1
                 else:
                     active += 1
+                if p.neutrino_compat:
+                    neutrino_compat += 1
 
         return {
             "total_peers": len(self._peers),
             "connected_peers": connected,
             "passive_peers": passive,
             "active_peers": active,
+            "neutrino_compat_peers": neutrino_compat,
         }
+
+    def get_neutrino_compat_peers(self, network: NetworkType | None = None) -> list[PeerInfo]:
+        """
+        Get peers that support neutrino_compat feature.
+
+        These peers advertise extended UTXO metadata (scriptpubkey, blockheight)
+        which is required for Neutrino backend verification.
+        """
+        return [p for p in self._iter_connected(network) if p.neutrino_compat]

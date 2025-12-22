@@ -400,47 +400,75 @@ Nicks are derived from ephemeral keypairs:
 J + version + base58(sha256(pubkey)[:10]) + padding
 ```
 
-Example: `J64JdT1AFotjmpmH` (16 chars total, v6 peer)
+Example: `J54JdT1AFotjmpmH` (16 chars total, v5 peer)
 
 The nick format enables:
 1. Anti-spoofing via message signatures
 2. Nick recovery across multiple message channels
 
+**Note**: Our implementation uses J5 nicks for compatibility with the reference implementation. Peers with J6+ nicks are assumed to support `neutrino_compat` as a fallback detection method.
+
 ---
 
-## Protocol Version 6: Neutrino Compatibility
+## Feature Flags System
 
 ### Overview
 
-Protocol v6 extends the JoinMarket protocol to support Neutrino/BIP157 light clients. The core challenge is that Neutrino clients **cannot verify arbitrary UTXOs** - they can only query UTXOs for addresses they're already watching. This breaks CoinJoin because:
+This implementation uses **feature flags** instead of protocol version bumps to enable progressive capability adoption while maintaining full backward compatibility with the reference JoinMarket implementation.
 
-- **Makers** need to verify taker's PoDLE UTXO (arbitrary lookup)
-- **Takers** need to verify maker UTXOs (arbitrary lookup)
+### Design Philosophy
 
-### Solution: Extended UTXO Metadata
+**Why feature flags instead of version bumps?**
 
-Protocol v6 adds optional UTXO metadata (scriptPubKey and block height) to allow Neutrino clients to:
-1. Add the scriptPubKey to their watch list
-2. Rescan from the specified block height
-3. Verify the UTXO exists and is unspent
+1. **Backward Compatibility**: The reference implementation (JAM) only accepts `proto-ver=5`. Version bumps would break interoperability.
+2. **Granular Adoption**: Features can be adopted independently without forcing "all or nothing" upgrades.
+3. **Progressive Enhancement**: Peers advertise what they support; both sides negotiate capabilities per-session.
 
-### Protocol Version Negotiation
+### Protocol Version
 
 ```
-Current:    JM_VERSION = 6
-Minimum:    JM_VERSION_MIN = 5 (backward compatible)
+JM_VERSION = 5  (matches reference implementation)
 ```
 
-Peers advertise their version in the handshake and negotiate the minimum common version.
+We maintain v5 for full compatibility. New capabilities are negotiated via feature flags, not version changes.
 
-### Feature Flag: `neutrino_compat`
+### Feature Detection
 
-The `neutrino_compat` feature flag indicates a peer supports extended UTXO format:
+Features are detected through multiple mechanisms (in priority order):
+
+1. **Handshake features dict**: Explicit feature advertisement (preferred)
+2. **Nick version fallback**: J6+ nicks assumed to support `neutrino_compat` (legacy compatibility)
+
+### Available Features
+
+| Feature | Description |
+|---------|-------------|
+| `neutrino_compat` | Supports extended UTXO format with scriptPubKey and blockheight |
+| `push_encrypted` | (Future) Session-bound encrypted `!push` commands |
+
+### FeatureSet Implementation
+
+```python
+from jmcore.protocol import FeatureSet, FEATURE_NEUTRINO_COMPAT
+
+# Create feature set
+features = FeatureSet(features={FEATURE_NEUTRINO_COMPAT})
+
+# Check support
+if features.supports_neutrino_compat():
+    # Use extended UTXO format
+    pass
+
+# Serialize for handshake
+features_dict = features.to_dict()  # {"neutrino_compat": True}
+```
+
+### Handshake Integration
 
 **Handshake Request** (peer → directory):
 ```json
 {
-  "proto-ver": 6,
+  "proto-ver": 5,
   "features": {"neutrino_compat": true},
   ...
 }
@@ -450,23 +478,42 @@ The `neutrino_compat` feature flag indicates a peer supports extended UTXO forma
 ```json
 {
   "proto-ver-min": 5,
-  "proto-ver-max": 6,
+  "proto-ver-max": 5,
   "features": {"neutrino_compat": true},
   ...
 }
 ```
 
+**Note**: The `features` dict is ignored by the reference implementation but preserved for our peers.
+
+---
+
+## Neutrino Compatibility Feature
+
+### Overview
+
+The `neutrino_compat` feature extends the JoinMarket protocol to support Neutrino/BIP157 light clients. The core challenge is that Neutrino clients **cannot verify arbitrary UTXOs** - they can only query UTXOs for addresses they're already watching. This breaks CoinJoin because:
+
+- **Makers** need to verify taker's PoDLE UTXO (arbitrary lookup)
+- **Takers** need to verify maker UTXOs (arbitrary lookup)
+
+### Solution: Extended UTXO Metadata
+
+When both peers support `neutrino_compat`, UTXO metadata (scriptPubKey and block height) is included to allow Neutrino clients to:
+1. Add the scriptPubKey to their watch list
+2. Rescan from the specified block height
+3. Verify the UTXO exists and is unspent
+
 ### Extended UTXO Format
 
 | Format | Fields | Example |
 |--------|--------|---------|
-| Legacy (v5) | `txid:vout` | `abc123...def:0` |
-| Extended (v6) | `txid:vout:scriptpubkey:blockheight` | `abc123...def:0:0014abc...789:850000` |
+| Legacy | `txid:vout` | `abc123...def:0` |
+| Extended | `txid:vout:scriptpubkey:blockheight` | `abc123...def:0:0014abc...789:850000` |
 
 The extended format is only used when:
-1. The peer supports v6 (`proto-ver >= 6`)
-2. The peer has `neutrino_compat` feature enabled
-3. The sender's backend requires Neutrino metadata
+1. The peer supports `neutrino_compat` feature
+2. The sender's backend requires Neutrino metadata
 
 ### Modified Messages
 
@@ -474,12 +521,12 @@ The extended format is only used when:
 
 The PoDLE revelation UTXO field is extended:
 
-**Legacy format (v5)**:
+**Legacy format**:
 ```
 txid:vout|P|P2|sig|e
 ```
 
-**Extended format (v6 with neutrino_compat)**:
+**Extended format (with neutrino_compat)**:
 ```
 txid:vout:scriptpubkey:blockheight|P|P2|sig|e
 ```
@@ -488,26 +535,26 @@ txid:vout:scriptpubkey:blockheight|P|P2|sig|e
 
 The UTXO list is extended:
 
-**Legacy format (v5)**:
+**Legacy format**:
 ```
 txid1:vout1,txid2:vout2 auth_pub cj_addr change_addr btc_sig
 ```
 
-**Extended format (v6 with neutrino_compat)**:
+**Extended format (with neutrino_compat)**:
 ```
 txid1:vout1:spk1:height1,txid2:vout2:spk2:height2 auth_pub cj_addr change_addr btc_sig
 ```
 
 ### Backward Compatibility
 
-| Taker Backend | Maker Backend | Format Used | Works? |
-|---------------|---------------|-------------|--------|
-| Full Node | Full Node | Legacy | ✅ |
-| Full Node | Neutrino | Legacy | ✅ |
-| Neutrino | Full Node | Extended | ✅ |
-| Neutrino | Neutrino | Extended | ✅ (v6 peers only) |
+| Taker Backend | Maker Backend | Feature Supported | Format Used | Works? |
+|---------------|---------------|-------------------|-------------|--------|
+| Full Node | Full Node | N/A | Legacy | Yes |
+| Full Node | Neutrino | Maker needs extended | Extended | Yes |
+| Neutrino | Full Node | Taker needs extended | Extended | Yes |
+| Neutrino | Neutrino | Both need extended | Extended | Yes (both must support `neutrino_compat`) |
 
-**Important**: Neutrino-only peers can only CoinJoin with other v6 peers that provide extended metadata. CoinJoins with v5-only peers will fail at UTXO verification.
+**Important**: Neutrino-only peers can only CoinJoin with peers that support the `neutrino_compat` feature. CoinJoins with legacy-only peers will fail at UTXO verification.
 
 ### Verification Flow (Neutrino Backend)
 
@@ -530,7 +577,7 @@ async def verify_utxo_with_metadata(
 
 | File | Changes |
 |------|---------|
-| `jmcore/protocol.py` | `JM_VERSION=6`, `UTXOMetadata`, feature flags |
+| `jmcore/protocol.py` | `FeatureSet`, `FEATURE_NEUTRINO_COMPAT`, feature detection |
 | `jmcore/podle.py` | Extended UTXO parsing in revelations |
 | `jmwallet/backends/base.py` | `verify_utxo_with_metadata()` interface |
 | `jmwallet/backends/neutrino.py` | Neutrino-specific verification |
