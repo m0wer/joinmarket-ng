@@ -675,6 +675,12 @@ def on_push_tx(self, nick, tx):
 
 **Rationale**: The maker already signed this transaction, so it's valid from their perspective. Whether the broadcast succeeds or propagates is not the maker's concern.
 
+**DoS Considerations**:
+- A malicious peer could spam `!push` messages with invalid data
+- **Mitigation**: Generic per-peer rate limiting (see Rate Limiting section) prevents this from being a significant attack vector
+- **Trade-off**: We intentionally do NOT validate session state to maintain protocol simplicity and compatibility with reference implementation
+- The rate limiter is the primary defense against !push abuse
+
 #### Fallback Mechanism
 
 If the chosen maker fails to broadcast (transaction not seen on network within timeout):
@@ -1038,24 +1044,83 @@ For E2E tests, see the [E2E README](./tests/e2e/README.md).
 
 ### Threat Model
 
-- **Attackers**: Malicious peers, network observers
-- **Assets**: Peer privacy, network availability
-- **Threats**: DDoS, privacy leaks, message tampering
+- **Attackers**: Malicious peers, network observers, malicious directory operators
+- **Assets**: Peer privacy, network availability, user funds
+- **Threats**: DDoS, privacy leaks, message tampering, eclipse attacks
 
 ### Defenses
 
 1. **Privacy**: Tor-only connections
-2. **Rate Limiting**: Per-peer message limits
-3. **Validation**: Protocol enforcement
+2. **Rate Limiting**: Per-peer message limits (token bucket, configurable via `message_rate_limit`)
+3. **Validation**: Protocol enforcement, input validation
 4. **Network Segregation**: Mainnet/testnet isolation
-5. **Authentication**: Handshake protocol
+5. **Authentication**: Handshake protocol, nick-based version detection
+
+### Directory Server Threat Model
+
+Directory servers are similar to Bitcoin DNS seed nodes - they are only required for **peer discovery**, not message routing (which can happen directly via onion addresses). However, they still represent security-relevant infrastructure:
+
+#### Threats
+
+| Threat | Description | Mitigation |
+|--------|-------------|------------|
+| **Eclipse Attack** | Malicious directory feeds poisoned peer list, isolating victim | Multi-directory fallback, peer diversity heuristics |
+| **Selective Censorship** | Directory blocks specific nicks/addresses | Ephemeral nicks per session, multiple directories |
+| **Metadata Correlation** | Timing + nick/IP linkage at directory | Tor connections, ephemeral nicks derived from session keys |
+| **Partitioning** | Split network by returning different peer lists | Cross-directory consistency checks (future) |
+| **DoS** | Flood directory with connections/messages | Rate limiting, connection limits, message size limits |
+
+#### Multi-Directory Strategy
+
+For production deployments, takers and makers should:
+1. Connect to multiple independent directory servers
+2. Merge and deduplicate peer lists
+3. Prefer direct P2P connections (via onion addresses) over directory-relayed messages
+4. Rotate directory connections periodically
+
+### Message Security
+
+#### Rate Limiting
+
+The directory server enforces per-peer rate limits using a token bucket algorithm:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `message_rate_limit` | 100/s | Sustained message rate |
+| `message_burst_limit` | 200 | Maximum burst size |
+| `rate_limit_disconnect_threshold` | 50 | Violations before disconnect |
+| `max_message_size` | 2MB | Maximum message size |
+
+#### Protocol Commands
+
+| Command | Encrypted | Notes |
+|---------|-----------|-------|
+| `!pubkey` | No | Initial key exchange |
+| `!fill`, `!auth`, `!ioauth`, `!tx`, `!sig` | Yes (NaCl) | CoinJoin negotiation |
+| `!push` | No | Transaction broadcast (intentional for privacy) |
+| `!sw0reloffer` | No | Public orderbook |
+
+Note: `!push` is intentionally unencrypted because the transaction is already public broadcast data. The privacy benefit is that the taker's IP is not linked to the broadcast.
+
+### Neutrino/Light Client Security
+
+When using the Neutrino backend (BIP157/BIP158), additional protections prevent DoS attacks:
+
+| Protection | Default | Description |
+|------------|---------|-------------|
+| `max_watched_addresses` | 10,000 | Prevents memory exhaustion |
+| `max_rescan_depth` | 100,000 blocks | Limits expensive rescans |
+| Blockheight validation | SegWit activation | Rejects suspiciously old heights |
+
+**Neutrino Server Privacy**: If pointing to a third-party neutrino-api server, that server can observe timing, addresses, and query patterns. **Recommendation**: Run neutrino-api locally behind Tor, or use the bundled Docker deployment.
 
 ### Attack Mitigations
 
-- **DDoS**: Connection limits, rate limiting
-- **Sybil**: Fidelity bonds (future), resource limits
-- **Replay**: Message timestamps (future)
-- **MitM**: End-to-end encryption (JM protocol)
+- **DDoS**: Connection limits, rate limiting, message size limits
+- **Sybil**: Fidelity bonds (maker verification), resource limits
+- **Replay**: Session-bound state machines, ephemeral keys
+- **MitM**: End-to-end NaCl encryption (JM protocol)
+- **Rescan Abuse**: Blockheight validation, depth limits
 
 ### Critical Security Code
 
@@ -1066,6 +1131,21 @@ The following modules are security-critical and have been designed to prevent lo
 | `maker/tx_verification.py` | Verifies CoinJoin transactions before signing | 100% |
 | `jmwallet/wallet/signing.py` | Transaction signing | 95% |
 | `jmcore/podle.py` | Anti-sybil proof verification | 90%+ |
+| `directory_server/rate_limiter.py` | DoS prevention | 100% |
+| `jmwallet/backends/neutrino.py` | Light client UTXO verification | 80%+ |
+
+### Maker Transaction Verification Checklist
+
+The `verify_unsigned_transaction()` function in `maker/tx_verification.py` performs these critical checks before signing:
+
+1. **Input Inclusion**: All maker UTXOs are present in transaction inputs
+2. **CoinJoin Output**: Exactly one output pays `>= amount` to maker's CJ address
+3. **Change Output**: Exactly one output pays `>= expected_change` to maker's change address
+4. **Positive Profit**: `cjfee - txfee > 0` (maker never pays to participate)
+5. **No Duplicate Outputs**: CJ and change addresses appear exactly once each
+6. **Well-formed Transaction**: Parseable, valid structure
+
+If any check fails, the maker refuses to sign and logs the specific failure reason.
 
 ---
 

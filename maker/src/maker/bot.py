@@ -265,6 +265,20 @@ class MakerBot:
         await self.wallet.close()
         logger.info("Maker bot stopped")
 
+    def _cleanup_timed_out_sessions(self) -> None:
+        """Remove timed-out sessions from active_sessions."""
+        timed_out = [
+            nick for nick, session in self.active_sessions.items() if session.is_timed_out()
+        ]
+
+        for nick in timed_out:
+            session = self.active_sessions[nick]
+            age = int(asyncio.get_event_loop().time() - session.created_at)
+            logger.warning(
+                f"Cleaning up timed-out session with {nick} (state: {session.state}, age: {age}s)"
+            )
+            del self.active_sessions[nick]
+
     async def _announce_offers(self) -> None:
         """Announce offers to all connected directory servers"""
         for offer in self.current_offers:
@@ -318,6 +332,10 @@ class MakerBot:
         """Listen for messages from a specific directory client"""
         logger.info(f"Started listening on {node_id}")
 
+        # Track last cleanup time
+        last_cleanup = asyncio.get_event_loop().time()
+        cleanup_interval = 60.0  # Clean up timed-out sessions every 60 seconds
+
         while self.running:
             try:
                 # Use listen_for_messages with short duration to check running flag frequently
@@ -325,6 +343,12 @@ class MakerBot:
 
                 for message in messages:
                     await self._handle_message(message)
+
+                # Periodic cleanup of timed-out sessions
+                now = asyncio.get_event_loop().time()
+                if now - last_cleanup > cleanup_interval:
+                    self._cleanup_timed_out_sessions()
+                    last_cleanup = now
 
             except asyncio.CancelledError:
                 logger.info(f"Listener for {node_id} cancelled")
@@ -448,6 +472,7 @@ class MakerBot:
                 offer=offer,
                 wallet=self.wallet,
                 backend=self.backend,
+                session_timeout_sec=self.config.session_timeout_sec,
             )
 
             # Pass the taker's NaCl pubkey for setting up encryption
@@ -659,6 +684,13 @@ class MakerBot:
         Per JoinMarket protocol, makers broadcast "unquestioningly" - we already
         signed this transaction so it must be valid from our perspective. We don't
         verify or check the result, just broadcast and move on.
+
+        Security considerations:
+        - DoS risk: A malicious taker could spam !push messages with invalid data
+        - Mitigation: Generic per-peer rate limiting (in directory server) prevents
+          this from being a significant attack vector
+        - We intentionally do NOT validate session state here to maintain protocol
+          compatibility and simplicity. The rate limiter is the primary defense.
 
         Format: push <base64_transaction>
         """

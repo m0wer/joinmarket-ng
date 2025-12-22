@@ -18,7 +18,9 @@ class Settings(BaseSettings):
 
     max_peers: int = 10000
     max_message_size: int = 2097152  # 2MB
-    message_rate_limit: int = 100
+    message_rate_limit: int = 100  # messages per second (sustained)
+    message_burst_limit: int = 200  # maximum burst size
+    rate_limit_disconnect_threshold: int = 50  # disconnect after N violations
 
     # Batch size for concurrent broadcasts to limit memory usage
     # Lower values = less memory, higher values = faster broadcasts

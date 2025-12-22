@@ -53,6 +53,13 @@ class MakerConfig(BaseModel):
     # Selected fidelity bond (txid, vout) - if not set, largest bond is used automatically
     selected_fidelity_bond: tuple[str, int] | None = None
 
+    # Timeouts
+    session_timeout_sec: int = Field(
+        default=300,
+        ge=60,
+        description="Maximum time for a CoinJoin session to complete (all states)",
+    )
+
     model_config = {"frozen": False}
 
     @model_validator(mode="after")

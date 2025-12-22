@@ -97,6 +97,75 @@ class TestNeutrinoBackend:
         assert len(backend._watched_addresses) == 1
         await backend.close()
 
+    @pytest.mark.asyncio
+    async def test_neutrino_backend_watch_address_limit(self):
+        """Test that watch list has a maximum size limit."""
+        backend = NeutrinoBackend(neutrino_url="http://localhost:8334")
+        # Override limit to a small value for testing
+        backend._max_watched_addresses = 5
+
+        # Add addresses up to limit
+        for i in range(5):
+            await backend.add_watch_address(f"bcrt1qtest{i}")
+
+        # Next add should raise ValueError
+        with pytest.raises(ValueError, match="Watch list limit"):
+            await backend.add_watch_address("bcrt1qexceeds")
+
+        await backend.close()
+
+    @pytest.mark.asyncio
+    async def test_neutrino_backend_blockheight_validation(self):
+        """Test blockheight validation in verify_utxo_with_metadata."""
+        from unittest.mock import AsyncMock
+
+        backend = NeutrinoBackend(neutrino_url="http://localhost:8334", network="mainnet")
+        # Mock get_block_height to return a known value
+        backend.get_block_height = AsyncMock(return_value=800000)
+
+        # Test: blockheight too low (before SegWit activation)
+        result = await backend.verify_utxo_with_metadata(
+            txid="abc123",
+            vout=0,
+            scriptpubkey="0014" + "00" * 20,  # valid P2WPKH
+            blockheight=100000,  # Way before SegWit
+        )
+        assert result.valid is False
+        assert "below minimum valid height" in (result.error or "")
+
+        # Test: blockheight in the future
+        result = await backend.verify_utxo_with_metadata(
+            txid="abc123",
+            vout=0,
+            scriptpubkey="0014" + "00" * 20,
+            blockheight=900000,  # Future block
+        )
+        assert result.valid is False
+        assert "in the future" in (result.error or "")
+
+        await backend.close()
+
+    @pytest.mark.asyncio
+    async def test_neutrino_backend_rescan_depth_limit(self):
+        """Test that rescan depth is limited to prevent DoS."""
+        from unittest.mock import AsyncMock
+
+        backend = NeutrinoBackend(neutrino_url="http://localhost:8334", network="mainnet")
+        backend._max_rescan_depth = 1000  # Override for testing
+        backend.get_block_height = AsyncMock(return_value=800000)
+
+        # Test: rescan depth exceeds limit
+        result = await backend.verify_utxo_with_metadata(
+            txid="abc123",
+            vout=0,
+            scriptpubkey="0014" + "00" * 20,
+            blockheight=700000,  # 100,000 blocks ago (exceeds limit)
+        )
+        assert result.valid is False
+        assert "exceeds max" in (result.error or "")
+
+        await backend.close()
+
     def test_neutrino_config_init(self):
         """Test NeutrinoConfig initialization."""
         config = NeutrinoConfig(

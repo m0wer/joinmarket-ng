@@ -72,12 +72,26 @@ class NeutrinoBackend(BlockchainBackend):
         self._watched_addresses: set[str] = set()
         self._watched_outpoints: set[tuple[str, int]] = set()
 
+        # Security limits to prevent DoS via excessive watch list / rescan abuse
+        self._max_watched_addresses: int = 10000  # Maximum addresses to track
+        self._max_rescan_depth: int = 100000  # Maximum blocks to rescan (roughly 2 years)
+        self._min_valid_blockheight: int = 481824  # SegWit activation (mainnet)
+        # For testnet/regtest, this will be adjusted based on network
+
         # Block filter cache
         self._filter_header_tip: int = 0
         self._synced: bool = False
 
         # Track if we've done the initial rescan
         self._initial_rescan_done: bool = False
+
+        # Adjust minimum blockheight based on network
+        if network == "regtest":
+            self._min_valid_blockheight = 0  # Regtest can have any height
+        elif network == "testnet":
+            self._min_valid_blockheight = 834624  # Approximate SegWit on testnet
+        elif network == "signet":
+            self._min_valid_blockheight = 0  # Signet started with SegWit
 
     async def _api_call(
         self,
@@ -149,11 +163,24 @@ class NeutrinoBackend(BlockchainBackend):
         UTXOs or do rescans with the addresses you care about. This method
         tracks addresses locally for convenience.
 
+        Security: Limits the number of watched addresses to prevent memory
+        exhaustion attacks.
+
         Args:
             address: Bitcoin address to watch
+
+        Raises:
+            ValueError: If watch list limit exceeded
         """
         if address in self._watched_addresses:
             return
+
+        if len(self._watched_addresses) >= self._max_watched_addresses:
+            logger.warning(
+                f"Watch list limit reached ({self._max_watched_addresses}). "
+                f"Cannot add address: {address[:20]}..."
+            )
+            raise ValueError(f"Watch list limit ({self._max_watched_addresses}) exceeded")
 
         self._watched_addresses.add(address)
         logger.debug(f"Watching address: {address}")
@@ -470,6 +497,9 @@ class NeutrinoBackend(BlockchainBackend):
         The API scans from start_height to chain tip using compact block filters
         to determine if the UTXO exists and whether it has been spent.
 
+        Security: Validates blockheight to prevent rescan abuse attacks where
+        malicious peers provide very low blockheights to trigger expensive rescans.
+
         Args:
             txid: Transaction ID
             vout: Output index
@@ -479,6 +509,31 @@ class NeutrinoBackend(BlockchainBackend):
         Returns:
             UTXOVerificationResult with verification status and UTXO data
         """
+        # Security: Validate blockheight to prevent rescan abuse
+        tip_height = await self.get_block_height()
+
+        if blockheight < self._min_valid_blockheight:
+            return UTXOVerificationResult(
+                valid=False,
+                error=f"Blockheight {blockheight} is below minimum valid height "
+                f"{self._min_valid_blockheight} for {self.network}",
+            )
+
+        if blockheight > tip_height:
+            return UTXOVerificationResult(
+                valid=False,
+                error=f"Blockheight {blockheight} is in the future (tip: {tip_height})",
+            )
+
+        # Limit rescan depth to prevent DoS
+        rescan_depth = tip_height - blockheight
+        if rescan_depth > self._max_rescan_depth:
+            return UTXOVerificationResult(
+                valid=False,
+                error=f"Rescan depth {rescan_depth} exceeds max {self._max_rescan_depth}. "
+                f"UTXO too old for efficient verification.",
+            )
+
         logger.debug(
             f"Verifying UTXO {txid}:{vout} with metadata "
             f"(scriptpubkey={scriptpubkey[:20]}..., blockheight={blockheight})"
@@ -742,14 +797,34 @@ class NeutrinoBackend(BlockchainBackend):
             addresses: List of addresses to scan for (required for v0.4)
             outpoints: List of (txid, vout) outpoints - not directly supported,
                       will be ignored (use add_watch_outpoint instead)
+
+        Raises:
+            ValueError: If start_height is invalid or rescan depth exceeds limits
         """
         if not addresses:
             logger.warning("Rescan called without addresses - nothing to scan")
             return
 
-        # Track addresses locally
+        # Security: Validate start_height to prevent rescan abuse
+        if start_height < self._min_valid_blockheight:
+            raise ValueError(
+                f"start_height {start_height} is below minimum valid height "
+                f"{self._min_valid_blockheight} for {self.network}"
+            )
+
+        tip_height = await self.get_block_height()
+        if start_height > tip_height:
+            raise ValueError(f"start_height {start_height} is in the future (tip: {tip_height})")
+
+        rescan_depth = tip_height - start_height
+        if rescan_depth > self._max_rescan_depth:
+            raise ValueError(
+                f"Rescan depth {rescan_depth} exceeds maximum {self._max_rescan_depth} blocks"
+            )
+
+        # Track addresses locally (with limit check)
         for addr in addresses:
-            self._watched_addresses.add(addr)
+            await self.add_watch_address(addr)
 
         # Note: v0.4 API doesn't support outpoints in rescan
         if outpoints:

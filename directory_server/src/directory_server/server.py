@@ -18,6 +18,7 @@ from directory_server.handshake_handler import HandshakeError, HandshakeHandler
 from directory_server.health import HealthCheckServer
 from directory_server.message_router import MessageRouter
 from directory_server.peer_registry import PeerRegistry
+from directory_server.rate_limiter import RateLimiter
 
 
 class DirectoryServer:
@@ -37,6 +38,11 @@ class DirectoryServer:
         self.handshake_handler = HandshakeHandler(
             network=self.network, server_nick=f"directory-{settings.network}", motd=settings.motd
         )
+        self.rate_limiter = RateLimiter(
+            rate_limit=settings.message_rate_limit,
+            burst_limit=settings.message_burst_limit,
+        )
+        self._rate_limit_disconnect_threshold = settings.rate_limit_disconnect_threshold
 
         self.server: asyncio.Server | None = None
         self._shutdown = False
@@ -167,6 +173,19 @@ class DirectoryServer:
         while connection.is_connected() and not self._shutdown:
             try:
                 data = await connection.receive()
+
+                # Rate limiting check - before parsing to prevent DoS
+                if not self.rate_limiter.check(peer_key):
+                    violations = self.rate_limiter.get_violation_count(peer_key)
+                    if violations >= self._rate_limit_disconnect_threshold:
+                        logger.warning(
+                            f"Rate limit exceeded for {peer_info.nick}: "
+                            f"{violations} violations, disconnecting"
+                        )
+                        break
+                    logger.debug(f"Rate limiting {peer_info.nick}: {violations} violations")
+                    continue  # Drop message but stay connected
+
                 envelope = MessageEnvelope.from_bytes(data)
 
                 await self.message_router.route_message(envelope, peer_key)
@@ -192,6 +211,9 @@ class DirectoryServer:
 
             if peer_key in self.peer_key_to_conn_id:
                 del self.peer_key_to_conn_id[peer_key]
+
+            # Clean up rate limiter state
+            self.rate_limiter.remove_peer(peer_key)
 
         self.connections.remove(conn_id)
 
@@ -243,6 +265,7 @@ class DirectoryServer:
             "connected_peers": self.peer_registry.count(),
             "max_peers": self.settings.max_peers,
             "active_connections": len(self.connections),
+            "rate_limit_violations": self.rate_limiter.get_stats()["total_violations"],
         }
 
     def get_detailed_stats(self) -> dict:
@@ -259,6 +282,7 @@ class DirectoryServer:
             "server_status": "running" if not self._shutdown else "stopping",
             "max_peers": self.settings.max_peers,
             "stats": registry_stats,
+            "rate_limiter": self.rate_limiter.get_stats(),
             "connected_peers": {
                 "total": len(connected_peers),
                 "nicks": [p.nick for p in connected_peers],

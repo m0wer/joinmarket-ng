@@ -63,6 +63,7 @@ class CoinJoinSession:
         taker_utxo_retries: int = 10,
         taker_utxo_age: int = 5,
         taker_utxo_amtpercent: int = 20,
+        session_timeout_sec: int = 300,
     ):
         self.taker_nick = taker_nick
         self.offer = offer
@@ -82,6 +83,7 @@ class CoinJoinSession:
         self.commitment = b""
         self.taker_nacl_pk = ""  # Taker's NaCl pubkey (hex) for btc_sig
         self.created_at = time.time()
+        self.session_timeout_sec = session_timeout_sec
 
         # Protocol v6: Determine peer version from nick (J6xxx = v6, J5xxx = v5)
         # This determines whether to send extended UTXO format in !ioauth
@@ -89,6 +91,10 @@ class CoinJoinSession:
 
         # E2E encryption session with taker
         self.crypto = CryptoSession()
+
+    def is_timed_out(self) -> bool:
+        """Check if the session has exceeded the timeout."""
+        return time.time() - self.created_at > self.session_timeout_sec
 
     async def handle_fill(
         self, amount: int, commitment: str, taker_pk: str
@@ -105,6 +111,10 @@ class CoinJoinSession:
             (success, response_data)
         """
         try:
+            if self.is_timed_out():
+                self.state = CoinJoinState.FAILED
+                return False, {"error": f"Session timed out after {self.session_timeout_sec}s"}
+
             if self.state != CoinJoinState.IDLE:
                 return False, {"error": "Session not in IDLE state"}
 
@@ -162,6 +172,10 @@ class CoinJoinSession:
             (success, response_data with UTXOs or error)
         """
         try:
+            if self.is_timed_out():
+                self.state = CoinJoinState.FAILED
+                return False, {"error": f"Session timed out after {self.session_timeout_sec}s"}
+
             if self.state != CoinJoinState.PUBKEY_SENT:
                 return False, {"error": "Session not in correct state for !auth"}
 
@@ -323,6 +337,10 @@ class CoinJoinSession:
             (success, response_data with signatures or error)
         """
         try:
+            if self.is_timed_out():
+                self.state = CoinJoinState.FAILED
+                return False, {"error": f"Session timed out after {self.session_timeout_sec}s"}
+
             if self.state != CoinJoinState.IOAUTH_SENT:
                 return False, {"error": "Session not in correct state for !tx"}
 
