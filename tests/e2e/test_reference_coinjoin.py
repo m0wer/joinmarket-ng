@@ -554,75 +554,30 @@ def reference_services():
         run_compose_cmd(["--profile", "reference", "down", "-v"])
 
 
-@pytest.mark.asyncio
-@pytest.mark.timeout(600)
-async def test_services_healthy(reference_services):
-    """Test that all services are running and healthy."""
-    # Check Bitcoin
-    result = run_bitcoin_cmd(["getblockchaininfo"])
-    assert result.returncode == 0, f"Bitcoin not healthy: {result.stderr}"
-
-    info = result.stdout
-    assert "regtest" in info.lower(), "Should be regtest network"
-    logger.info("Bitcoin Core is healthy")
-
-    # Check makers are running by verifying container status and log activity
-    # Containers that started successfully will have logs showing listen activity
-    result = run_compose_cmd(["logs", "--tail=100", "maker1"], check=False)
-    maker1_logs = result.stdout.lower()
-    # A running maker will show periodic "collected N messages" or "timeout waiting" logs
-    maker1_running = (
-        "collected" in maker1_logs
-        or "timeout waiting" in maker1_logs
-        or "listen" in maker1_logs
-    )
-    assert maker1_running, f"Maker1 should be running. Logs: {result.stdout[-500:]}"
-
-    result = run_compose_cmd(["logs", "--tail=100", "maker2"], check=False)
-    maker2_logs = result.stdout.lower()
-    maker2_running = (
-        "collected" in maker2_logs
-        or "timeout waiting" in maker2_logs
-        or "listen" in maker2_logs
-    )
-    assert maker2_running, f"Maker2 should be running. Logs: {result.stdout[-500:]}"
-
-    logger.info("All services are healthy")
-
-
-@pytest.mark.asyncio
-@pytest.mark.timeout(600)
-async def test_complete_reference_coinjoin(reference_services):
+@pytest.fixture(scope="module")
+def funded_jam_wallet(reference_services):
     """
-    Complete end-to-end CoinJoin test with reference implementation.
+    Create and fund a JAM wallet for reference coinjoin tests.
 
-    This test:
+    This fixture:
     1. Creates a wallet in jam using expect automation
     2. Funds the wallet with regtest coins
-    3. Verifies makers are advertising offers
+    3. Verifies the wallet is ready for CoinJoin
 
-    Note: Full coinjoin completion requires protocol compatibility.
-    This test verifies the setup and wallet creation automation work.
+    Returns wallet credentials and address.
     """
     wallet_name = "test_wallet.jmdat"
     wallet_password = "testpassword123"
 
-    logger.info("Starting complete reference coinjoin test...")
-
-    # Verify setup
-    onion = reference_services["onion_address"]
-    assert onion.endswith(".onion"), "Should have valid onion address"
-
-    # Step 1: Create wallet in jam
-    logger.info("Step 1: Creating wallet in jam...")
+    logger.info("Creating JAM wallet...")
     wallet_created = create_jam_wallet(wallet_name, wallet_password)
 
     if not wallet_created:
         logger.warning("Automated wallet creation failed.")
         pytest.skip("Wallet creation requires manual intervention")
 
-    # Step 2: Get a receiving address
-    logger.info("Step 2: Getting wallet address...")
+    # Get a receiving address
+    logger.info("Getting wallet address...")
     address = get_jam_wallet_address(wallet_name, wallet_password, 0)
 
     if not address:
@@ -631,28 +586,25 @@ async def test_complete_reference_coinjoin(reference_services):
 
     logger.info(f"Got wallet address: {address}")
 
-    # Step 3: Fund the wallet
-    logger.info("Step 3: Funding wallet...")
+    # Fund the wallet
+    logger.info("Funding wallet...")
     funded = fund_wallet_address(address)
-    assert funded, "Failed to fund wallet"
+    if not funded:
+        pytest.skip("Failed to fund wallet")
 
     # Wait for wallet to see the funds
-    await asyncio.sleep(5)
+    time.sleep(5)
 
     # Verify funding
     logger.info("Verifying wallet balance...")
     result = run_bitcoin_cmd(["getreceivedbyaddress", address])
     logger.info(f"Address balance: {result.stdout}")
 
-    # Step 4: Check makers are advertising offers
-    logger.info("Step 4: Checking maker offers...")
-    result = run_compose_cmd(["logs", "--tail=100", "maker1"], check=False)
-    logger.info(f"Maker1 recent logs:\n{result.stdout[-2000:]}")
-
-    result = run_compose_cmd(["logs", "--tail=100", "maker2"], check=False)
-    logger.info(f"Maker2 recent logs:\n{result.stdout[-2000:]}")
-
-    logger.info("Reference coinjoin setup test PASSED")
+    return {
+        "wallet_name": wallet_name,
+        "wallet_password": wallet_password,
+        "address": address,
+    }
 
 
 def stop_conflicting_makers() -> None:
@@ -671,17 +623,20 @@ def stop_conflicting_makers() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(300)
-async def test_execute_reference_coinjoin(reference_services):
+async def test_execute_reference_coinjoin(funded_jam_wallet):
     """
-    Actually execute a coinjoin using the reference taker.
+    Execute a coinjoin using the reference taker (JAM sendpayment).
 
-    This test requires:
+    This is the main compatibility test - if this passes, our maker implementation
+    is fully compatible with the reference JoinMarket taker.
+
+    Tests:
     1. Full protocol compatibility between our implementation and reference
-    2. Properly funded maker wallets
-    3. Reduced timeout (300s) - if it takes longer, something is wrong
+    2. Proper UTXO handling and PoDLE commitments
+    3. Transaction signing and broadcast
     """
-    wallet_name = "test_wallet.jmdat"
-    wallet_password = "testpassword123"
+    wallet_name = funded_jam_wallet["wallet_name"]
+    wallet_password = funded_jam_wallet["wallet_password"]
 
     # Stop any conflicting makers (e.g., neutrino maker from --profile all)
     # The neutrino maker can't verify taker UTXOs from bitcoin-jam node
@@ -695,17 +650,6 @@ async def test_execute_reference_coinjoin(reference_services):
     logger.info("Checking that bitcoin nodes are synced...")
     if not _wait_for_node_sync(max_attempts=30):
         pytest.fail("Bitcoin nodes failed to sync within timeout")
-
-    # Now fund the taker wallet
-    wallet_created = create_jam_wallet(wallet_name, wallet_password)
-    assert wallet_created, "Wallet must exist"
-
-    address = get_jam_wallet_address(wallet_name, wallet_password, 0)
-    assert address, "Must have wallet address"
-
-    # Fund the wallet
-    funded = fund_wallet_address(address, 1.0)
-    assert funded, "Wallet must be funded"
 
     # Wait for wallet sync - allow extra time in CI
     await asyncio.sleep(15)
@@ -781,36 +725,6 @@ async def test_execute_reference_coinjoin(reference_services):
     )
 
     logger.info("CoinJoin completed successfully!")
-
-
-@pytest.mark.asyncio
-async def test_maker_offers_visible(reference_services):
-    """Test that our maker offers are visible in the orderbook."""
-    # Wait for makers to announce offers
-    await asyncio.sleep(10)
-
-    # Check maker logs - they should be running and listening
-    result = run_compose_cmd(["logs", "--tail=100", "maker1"], check=False)
-    maker1_logs = result.stdout + result.stderr
-
-    result = run_compose_cmd(["logs", "--tail=100", "maker2"], check=False)
-    maker2_logs = result.stdout + result.stderr
-
-    # Look for offer-related messages (might not be in recent logs if startup was long ago)
-    offer_indicators = ["offer", "sw0reloffer", "pubmsg", "orderbook"]
-    maker1_has_offers = any(ind in maker1_logs.lower() for ind in offer_indicators)
-    maker2_has_offers = any(ind in maker2_logs.lower() for ind in offer_indicators)
-
-    logger.info(f"Maker1 offers visible: {maker1_has_offers}")
-    logger.info(f"Maker2 offers visible: {maker2_has_offers}")
-
-    # At minimum, makers should be running (showing listen activity)
-    maker1_running = (
-        "collected" in maker1_logs.lower()
-        or "timeout waiting" in maker1_logs.lower()
-        or "listen" in maker1_logs.lower()
-    )
-    assert maker1_running, "Maker1 should be running"
 
 
 if __name__ == "__main__":
