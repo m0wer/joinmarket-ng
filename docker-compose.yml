@@ -347,6 +347,7 @@ services:
         condition: service_healthy
     profiles:
       - reference
+      - reference-maker
       - all
 
   # Miner for bitcoin-jam node (creates legacy wallet and mines)
@@ -369,6 +370,7 @@ services:
         condition: service_healthy
     profiles:
       - reference
+      - reference-maker
       - all
 
   # Tor hidden service for directory server (exposes directory via .onion)
@@ -407,6 +409,7 @@ services:
       - tor-data:/var/lib/tor
     profiles:
       - reference
+      - reference-maker
       - all
 
   tor:
@@ -433,6 +436,7 @@ services:
         condition: service_completed_successfully
     profiles:
       - reference
+      - reference-maker
       - all
 
   # Init container for JAM config files
@@ -474,6 +478,7 @@ services:
         condition: service_healthy
     profiles:
       - reference
+      - reference-maker
       - all
 
   # Reference JoinMarket implementation (jam-standalone)
