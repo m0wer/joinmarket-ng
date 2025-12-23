@@ -63,21 +63,21 @@ jm-taker coinjoin \
 
 #### Option B: Bitcoin Core Full Node
 
-For maximum security. Create config file to avoid credentials in shell history:
+For maximum security. Create an environment file to avoid credentials in shell history:
 
 ```bash
-cat > ~/.jm/taker.conf << EOF
+cat > ~/.jm/bitcoin.env << EOF
 export BITCOIN_RPC_URL=http://127.0.0.1:8332
 export BITCOIN_RPC_USER=your_rpc_user
 export BITCOIN_RPC_PASSWORD=your_rpc_password
 EOF
-chmod 600 ~/.jm/taker.conf
+chmod 600 ~/.jm/bitcoin.env
 ```
 
 Execute CoinJoin:
 
 ```bash
-source ~/.jm/taker.conf
+source ~/.jm/bitcoin.env
 jm-taker coinjoin \
   --mnemonic-file ~/.jm/wallets/taker.mnemonic \
   --amount 1000000 \

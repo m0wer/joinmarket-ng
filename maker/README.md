@@ -67,21 +67,21 @@ jm-maker start \
 
 #### Option B: Bitcoin Core Full Node
 
-For maximum security. Create config file to avoid credentials in shell history:
+For maximum security. Create an environment file to avoid credentials in shell history:
 
 ```bash
-cat > ~/.jm/maker.conf << EOF
+cat > ~/.jm/bitcoin.env << EOF
 export BITCOIN_RPC_URL=http://127.0.0.1:8332
 export BITCOIN_RPC_USER=your_rpc_user
 export BITCOIN_RPC_PASSWORD=your_rpc_password
 EOF
-chmod 600 ~/.jm/maker.conf
+chmod 600 ~/.jm/bitcoin.env
 ```
 
 Start maker bot:
 
 ```bash
-source ~/.jm/maker.conf
+source ~/.jm/bitcoin.env
 jm-maker start \
   --mnemonic-file ~/.jm/wallets/maker.mnemonic \
   --backend-type full_node

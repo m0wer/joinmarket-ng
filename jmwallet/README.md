@@ -54,21 +54,21 @@ jm-wallet info \
 
 For maximum security and privacy. Requires a synced Bitcoin Core node (v23+).
 
-Create a config file to avoid exposing credentials in shell history:
+Create an environment file to avoid exposing credentials in shell history:
 
 ```bash
-cat > ~/.jm/wallet.conf << EOF
-BITCOIN_RPC_URL=http://127.0.0.1:8332
-BITCOIN_RPC_USER=your_rpc_user
-BITCOIN_RPC_PASSWORD=your_rpc_password
+cat > ~/.jm/bitcoin.env << EOF
+export BITCOIN_RPC_URL=http://127.0.0.1:8332
+export BITCOIN_RPC_USER=your_rpc_user
+export BITCOIN_RPC_PASSWORD=your_rpc_password
 EOF
-chmod 600 ~/.jm/wallet.conf
+chmod 600 ~/.jm/bitcoin.env
 ```
 
-Load config and check balance:
+Load environment and check balance:
 
 ```bash
-source ~/.jm/wallet.conf
+source ~/.jm/bitcoin.env
 jm-wallet info \
   --mnemonic-file ~/.jm/wallets/wallet.mnemonic \
   --backend full_node
@@ -114,8 +114,8 @@ jm-wallet generate --words 12 --save --prompt-password --output ~/.jm/wallets/wa
 # Neutrino backend (default ports)
 jm-wallet info --mnemonic-file ~/.jm/wallets/wallet.mnemonic --backend neutrino
 
-# Bitcoin Core (with config file)
-source ~/.jm/wallet.conf
+# Bitcoin Core (with environment file)
+source ~/.jm/bitcoin.env
 jm-wallet info --mnemonic-file ~/.jm/wallets/wallet.mnemonic --backend full_node
 ```
 
@@ -157,8 +157,8 @@ JoinMarket uses mixdepths for privacy isolation:
 
 - Mnemonic files are encrypted with Fernet (symmetric encryption)
 - Files automatically get restrictive permissions (`chmod 600`)
-- Use config files for RPC credentials instead of command-line args
-- Never commit mnemonics or config files to version control
+- Use `.env` files for RPC credentials instead of command-line args
+- Never commit mnemonics or `.env` files to version control
 
 ## Using with Maker/Taker Bots
 
