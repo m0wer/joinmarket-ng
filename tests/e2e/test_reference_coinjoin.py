@@ -33,8 +33,7 @@ import httpx
 import pytest
 from loguru import logger
 
-# Mark all tests in this module as requiring Docker reference profile
-pytestmark = pytest.mark.reference
+# Module-level markers are set below after the helper functions
 
 
 # Timeouts for reference implementation tests
@@ -488,11 +487,14 @@ def _fund_wallet_via_mining(address: str) -> bool:
     return True
 
 
-# Skip all tests in this module if JAM is not running
-pytestmark = pytest.mark.skipif(
-    not is_jam_running(),
-    reason="Reference services not running. Start with: docker compose --profile reference up -d",
-)
+# Mark all tests in this module as requiring Docker reference profile
+pytestmark = [
+    pytest.mark.reference,
+    pytest.mark.skipif(
+        not is_jam_running(),
+        reason="Reference services not running. Start with: docker compose --profile reference up -d",
+    ),
+]
 
 
 @pytest.fixture(scope="module")

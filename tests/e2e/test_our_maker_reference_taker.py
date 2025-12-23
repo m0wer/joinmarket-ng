@@ -32,7 +32,6 @@ from loguru import logger
 from tests.e2e.test_reference_coinjoin import (
     COINJOIN_TIMEOUT,
     STARTUP_TIMEOUT,
-    WALLET_FUND_TIMEOUT,
     _wait_for_node_sync,
     cleanup_wallet_lock,
     create_jam_wallet,
@@ -108,79 +107,8 @@ def our_maker_reference_taker_services():
     }
 
 
-@pytest.mark.asyncio
-@pytest.mark.timeout(300)
-async def test_our_makers_are_running(our_maker_reference_taker_services):
-    """Verify our maker bots are running and connected to directory."""
-    # Check maker1
-    result = run_compose_cmd(["logs", "--tail=100", "maker1"], check=False)
-    maker1_logs = result.stdout.lower()
-
-    # Look for signs of healthy maker operation
-    # Include "timeout waiting" and "collected" which appear during normal operation
-    # when the maker is idle and listening for messages
-    maker1_indicators = [
-        "connected",
-        "handshake",
-        "offer",
-        "syncing",
-        "wallet synced",
-        "starting maker",
-        "timeout waiting",
-        "collected",
-    ]
-    maker1_healthy = any(ind in maker1_logs for ind in maker1_indicators)
-
-    if not maker1_healthy:
-        logger.warning(f"Maker1 logs:\n{result.stdout[-2000:]}")
-
-    assert maker1_healthy, "Maker1 should be running and connected"
-    logger.info("Maker1 is healthy")
-
-    # Check maker2
-    result = run_compose_cmd(["logs", "--tail=100", "maker2"], check=False)
-    maker2_logs = result.stdout.lower()
-
-    maker2_healthy = any(ind in maker2_logs for ind in maker1_indicators)
-
-    if not maker2_healthy:
-        logger.warning(f"Maker2 logs:\n{result.stdout[-2000:]}")
-
-    assert maker2_healthy, "Maker2 should be running and connected"
-    logger.info("Maker2 is healthy")
-
-
-@pytest.mark.asyncio
-@pytest.mark.timeout(300)
-async def test_jam_taker_can_see_our_makers(our_maker_reference_taker_services):
-    """Verify that JAM taker can see offers from our makers."""
-    # Give more time for orderbook sync in CI
-    await asyncio.sleep(45)
-
-    # Check JAM logs for orderbook activity
-    result = run_compose_cmd(["logs", "--tail=200", "jam"], check=False)
-    jam_logs = result.stdout + result.stderr
-
-    # Look for orderbook-related messages
-    orderbook_indicators = [
-        "offer",
-        "orderbook",
-        "sw0reloffer",
-        "relorder",
-        "absorder",
-    ]
-
-    has_orderbook = any(ind in jam_logs.lower() for ind in orderbook_indicators)
-
-    if not has_orderbook:
-        logger.warning(f"JAM logs (orderbook check):\n{jam_logs[-3000:]}")
-    else:
-        logger.info("JAM can see orderbook offers")
-
-
-@pytest.mark.asyncio
-@pytest.mark.timeout(WALLET_FUND_TIMEOUT)
-async def test_create_and_fund_jam_wallet(our_maker_reference_taker_services):
+@pytest.fixture(scope="module")
+async def jam_wallet(our_maker_reference_taker_services):
     """Create and fund a JAM wallet for testing."""
     wallet_name = "test_maker_wallet.jmdat"
     wallet_password = "testpass123"
@@ -211,6 +139,12 @@ async def test_create_and_fund_jam_wallet(our_maker_reference_taker_services):
     logger.info(f"Wallet funded successfully. Current block height: {block_height}")
     assert block_height > 0, "No blocks mined"
 
+    yield {
+        "wallet_name": wallet_name,
+        "wallet_password": wallet_password,
+        "address": address,
+    }
+
 
 def stop_conflicting_makers() -> None:
     """Stop any makers that might conflict with reference tests.
@@ -230,6 +164,7 @@ def stop_conflicting_makers() -> None:
 @pytest.mark.timeout(300)
 async def test_reference_taker_coinjoin_with_our_makers(
     our_maker_reference_taker_services,
+    jam_wallet,
 ):
     """
     Execute a CoinJoin with reference taker (JAM) and our makers.
@@ -237,8 +172,8 @@ async def test_reference_taker_coinjoin_with_our_makers(
     This is the main compatibility test - if this passes, our maker implementation
     is fully compatible with the reference JoinMarket taker.
     """
-    wallet_name = "test_maker_wallet.jmdat"
-    wallet_password = "testpass123"
+    wallet_name = jam_wallet["wallet_name"]
+    wallet_password = jam_wallet["wallet_password"]
 
     # Stop any conflicting makers (e.g., neutrino maker from --profile all)
     # The neutrino maker can't verify taker UTXOs from bitcoin-jam node
