@@ -264,6 +264,7 @@ services:
     profiles:
       - e2e
       - reference
+      - neutrino
       - all
 
   # Maker 2 for e2e tests
@@ -298,6 +299,7 @@ services:
     profiles:
       - e2e
       - reference
+      - neutrino
       - all
 
   # ============================================================================
