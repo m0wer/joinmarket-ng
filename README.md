@@ -1,5 +1,9 @@
 # JoinMarket Refactor
 
+> **⚠️ IMPORTANT NOTICE**
+> This project is production-ready but very new to mainnet usage. While all components are fully implemented and tested, mainnet deployment experience is limited. **USE AT YOUR OWN RISK - NO WARRANTIES PROVIDED.**
+> The project is in very active development and the API/configuration may change significantly until the first official release.
+
 Modern, clean alternative implementation of [JoinMarket](https://github.com/JoinMarket-Org/joinmarket-clientserver/) components.
 
 ## About This Project
