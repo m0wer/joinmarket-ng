@@ -49,7 +49,7 @@ def pytest_configure(config: pytest.Config) -> None:
     By default, `pytest` excludes docker-marked tests via pytest.ini addopts.
     To run Docker tests, use `-m docker` or specific profile markers like `-m e2e`.
     """
-    # Markers are already defined in pytest.ini, but we can add extra info here
+    # Note: --fail-on-skip is handled by root conftest.py
     pass
 
 

@@ -10,8 +10,10 @@ from jmwallet.backends.neutrino import NeutrinoBackend, NeutrinoConfig
 from jmwallet.wallet.address import pubkey_to_p2wpkh_address
 
 
+@pytest.mark.docker
 @pytest.mark.asyncio
 async def test_bitcoin_core_backend_integration():
+    """Integration test requiring Docker Bitcoin Core service."""
     # Connect to the regtest node defined in docker-compose
     backend = BitcoinCoreBackend(
         rpc_url="http://localhost:18443", rpc_user="test", rpc_password="test"
@@ -22,7 +24,10 @@ async def test_bitcoin_core_backend_integration():
         try:
             await backend.get_block_height()
         except Exception:
-            pytest.skip("Bitcoin Core not available at localhost:18443")
+            pytest.fail(
+                "Bitcoin Core not available at localhost:18443. "
+                "Start with: docker compose up -d bitcoin"
+            )
             return
 
         # Generate a local address
@@ -215,6 +220,7 @@ class TestNeutrinoBackend:
         assert "--connect=peer2:18333" in args
 
 
+@pytest.mark.docker
 @pytest.mark.asyncio
 async def test_neutrino_backend_integration():
     """Integration test for NeutrinoBackend (requires running neutrino server)."""
@@ -224,11 +230,14 @@ async def test_neutrino_backend_integration():
     )
 
     try:
-        # Try to connect - skip if not available
+        # Try to connect - fail if not available
         try:
             await backend._api_call("GET", "v1/status")
         except Exception:
-            pytest.skip("Neutrino server not available at localhost:8334")
+            pytest.fail(
+                "Neutrino server not available at localhost:8334. "
+                "Start with: docker compose --profile neutrino up -d neutrino"
+            )
             return
 
         # Test get_block_height

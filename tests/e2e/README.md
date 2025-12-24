@@ -580,6 +580,7 @@ The GitHub Actions workflow runs tests in separate jobs using pytest markers:
 | `test-e2e` | `e2e` | `-m e2e` | Our implementation |
 | `test-reference` | `reference` | `-m reference` | JAM compatibility |
 | `test-neutrino` | `neutrino` | `-m neutrino` | Light client tests |
+| `test-reference-maker` | `reference-maker` | `-m reference_maker` | JAM makers + our taker |
 
 **Marker Details:**
 - `slow`: Long-running tests, can be excluded with `-m "not slow"`
@@ -592,10 +593,54 @@ The GitHub Actions workflow runs tests in separate jobs using pytest markers:
 **Key Points:**
 - Unit tests run by default without Docker (markers auto-exclude Docker tests)
 - Docker tests use profile-specific markers to match the running services
-- Tests are skipped if the required Docker services aren't running
 - All markers are defined in `pytest.ini`
 
-See `.github/workflows/test.yaml` for implementation details.
+### Fail-on-Skip Mode
+
+**IMPORTANT:** All CI jobs and the `run_all_tests.sh` script use `--fail-on-skip` mode.
+
+This means that if a test is selected by its marker but then skips due to missing
+setup (e.g., Docker service not running), the test **fails instead of skipping**.
+This catches configuration issues where tests appear to pass but are actually
+not running at all.
+
+```bash
+# Example: If e2e profile is not running, this will FAIL (not skip)
+pytest -m e2e --fail-on-skip
+
+# Without --fail-on-skip, tests silently skip (bad for CI)
+pytest -m e2e  # Tests skip if Docker not running - looks like success!
+```
+
+The `--fail-on-skip` option is implemented in `tests/e2e/conftest.py` and converts
+any pytest.skip() calls into pytest.fail() when enabled.
+
+### Running the Complete Test Suite
+
+Use `scripts/run_all_tests.sh` to run all test phases with proper Docker orchestration:
+
+```bash
+# Run complete test suite (unit + e2e + reference + neutrino)
+./scripts/run_all_tests.sh
+
+# Just cleanup Docker resources
+./scripts/run_all_tests.sh --cleanup-only
+
+# Show help
+./scripts/run_all_tests.sh --help
+```
+
+The script:
+1. Runs unit tests (no Docker)
+2. Starts e2e profile and runs e2e tests + Docker integration tests
+3. Starts reference profile and runs compatibility tests
+4. Starts reference-maker profile and runs maker tests
+5. Starts neutrino profile and runs light client tests
+6. Combines coverage reports from all phases
+
+All phases use `--fail-on-skip` to ensure tests don't silently skip.
+
+See `.github/workflows/test.yaml` for CI implementation details.
 
 ## Security Notes
 

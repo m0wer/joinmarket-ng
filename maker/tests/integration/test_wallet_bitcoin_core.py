@@ -3,6 +3,9 @@ Integration tests for wallet with Bitcoin Core regtest.
 
 These tests require a running Bitcoin Core regtest node.
 Run: docker-compose up -d bitcoin
+
+These tests are marked with @pytest.mark.docker so they are excluded by default.
+Run with: pytest -m docker maker/tests/integration/
 """
 
 import httpx
@@ -26,10 +29,24 @@ def check_bitcoin_available():
         return False
 
 
-pytestmark = pytest.mark.skipif(
-    not check_bitcoin_available(),
-    reason="Bitcoin Core regtest node not running. Start with: docker-compose up -d bitcoin",
-)
+# Apply docker marker to all tests in this module
+# This ensures they are excluded by default and only run with -m docker
+pytestmark = [
+    pytest.mark.docker,
+]
+
+
+@pytest.fixture(autouse=True)
+def require_bitcoin():
+    """Fail tests if Bitcoin Core is not available.
+
+    This is preferred over skipif because it makes it clear when
+    the test environment is not set up correctly.
+    """
+    if not check_bitcoin_available():
+        pytest.fail(
+            "Bitcoin Core regtest node not running. Start with: docker-compose up -d bitcoin"
+        )
 
 
 @pytest.fixture

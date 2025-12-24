@@ -95,6 +95,8 @@ def mock_backend():
     )
     backend.get_transaction = AsyncMock()
     backend.broadcast_transaction = AsyncMock(return_value="txid123")
+    # can_provide_neutrino_metadata is a synchronous method, not async
+    backend.can_provide_neutrino_metadata = Mock(return_value=True)
     return backend
 
 

@@ -9,10 +9,23 @@ Modern, secure implementation of JoinMarket components using Python 3.14+, Pydan
 - **Privacy**: Tor integration is core architecture.
 
 ## Commands
-- **Test**: `pytest -lv --cov=jmcore --cov=jmwallet --cov=directory_server --cov=orderbook_watcher --cov=maker --cov=taker jmcore orderbook_watcher directory_server jmwallet maker taker tests`. Several markers available.
+- **Test (unit)**: `pytest jmcore directory_server orderbook_watcher maker taker jmwallet` (excludes Docker tests by default)
+- **Test (full suite)**: `./scripts/run_all_tests.sh` - Runs all phases with Docker orchestration
+- **Test (specific marker)**: `pytest -m e2e --fail-on-skip` - Uses `--fail-on-skip` to catch missing setup
 - **Lint/Format**: `pre-commit run --all-files` (Recommended).
   - Manual: `ruff check .` / `ruff format .` / `mypy .`
 - **Docker**: `docker-compose up -d` (several profiles available).
+
+## Test Markers
+Tests use pytest markers to organize by Docker profile:
+- Default: `-m "not docker"` excludes all Docker tests
+- `e2e`: Our maker/taker implementation
+- `reference`: JAM compatibility tests
+- `neutrino`: Light client tests
+- `reference_maker`: JAM makers + our taker
+- `docker`: Base marker for any Docker test
+
+**Important:** CI and `run_all_tests.sh` use `--fail-on-skip` to fail instead of skip when setup is missing.
 
 ## Code Style
 - **Formatting**: Line length 100. Follow Ruff defaults.
