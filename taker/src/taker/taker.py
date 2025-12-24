@@ -132,6 +132,14 @@ class MultiDirectoryClient:
         """Wait for responses from multiple makers at once.
 
         Returns a dict of nick -> response data for all makers that responded.
+        Responses can include:
+        - Normal responses matching expected_command
+        - Error responses marked with "error": True
+
+        Error handling:
+        - Makers may send !error messages instead of the expected response
+        - These indicate protocol failures (e.g., blacklisted PoDLE commitment)
+        - Errors are returned in the response dict with {"error": True, "data": "reason"}
         """
         responses: dict[str, dict[str, Any]] = {}
         remaining_nicks = set(expected_nicks)
@@ -150,6 +158,22 @@ class MultiDirectoryClient:
                     messages = await client.listen_for_messages(duration=remaining_time)
                     for msg in messages:
                         line = msg.get("line", "")
+
+                        # Check for !error messages from any of our expected nicks
+                        if "!error" in line:
+                            for nick in list(remaining_nicks):
+                                if nick in line:
+                                    # Extract error message after !error
+                                    parts = line.split("!error", 1)
+                                    error_msg = (
+                                        parts[1].strip() if len(parts) > 1 else "Unknown error"
+                                    )
+                                    responses[nick] = {"error": True, "data": error_msg}
+                                    remaining_nicks.discard(nick)
+                                    logger.warning(f"Received !error from {nick}: {error_msg}")
+                                    break
+                            continue
+
                         # Parse the message to find sender and command
                         if expected_command not in line:
                             continue
@@ -500,8 +524,16 @@ class Taker:
         # Process responses
         # Maker sends: "<nacl_pubkey> [features=...] <signing_pubkey> <signature>"
         # Directory client strips command, we get the data part
+        # Note: responses may include error responses with {"error": True, "data": "reason"}
         for nick in list(self.maker_sessions.keys()):
             if nick in responses:
+                # Check if this is an error response
+                if responses[nick].get("error"):
+                    error_msg = responses[nick].get("data", "Unknown error")
+                    logger.error(f"Maker {nick} rejected !fill: {error_msg}")
+                    del self.maker_sessions[nick]
+                    continue
+
                 try:
                     response_data = responses[nick]["data"].strip()
                     # Format: "<nacl_pubkey_hex> [features=...] <signing_pk> <sig>"

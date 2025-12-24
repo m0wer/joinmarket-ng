@@ -2,6 +2,10 @@
 DataDirectory /var/lib/tor
 Log notice stdout
 
+# SOCKS proxy for clients (taker, etc.) to connect to onion addresses
+# Bind to all interfaces so Docker containers can connect
+SocksPort 0.0.0.0:9050
+
 # Hidden service for directory server
 HiddenServiceDir /var/lib/tor/directory
 HiddenServicePort 5222 jm-directory:5222

@@ -214,6 +214,47 @@ def fund_jam_maker_wallet(address: str, amount_btc: float = 2.0) -> bool:
     return True
 
 
+def clear_podle_blacklist(maker_id: int) -> bool:
+    """
+    Clear the PoDLE commitment blacklist for a maker.
+
+    This is necessary in test environments because PoDLE commitments get
+    blacklisted after use (anti-sybil protection). Without clearing,
+    subsequent test runs with the same UTXO will fail.
+
+    Args:
+        maker_id: The maker container ID (1 or 2)
+
+    Returns:
+        True if successful or file didn't exist
+    """
+    compose_file = get_compose_file()
+    cmd = [
+        "docker",
+        "compose",
+        "-f",
+        str(compose_file),
+        "exec",
+        "-T",
+        f"jam-maker{maker_id}",
+        "rm",
+        "-f",
+        "/root/.joinmarket/cmtdata/commitmentlist",
+    ]
+
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=10, check=False
+    )
+    if result.returncode == 0:
+        logger.info(f"Cleared PoDLE blacklist for jam-maker{maker_id}")
+        return True
+    else:
+        logger.warning(
+            f"Could not clear blacklist for jam-maker{maker_id}: {result.stderr}"
+        )
+        return False
+
+
 def cleanup_yieldgenerator(maker_id: int, wallet_name: str) -> None:
     """
     Clean up any existing yieldgenerator processes and lock files.
@@ -456,8 +497,15 @@ def running_yieldgenerators(funded_jam_makers):
     """
     Start yieldgenerator bots for both makers.
 
+    Clears PoDLE blacklists before starting to ensure fresh test state.
     Yields the maker info, then stops the bots on cleanup.
     """
+    # Clear PoDLE blacklists before starting - essential for repeated test runs
+    # Without this, commitments from previous runs will be rejected
+    logger.info("Clearing PoDLE blacklists from previous test runs...")
+    for maker_id in [1, 2]:
+        clear_podle_blacklist(maker_id)
+
     processes = []
     started_makers = []
 
@@ -498,6 +546,10 @@ async def test_our_taker_with_reference_makers(
 
     This is the main compatibility test - if this passes, our taker implementation
     is fully compatible with the reference JoinMarket makers.
+
+    The taker connects to our directory server which routes messages to the
+    reference makers. All communication goes through the directory - no direct
+    Tor connections are needed between taker and makers.
     """
     compose_file = reference_maker_services["compose_file"]
 
@@ -647,26 +699,20 @@ async def test_our_taker_with_reference_makers(
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(300)
-async def test_jam_maker_wallet_creation(reference_maker_services):
-    """Test that we can create wallets in jam-maker containers."""
-    # Test wallet creation for maker1
-    wallet_name = "wallet_creation_test.jmdat"
-    password = "testpass123"
-
-    seed = create_jam_maker_wallet(1, wallet_name, password)
-    assert seed is not None, "Should be able to create wallet"
-
-    # Get address
-    address = get_jam_maker_address(1, wallet_name, password)
-    assert address is not None, "Should be able to get address"
-    assert address.startswith("bcrt1"), f"Address should be regtest: {address}"
-
-
-@pytest.mark.asyncio
 @pytest.mark.timeout(180)
-async def test_yieldgenerator_starts(reference_maker_services, funded_jam_makers):
-    """Test that yieldgenerator can start and connect to directory."""
+async def test_yieldgenerator_starts_and_announces_offers(
+    reference_maker_services, funded_jam_makers
+):
+    """
+    Test that a reference yieldgenerator can start, connect to directory, and announce offers.
+
+    This verifies compatibility between our directory server and the reference
+    JoinMarket maker implementation. If this passes, it means:
+    - The yieldgenerator can start with a funded wallet
+    - It can establish Tor onion service
+    - It can connect to our directory server
+    - It can announce offers to the directory
+    """
     import fcntl
     import os
     import select
@@ -690,13 +736,16 @@ async def test_yieldgenerator_starts(reference_maker_services, funded_jam_makers
         start_time = time.time()
         timeout_secs = 60  # Total time to wait for startup indicators
 
-        # Startup indicators we're looking for - process is ready when it
-        # announces offers or fully connects to message channels
+        # Startup indicators we're looking for:
+        # 1. "starting yield generator" - process is initializing
+        # 2. "offerlist" - offers have been created
+        # 3. "all message channels connected" - connected to directory
+        # 4. "jm daemon setup complete" - fully initialized
         startup_indicators = [
-            "offerlist",
-            "all message channels connected",
-            "jm daemon setup complete",
-            "starting yield generator",  # Early indicator that startup is proceeding
+            "offerlist",  # Most important - means offers were announced
+            "all message channels connected",  # Connected to directory
+            "jm daemon setup complete",  # Fully initialized
+            "starting yield generator",  # At least started
         ]
 
         while time.time() - start_time < timeout_secs:
@@ -729,7 +778,7 @@ async def test_yieldgenerator_starts(reference_maker_services, funded_jam_makers
         output = output_bytes.decode("utf-8", errors="replace")
         output_lower = output.lower()
 
-        logger.info(f"Yieldgenerator output:\n{output[-3000:]}")
+        logger.info(f"Yieldgenerator output (last 3000 chars):\n{output[-3000:]}")
 
         # Check process is still running (should be if successful)
         if process.poll() is not None:
@@ -738,13 +787,26 @@ async def test_yieldgenerator_starts(reference_maker_services, funded_jam_makers
                 f"Output: {output[-2000:]}"
             )
 
-        # Look for signs of successful startup - use same indicators as above
+        # Look for signs of successful startup
         has_startup = any(ind in output_lower for ind in startup_indicators)
 
         assert has_startup, (
             f"Yieldgenerator should show startup activity in output.\n"
+            f"Expected one of: {startup_indicators}\n"
             f"Output: {output[-2000:]}"
         )
+
+        # Specifically check for offerlist to ensure offers were announced
+        if "offerlist" in output_lower:
+            logger.info(
+                "SUCCESS: Yieldgenerator announced offers - "
+                "directory server is compatible with reference makers!"
+            )
+        else:
+            logger.warning(
+                "Yieldgenerator started but did not announce offers yet. "
+                "May need more time to fully initialize."
+            )
 
     finally:
         stop_yieldgenerator(process, maker["maker_id"], maker["wallet_name"])

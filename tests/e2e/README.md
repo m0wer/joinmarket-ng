@@ -183,6 +183,42 @@ pytest -lv \
 docker compose --profile e2e down -v
 ```
 
+### 5. Reference Maker Tests (Our Taker + JAM Makers)
+
+Tests our taker implementation against reference JoinMarket (JAM) makers.
+
+```bash
+# Clean start
+docker compose --profile reference-maker down -v
+
+# Start services (includes Tor for onion routing)
+docker compose --profile reference-maker up -d --build
+
+# Wait for Bitcoin
+echo "Waiting for Bitcoin..."
+until docker compose exec -T bitcoin bitcoin-cli -chain=regtest \
+    -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo 2>/dev/null; do
+  sleep 2
+done
+
+echo "Waiting for JAM makers to start..."
+sleep 60
+
+# Run reference maker tests
+pytest tests/e2e/test_reference_maker_our_taker.py -v -s -m reference_maker
+
+# Cleanup
+docker compose --profile reference-maker down -v
+```
+
+**Important Note - PoDLE Blacklisting:**
+
+The test fixture automatically clears PoDLE commitment blacklists before running.
+This is necessary because:
+- PoDLE commitments are blacklisted after first use (anti-sybil protection)
+- Without clearing, subsequent test runs with the same UTXO fail
+- The blacklist file is at `/root/.joinmarket/cmtdata/commitmentlist` in JAM containers
+
 ## Running Specific Tests
 
 ### Using Pytest Markers (Recommended)
@@ -502,6 +538,37 @@ The auto-miner and test fixtures should fund wallets automatically. If needed:
 ADDR="bcrt1q..."
 docker compose exec bitcoin bitcoin-cli -regtest -rpcuser=test -rpcpassword=test generatetoaddress 110 $ADDR
 ```
+
+### Directory Server Log Noise (Healthcheck Messages)
+
+If you see repeated "Handshake error: Connection closed by peer" messages in directory
+logs every 10 seconds, **this is normal!** These come from Docker healthchecks, not
+from actual connection issues:
+
+```
+INFO     | Handshake error from 172.25.0.1:42356: Connection closed by peer
+```
+
+The healthcheck sends a TCP connection to verify the directory server is running,
+but doesn't complete the JoinMarket handshake protocol.
+
+### PoDLE Commitment Blacklisted
+
+If makers reject `!fill` messages with "Commitment is blacklisted":
+
+```
+PRIVMSG routing: J58xxx -> J5Bxxx (rest: error Commitment is blacklisted: 1071cb...)
+```
+
+This means the PoDLE commitment was already used in a previous coinjoin attempt.
+Solutions:
+1. **Clear the blacklist** (for testing):
+   ```bash
+   docker compose exec -T jam-maker1 rm -f /root/.joinmarket/cmtdata/commitmentlist
+   docker compose exec -T jam-maker2 rm -f /root/.joinmarket/cmtdata/commitmentlist
+   ```
+2. **Fund a fresh address** to get a new UTXO with an unused commitment
+3. **Use a different NUMS index** (the taker can rotate through indices 0-15)
 
 ## CI/CD
 
