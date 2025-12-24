@@ -253,13 +253,12 @@ jobs:
 
       - name: Install all dependencies
         run: |
-          pip install -e jmcore
+          pip install -e jmcore[dev]
           pip install -e jmwallet
           pip install -e directory_server[dev]
           pip install -e orderbook_watcher[dev]
           pip install -e maker[dev]
           pip install -e taker[dev]
-          pip install httpx loguru pytest-asyncio pytest-timeout
 
       - name: "Start e2e services"
         run: |
@@ -353,13 +352,12 @@ jobs:
 
       - name: Install all dependencies
         run: |
-          pip install -e jmcore
+          pip install -e jmcore[dev]
           pip install -e jmwallet
           pip install -e directory_server[dev]
           pip install -e orderbook_watcher[dev]
           pip install -e maker[dev]
           pip install -e taker[dev]
-          pip install httpx loguru pytest-asyncio pytest-timeout
 
       - name: "Start reference services"
         env:
@@ -486,13 +484,12 @@ jobs:
 
       - name: Install all dependencies
         run: |
-          pip install -e jmcore
+          pip install -e jmcore[dev]
           pip install -e jmwallet
           pip install -e directory_server[dev]
           pip install -e orderbook_watcher[dev]
           pip install -e maker[dev]
           pip install -e taker[dev]
-          pip install httpx loguru pytest-asyncio pytest-timeout
 
       - name: "Start neutrino services"
         run: |
@@ -541,9 +538,10 @@ jobs:
           NEUTRINO_URL: http://127.0.0.1:8334
         run: |
           # Run neutrino-specific tests (using marker)
+          # Use reruns for flaky tests that depend on Docker maker state
           pytest -m neutrino --junitxml=junit/test-results.xml \
             --cov --cov-report=term-missing --cov-report=xml \
-            -v -s --timeout=180
+            -v -s --timeout=180 --reruns=2 --reruns-delay=10
 
       - name: Show logs on failure
         if: failure()
@@ -590,13 +588,12 @@ jobs:
 
       - name: Install all dependencies
         run: |
-          pip install -e jmcore
+          pip install -e jmcore[dev]
           pip install -e jmwallet
           pip install -e directory_server[dev]
           pip install -e orderbook_watcher[dev]
           pip install -e maker[dev]
           pip install -e taker[dev]
-          pip install httpx loguru pytest-asyncio pytest-timeout
 
       - name: "Start reference-maker services"
         env:

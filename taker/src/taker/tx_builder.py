@@ -608,7 +608,15 @@ def build_coinjoin_tx(
             f"dust_threshold=546"
         )
 
-        if maker_change > 546:
+        if maker_change < 0:
+            # Negative change means maker's UTXOs are insufficient
+            # This can happen if UTXO verification failed (value=0) or if UTXOs were spent
+            raise ValueError(
+                f"Maker {nick} has insufficient funds: inputs={maker_total_input} sats, "
+                f"required={cj_amount + maker_txfee - data['cjfee']} sats, "
+                f"change={maker_change} sats. Maker's UTXOs may have been spent."
+            )
+        elif maker_change > 546:
             maker_change_outputs[nick] = TxOutput(address=data["change_addr"], value=maker_change)
         else:
             logger.warning(

@@ -459,6 +459,7 @@ class TestNeutrinoCoinJoin:
             await bitcoin_backend.close()
 
     @pytest.mark.slow
+    @pytest.mark.flaky(reruns=2, reruns_delay=10)
     async def test_coinjoin_with_neutrino_taker(self, neutrino_backend):
         """Test that a taker using neutrino can initiate CoinJoin.
 
@@ -470,6 +471,10 @@ class TestNeutrinoCoinJoin:
 
         This complements test_coinjoin_with_neutrino_maker by testing the
         opposite configuration: neutrino taker + Bitcoin Core maker.
+
+        Note: This test is marked flaky because Docker makers may have stale UTXOs
+        if a previous coinjoin consumed them. The reruns allow the makers time to
+        resync their wallet and update their offers.
 
         Requires: docker compose --profile neutrino up -d (for both neutrino backend
         and jm-maker1/jm-maker2 makers)

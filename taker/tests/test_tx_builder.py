@@ -402,3 +402,40 @@ class TestBuildCoinjoinTx:
         # So only 3 outputs: 2 CJ + 1 maker change
         change_outputs = [o for o in metadata["output_owners"] if o[1] == "change"]
         assert len(change_outputs) == 1
+
+    def test_build_coinjoin_negative_maker_change_raises_error(self) -> None:
+        """Test that negative maker change raises ValueError.
+
+        This can happen when maker UTXO verification fails (value=0)
+        or maker's UTXOs were spent between offer and coinjoin.
+        """
+        taker_utxos = [
+            {
+                "txid": "a" * 64,
+                "vout": 0,
+                "value": 2_000_000,
+            },
+        ]
+        # Maker has 0 value UTXOs (verification failed)
+        maker_data = {
+            "maker1": {
+                "utxos": [{"txid": "b" * 64, "vout": 1, "value": 0}],  # Verification failed!
+                "cj_addr": "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080",
+                "change_addr": "bcrt1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qzf4jry",
+                "cjfee": 500,
+            },
+        }
+
+        import pytest
+
+        with pytest.raises(ValueError, match="has insufficient funds"):
+            build_coinjoin_tx(
+                taker_utxos=taker_utxos,
+                taker_cj_address="bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080",
+                taker_change_address="bcrt1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qzf4jry",
+                taker_total_input=2_000_000,
+                maker_data=maker_data,
+                cj_amount=1_000_000,
+                tx_fee=5000,
+                network="regtest",
+            )
