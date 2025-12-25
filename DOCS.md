@@ -1068,6 +1068,40 @@ Bond value depends on:
 - Time until unlock (longer = more valuable)
 - Current confirmation count
 
+### Public Key Disclosure and Quantum Computing Considerations
+
+**Public Key Visibility**: The fidelity bond's public key is disclosed in the P2P orderbook, not on the blockchain.
+
+**How it works**:
+1. On-chain, the bond is a P2WSH (Pay-to-Witness-Script-Hash) output containing only `SHA256(witness_script)`
+2. To allow takers to verify bonds, makers broadcast the full witness script off-chain:
+   ```
+   <expiry_time> OP_CHECKLOCKTIMEVERIFY OP_DROP <PUBKEY> OP_CHECKSIG
+   ```
+3. Takers extract the `<PUBKEY>` and `<expiry_time>`, reconstruct the script, and verify the hash matches the on-chain UTXO
+
+**Why this is necessary**: Takers need to:
+- Verify the bond exists on-chain
+- Calculate bond value from amount and locktime
+- Verify the maker owns the bond (via message signature)
+
+**Theoretical quantum computing risk**:
+- The public key is visible in the orderbook (not the blockchain)
+- In theory, a sufficiently powerful quantum computer running Shor's algorithm could derive the private key
+- Maximum bond duration is 10 years, which could coincide with quantum computing advances (purely speculative)
+- Upon bond expiry, the public key becomes visible on-chain when spending the UTXO
+
+**Practical considerations**:
+- No evidence that quantum computing poses an imminent threat to Bitcoin
+- Satoshi's coins serve as a "canary" - they would likely be targeted first
+- Bitcoin will likely implement quantum-resistant signatures network-wide before this becomes a real concern
+- Bond value is evaluated from on-chain data (amount, locktime), not identity, so rotating addresses is possible
+
+**Alternative design tradeoffs**: The bond verification data could be shared only during encrypted taker-maker negotiation rather than in the public orderbook, but this would:
+- Prevent takers from pre-filtering fake/invalid bonds
+- Add complexity without meaningful security improvement
+- Not address the fundamental issue (public key visible somewhere off-chain)
+
 ---
 
 ## Transaction Types
