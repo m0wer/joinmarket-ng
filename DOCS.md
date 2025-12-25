@@ -1151,6 +1151,171 @@ def calculate_cj_fee(offer: Offer, cj_amount: int) -> int:
 
 ---
 
+## Tor Integration
+
+JoinMarket components use Tor in different ways depending on their role:
+
+### Component Tor Requirements Summary
+
+| Component | Needs SOCKS? | Needs Hidden Service? | Notes |
+|-----------|-------------|----------------------|-------|
+| **Directory Server** | ❌ No | ✅ Yes (permanent) | Tor-agnostic; only receives connections |
+| **Maker** | ✅ Yes | ✅ Yes (ephemeral recommended) | Outgoing + incoming connections |
+| **Taker** | ✅ Yes | ❌ No | Only outgoing connections |
+| **Orderbook Watcher** | ✅ Yes | ❌ No | Only outgoing connections |
+
+### Directory Server
+
+Directory servers are **Tor-agnostic** - they only receive incoming connections through their hidden service. They do NOT make outgoing connections and therefore do NOT need:
+- ❌ Tor SOCKS proxy configuration
+- ❌ Tor control port access
+- ✅ Only need a **permanent** hidden service configured in `torrc`
+
+**Why permanent?** Users need stable `.onion` addresses to save in their configs.
+
+**torrc configuration**:
+```
+HiddenServiceDir /var/lib/tor/directory_hs
+HiddenServiceVersion 3
+HiddenServicePort 5222 directory_server:5222
+```
+
+The directory server listens on a regular TCP socket. Tor forwards incoming connections from the hidden service to this socket.
+
+### Maker Bots
+
+Makers need **both** SOCKS proxy (for outgoing connections to directories) and a hidden service (for direct peer connections from takers).
+
+#### SOCKS Proxy (Outgoing)
+
+Connect to directory servers through Tor:
+
+```python
+from maker.config import MakerConfig
+
+config = MakerConfig(
+    mnemonic="...",
+    socks_host="127.0.0.1",  # Tor SOCKS proxy
+    socks_port=9050,
+)
+```
+
+#### Ephemeral Hidden Service (Incoming)
+
+**Recommended approach**: Create a fresh `.onion` address each time the maker starts using Tor's control port.
+
+**Benefits**:
+- Generates a fresh identity per session
+- Better privacy (no persistent fingerprint)
+- No hidden service keys on disk
+- Automatically cleans up when stopped
+
+**torrc**:
+```
+SocksPort 0.0.0.0:9050
+ControlPort 0.0.0.0:9051
+CookieAuthentication 1
+CookieAuthFile /var/lib/tor/control_auth_cookie
+```
+
+**Maker Config**:
+```python
+from maker.config import MakerConfig, TorControlConfig
+
+config = MakerConfig(
+    mnemonic="...",
+    socks_host="127.0.0.1",
+    socks_port=9050,
+    onion_serving_host="127.0.0.1",
+    onion_serving_port=27183,
+    tor_control=TorControlConfig(
+        enabled=True,
+        host="127.0.0.1",
+        port=9051,
+        cookie_path="/var/lib/tor/control_auth_cookie",
+    ),
+)
+```
+
+The maker will:
+1. Connect to Tor control port at startup
+2. Authenticate using the cookie file
+3. Create an ephemeral hidden service via `ADD_ONION`
+4. Advertise the generated `.onion` address to directory servers
+5. Remove the hidden service when stopped (automatic)
+
+### Taker Bots & Orderbook Watchers
+
+Takers and orderbook watchers only make **outgoing** connections - they do NOT serve a hidden service.
+
+**SOCKS Proxy Configuration**:
+```python
+from taker.config import TakerConfig
+
+config = TakerConfig(
+    mnemonic="...",
+    socks_host="127.0.0.1",  # Tor SOCKS proxy
+    socks_port=9050,
+)
+```
+
+They advertise `NOT-SERVING-ONION` in their handshake because they don't accept incoming connections.
+
+**torrc** (minimal):
+```
+SocksPort 0.0.0.0:9050
+```
+
+### Tor Control Protocol
+
+The implementation uses Tor's control protocol (spec v1) for ephemeral hidden services:
+
+- **Cookie Authentication**: Reads the 32-byte cookie from `CookieAuthFile`
+- **GETINFO**: Query Tor version and status
+- **ADD_ONION**: Create ephemeral v3 hidden services with ED25519-V3 keys
+- **DEL_ONION**: Manually remove hidden services (optional, auto-removed on disconnect)
+
+**Example Control Port Usage**:
+```python
+from jmcore.tor_control import TorControlClient
+
+async with TorControlClient(
+    control_host="127.0.0.1",
+    control_port=9051,
+    cookie_path="/var/lib/tor/control_auth_cookie",
+) as client:
+    # Get Tor version
+    version = await client.get_version()
+    print(f"Connected to Tor {version}")
+
+    # Create ephemeral hidden service
+    hs = await client.create_ephemeral_hidden_service(
+        ports=[(27183, "127.0.0.1:27183")],
+        discard_pk=True,  # Don't need the private key
+    )
+    print(f"Hidden service: {hs.onion_address}")
+
+    # Service exists while connection is open
+    # Automatically removed when context exits
+```
+
+### Privacy Considerations
+
+**Ephemeral Hidden Services (Recommended for ALL makers)**:
+- ✅ Fresh identity per session (better privacy)
+- ✅ No persistent keys on disk
+- ✅ Automatic cleanup
+- ✅ Works with fidelity bonds (bond value is evaluated from on-chain data, not identity)
+
+**Permanent Hidden Services** (directory servers only):
+- ✅ Stable address for user configs
+- ❌ Persistent identity (lower privacy)
+- ❌ NOT recommended for makers
+
+**Note on Fidelity Bonds**: Fidelity bond value is calculated from on-chain UTXO properties (amount, locktime, confirmations), NOT from the maker's nick or onion address. Changing your onion address each session does NOT affect your bond's value or trustworthiness.
+
+---
+
 ## Development
 
 ### Dependency Management

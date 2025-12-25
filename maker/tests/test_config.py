@@ -2,11 +2,13 @@
 Tests for maker configuration validation.
 """
 
+from pathlib import Path
+
 import pytest
 from jmcore.models import OfferType
 from pydantic import ValidationError
 
-from maker.config import MakerConfig
+from maker.config import MakerConfig, TorControlConfig
 
 # Test mnemonic (BIP39 test vector)
 TEST_MNEMONIC = (
@@ -64,3 +66,77 @@ def test_zero_cj_fee_relative_ok_for_absolute_offers() -> None:
     )
     assert config.cj_fee_relative == "0"
     assert config.offer_type == OfferType.SW0_ABSOLUTE
+
+
+class TestTorControlConfig:
+    """Tests for TorControlConfig."""
+
+    def test_default_values(self) -> None:
+        """Test default values are applied."""
+        config = TorControlConfig()
+        assert config.enabled is False
+        assert config.host == "127.0.0.1"
+        assert config.port == 9051
+        assert config.cookie_path is None
+        assert config.password is None
+
+    def test_with_cookie_path(self, tmp_path: Path) -> None:
+        """Test configuration with cookie path."""
+        cookie_path = tmp_path / "control_auth_cookie"
+        config = TorControlConfig(
+            enabled=True,
+            cookie_path=cookie_path,
+        )
+        assert config.enabled is True
+        assert config.cookie_path == cookie_path
+
+    def test_with_password(self) -> None:
+        """Test configuration with password."""
+        config = TorControlConfig(
+            enabled=True,
+            password="mysecret",
+        )
+        assert config.enabled is True
+        assert config.password == "mysecret"
+
+
+class TestMakerConfigTorControl:
+    """Tests for MakerConfig tor_control integration."""
+
+    def test_default_tor_control(self) -> None:
+        """Test that tor_control defaults to disabled."""
+        config = MakerConfig(
+            mnemonic=TEST_MNEMONIC,
+        )
+        assert config.tor_control.enabled is False
+
+    def test_tor_control_enabled(self, tmp_path: Path) -> None:
+        """Test enabling tor_control via nested config."""
+        cookie_path = tmp_path / "control_auth_cookie"
+        config = MakerConfig(
+            mnemonic=TEST_MNEMONIC,
+            tor_control=TorControlConfig(
+                enabled=True,
+                host="127.0.0.1",
+                port=9051,
+                cookie_path=cookie_path,
+            ),
+        )
+        assert config.tor_control.enabled is True
+        assert config.tor_control.port == 9051
+        assert config.tor_control.cookie_path == cookie_path
+
+    def test_tor_control_from_dict(self) -> None:
+        """Test creating config from dict (JSON/YAML parsing)."""
+        config = MakerConfig(
+            mnemonic=TEST_MNEMONIC,
+            tor_control={
+                "enabled": True,
+                "host": "tor",
+                "port": 9051,
+                "cookie_path": "/var/lib/tor/control_auth_cookie",
+            },  # type: ignore[arg-type]
+        )
+        assert config.tor_control.enabled is True
+        assert config.tor_control.host == "tor"
+        assert config.tor_control.cookie_path == Path("/var/lib/tor/control_auth_cookie")

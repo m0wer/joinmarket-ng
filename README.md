@@ -25,6 +25,24 @@ This project is an alternative implementation of the reference JoinMarket protoc
 - **Performance**: Optimized for low latency and high throughput
 - **Auditability**: Clear separation of concerns, well-documented code
 
+### Tor Integration
+
+All JoinMarket components use Tor for privacy, but in different ways:
+
+| Component | Tor SOCKS Proxy | Tor Hidden Service | Notes |
+|-----------|----------------|-------------------|-------|
+| **Directory Server** | ❌ No | ✅ Permanent | Receives-only; stable `.onion` address for users |
+| **Maker Bot** | ✅ Yes | ✅ Ephemeral | Connects to dirs + serves incoming connections |
+| **Taker Bot** | ✅ Yes | ❌ No | Connects to dirs + makers only |
+| **Orderbook Watcher** | ✅ Yes | ❌ No | Monitors dirs only; advertises `NOT-SERVING-ONION` |
+
+**Why different approaches?**
+- **Directory servers** need permanent addresses so users can save them in configs
+- **Makers** use ephemeral (temporary) hidden services for better privacy - fresh identity each session
+- **Takers/watchers** only make outgoing connections, so they don't need hidden services at all
+
+See [DOCS.md § Tor Integration](./DOCS.md#tor-integration) for configuration details.
+
 ### Roadmap
 
 All components are fully implemented. Future work will focus on improvements, optimizations, and protocol extensions:

@@ -4,10 +4,41 @@ Maker bot configuration.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from jmcore.models import NetworkType, OfferType
 from pydantic import BaseModel, Field, model_validator
+
+
+class TorControlConfig(BaseModel):
+    """
+    Configuration for Tor control port connection.
+
+    When enabled, the maker will dynamically create an ephemeral hidden
+    service at startup using Tor's control port. This allows generating
+    a new .onion address each time the maker starts without needing
+    to pre-configure the hidden service in torrc.
+
+    Requires Tor to be configured with:
+        ControlPort 127.0.0.1:9051
+        CookieAuthentication 1
+        CookieAuthFile /var/lib/tor/control_auth_cookie
+    """
+
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 9051
+    cookie_path: Path | None = Field(
+        default=None,
+        description="Path to Tor cookie auth file (e.g., /var/lib/tor/control_auth_cookie)",
+    )
+    password: str | None = Field(
+        default=None,
+        description="Password for HASHEDPASSWORD auth (not recommended, use cookie auth)",
+    )
+
+    model_config = {"frozen": False}
 
 
 class MakerConfig(BaseModel):
@@ -30,9 +61,13 @@ class MakerConfig(BaseModel):
 
     # Hidden service configuration for direct peer connections
     # If onion_host is set, maker will serve on a hidden service
+    # If tor_control is enabled and onion_host is None, it will be auto-generated
     onion_host: str | None = None  # e.g., "mymaker...onion"
     onion_serving_host: str = "127.0.0.1"  # Local address Tor forwards to
     onion_serving_port: int = 27183  # Default JoinMarket port
+
+    # Tor control port configuration for dynamic hidden service creation
+    tor_control: TorControlConfig = Field(default_factory=TorControlConfig)
 
     offer_type: OfferType = OfferType.SW0_RELATIVE
     min_size: int = 100_000

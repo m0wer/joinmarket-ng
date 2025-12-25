@@ -19,6 +19,11 @@ from jmcore.directory_client import DirectoryClient, DirectoryClientError
 from jmcore.models import Offer
 from jmcore.network import HiddenServiceListener, TCPConnection
 from jmcore.protocol import COMMAND_PREFIX, JM_VERSION
+from jmcore.tor_control import (
+    EphemeralHiddenService,
+    TorControlClient,
+    TorControlError,
+)
 from jmwallet.backends.base import BlockchainBackend
 from jmwallet.history import append_history_entry, create_maker_history_entry
 from jmwallet.wallet.service import WalletService
@@ -71,15 +76,99 @@ class MakerBot:
         self.hidden_service_listener: HiddenServiceListener | None = None
         self.direct_connections: dict[str, TCPConnection] = {}
 
+        # Tor control for dynamic hidden service creation
+        self._tor_control: TorControlClient | None = None
+        self._ephemeral_hidden_service: EphemeralHiddenService | None = None
+
+    async def _setup_tor_hidden_service(self) -> str | None:
+        """
+        Create an ephemeral hidden service via Tor control port.
+
+        Returns:
+            The .onion address if successful, None otherwise
+        """
+        if not self.config.tor_control.enabled:
+            return None
+
+        try:
+            logger.info(
+                f"Connecting to Tor control port at "
+                f"{self.config.tor_control.host}:{self.config.tor_control.port}..."
+            )
+
+            self._tor_control = TorControlClient(
+                control_host=self.config.tor_control.host,
+                control_port=self.config.tor_control.port,
+                cookie_path=self.config.tor_control.cookie_path,
+                password=self.config.tor_control.password,
+            )
+
+            await self._tor_control.connect()
+            await self._tor_control.authenticate()
+
+            # Get Tor version for logging
+            try:
+                tor_version = await self._tor_control.get_version()
+                logger.info(f"Connected to Tor {tor_version}")
+            except TorControlError:
+                logger.debug("Could not get Tor version (non-critical)")
+
+            # Create ephemeral hidden service
+            # Maps external port 27183 to our local serving port
+            logger.info(
+                f"Creating ephemeral hidden service on port 27183 -> "
+                f"{self.config.onion_serving_host}:{self.config.onion_serving_port}..."
+            )
+
+            self._ephemeral_hidden_service = (
+                await self._tor_control.create_ephemeral_hidden_service(
+                    ports=[
+                        (
+                            27183,
+                            f"{self.config.onion_serving_host}:{self.config.onion_serving_port}",
+                        )
+                    ],
+                    # Don't discard private key in case we want to log it for debugging
+                    discard_pk=True,
+                    # Don't detach - we want the service to be removed when we disconnect
+                    detach=False,
+                )
+            )
+
+            logger.info(
+                f"Created ephemeral hidden service: {self._ephemeral_hidden_service.onion_address}"
+            )
+            return self._ephemeral_hidden_service.onion_address
+
+        except TorControlError as e:
+            logger.error(f"Failed to create ephemeral hidden service: {e}")
+            # Clean up partial connection
+            if self._tor_control:
+                await self._tor_control.close()
+                self._tor_control = None
+            return None
+
+    async def _cleanup_tor_hidden_service(self) -> None:
+        """Clean up Tor control connection (hidden service is auto-removed)."""
+        if self._tor_control:
+            try:
+                await self._tor_control.close()
+                logger.debug("Closed Tor control connection")
+            except Exception as e:
+                logger.warning(f"Error closing Tor control connection: {e}")
+            self._tor_control = None
+            self._ephemeral_hidden_service = None
+
     async def start(self) -> None:
         """
         Start the maker bot.
 
         Flow:
         1. Sync wallet with blockchain
-        2. Connect to directory servers
-        3. Create and announce offers
-        4. Listen for taker requests
+        2. Create ephemeral hidden service if tor_control enabled
+        3. Connect to directory servers
+        4. Create and announce offers
+        5. Listen for taker requests
         """
         try:
             logger.info(f"Starting maker bot (nick: {self.nick})")
@@ -158,6 +247,18 @@ class MakerBot:
                 )
                 return
 
+            # Set up ephemeral hidden service via Tor control port if enabled
+            # This must happen before connecting to directory servers so we can
+            # advertise the onion address
+            ephemeral_onion = await self._setup_tor_hidden_service()
+            if ephemeral_onion:
+                # Override onion_host with the dynamically created one
+                object.__setattr__(self.config, "onion_host", ephemeral_onion)
+                logger.info(f"Using ephemeral onion address: {ephemeral_onion}")
+
+            # Determine the onion address to advertise
+            onion_host = self.config.onion_host
+
             logger.info("Connecting to directory servers...")
             for dir_server in self.config.directory_servers:
                 try:
@@ -166,9 +267,9 @@ class MakerBot:
                     port = int(parts[1]) if len(parts) > 1 else 5222
 
                     # Determine location for handshake:
-                    # If we have an onion_host configured, advertise it
+                    # If we have an onion_host configured (static or ephemeral), advertise it
                     # Otherwise, use NOT-SERVING-ONION
-                    location = self.config.onion_host or "NOT-SERVING-ONION"
+                    location = onion_host or "NOT-SERVING-ONION"
 
                     # Advertise neutrino_compat if our backend can provide extended UTXO metadata.
                     # This tells Neutrino takers that we can provide scriptpubkey and blockheight.
@@ -200,8 +301,8 @@ class MakerBot:
                 logger.error("Failed to connect to any directory server")
                 return
 
-            # Start hidden service listener if configured
-            if self.config.onion_host:
+            # Start hidden service listener if we have an onion address (static or ephemeral)
+            if onion_host:
                 logger.info(
                     f"Starting hidden service listener on "
                     f"{self.config.onion_serving_host}:{self.config.onion_serving_port}..."
@@ -212,7 +313,7 @@ class MakerBot:
                     on_connection=self._on_direct_connection,
                 )
                 await self.hidden_service_listener.start()
-                logger.info(f"Hidden service listener started (onion: {self.config.onion_host})")
+                logger.info(f"Hidden service listener started (onion: {onion_host})")
 
             logger.info("Announcing offers...")
             await self._announce_offers()
@@ -252,6 +353,9 @@ class MakerBot:
         # Stop hidden service listener
         if self.hidden_service_listener:
             await self.hidden_service_listener.stop()
+
+        # Clean up Tor control connection (ephemeral hidden service auto-removed)
+        await self._cleanup_tor_hidden_service()
 
         # Close all direct connections
         for conn in self.direct_connections.values():

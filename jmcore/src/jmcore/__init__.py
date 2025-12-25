@@ -40,6 +40,13 @@ from jmcore.protocol import (
     parse_utxo_list,
     peer_supports_neutrino_compat,
 )
+from jmcore.tor_control import (
+    EphemeralHiddenService,
+    TorAuthenticationError,
+    TorControlClient,
+    TorControlError,
+    TorHiddenServiceError,
+)
 
 __all__ = [
     "CryptoSession",
@@ -48,6 +55,7 @@ __all__ = [
     "DIRECTORY_NODES_TESTNET",
     "DirectoryClient",
     "DirectoryClientError",
+    "EphemeralHiddenService",
     "FEATURE_NEUTRINO_COMPAT",
     "FEATURE_PUSH_ENCRYPTED",
     "FeatureSet",
@@ -61,6 +69,10 @@ __all__ = [
     "PoDLEError",
     "ProtocolMessage",
     "RequiredFeatures",
+    "TorAuthenticationError",
+    "TorControlClient",
+    "TorControlError",
+    "TorHiddenServiceError",
     "UTXOMetadata",
     "deserialize_revelation",
     "format_utxo_list",

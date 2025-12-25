@@ -193,7 +193,72 @@ jm-taker coinjoin \
 
 ## Docker Deployment
 
-### With Neutrino
+### With Neutrino and Tor
+
+Recommended setup for privacy.
+
+**1. Create torrc configuration:**
+
+```bash
+mkdir -p tor/conf
+cat > tor/conf/torrc << 'EOF'
+SocksPort 0.0.0.0:9050
+DataDirectory /var/lib/tor
+Log notice stdout
+EOF
+```
+
+**2. Create docker-compose.yml:**
+
+```yaml
+services:
+  tor:
+    image: ghcr.io/m0wer/docker-tor:latest
+    volumes:
+      - ./tor/conf/torrc:/etc/tor/torrc:ro
+
+  neutrino:
+    image: ghcr.io/m0wer/neutrino-api
+    environment:
+      NETWORK: mainnet
+    volumes:
+      - neutrino-data:/data/neutrino
+
+  taker:
+    build:
+      context: ..
+      dockerfile: taker/Dockerfile
+    environment:
+      MNEMONIC_FILE: /wallets/taker.mnemonic
+      BACKEND_TYPE: neutrino
+      NEUTRINO_URL: http://neutrino:8334
+      TOR_SOCKS_HOST: tor
+      TOR_SOCKS_PORT: 9050
+    volumes:
+      - ~/.jm/wallets:/wallets:ro
+    command: >
+      jm-taker coinjoin
+        --amount 1000000
+        --backend neutrino
+    depends_on:
+      - neutrino
+      - tor
+
+volumes:
+  neutrino-data:
+```
+
+**3. Start services:**
+
+```bash
+docker-compose up
+```
+
+Note: Takers only need SOCKS proxy (port 9050) - they don't serve a hidden service, so no control port needed.
+
+### With Neutrino (Simple)
+
+If you already have Tor running elsewhere:
 
 ```yaml
 services:
@@ -229,10 +294,33 @@ volumes:
   neutrino-data:
 ```
 
-### With Bitcoin Core
+### With Bitcoin Core and Tor
+
+**1. Create torrc configuration (if not already created):**
+
+```bash
+mkdir -p tor/conf
+cat > tor/conf/torrc << 'EOF'
+SocksPort 0.0.0.0:9050
+DataDirectory /var/lib/tor
+Log notice stdout
+EOF
+```
+
+**2. Create docker-compose.yml:**
 
 ```yaml
 services:
+  tor:
+    image: ghcr.io/m0wer/docker-tor:latest
+    volumes:
+      - ./tor/conf/torrc:/etc/tor/torrc:ro
+
+  bitcoind:
+    image: kylemanna/bitcoind
+    volumes:
+      - bitcoin-data:/bitcoin/.bitcoin
+
   taker:
     build:
       context: ..
@@ -243,6 +331,8 @@ services:
       BITCOIN_RPC_URL: http://bitcoind:8332
       BITCOIN_RPC_USER: rpcuser
       BITCOIN_RPC_PASSWORD: rpcpassword
+      TOR_SOCKS_HOST: tor
+      TOR_SOCKS_PORT: 9050
     volumes:
       - ~/.jm/wallets:/wallets:ro
     command: >
@@ -253,19 +343,11 @@ services:
       - bitcoind
       - tor
 
-  bitcoind:
-    image: kylemanna/bitcoind
-    volumes:
-      - bitcoin-data:/bitcoin/.bitcoin
-
-  tor:
-    image: dperson/torproxy
-
 volumes:
   bitcoin-data:
 ```
 
-Run with:
+**3. Start services:**
 
 ```bash
 docker-compose up

@@ -168,7 +168,84 @@ jm-maker start \
 
 ## Docker Deployment
 
-### With Neutrino
+### With Neutrino and Tor (Ephemeral Hidden Service)
+
+Recommended setup with ephemeral hidden service for privacy.
+
+**1. Create torrc configuration:**
+
+```bash
+mkdir -p tor/conf
+cat > tor/conf/torrc << 'EOF'
+SocksPort 0.0.0.0:9050
+ControlPort 0.0.0.0:9051
+CookieAuthentication 1
+CookieAuthFile /var/lib/tor/control_auth_cookie
+DataDirectory /var/lib/tor
+Log notice stdout
+EOF
+```
+
+**2. Create docker-compose.yml:**
+
+```yaml
+services:
+  tor:
+    image: ghcr.io/m0wer/docker-tor:latest
+    volumes:
+      - ./tor/conf/torrc:/etc/tor/torrc:ro
+      - tor-data:/var/lib/tor
+
+  neutrino:
+    image: ghcr.io/m0wer/neutrino-api
+    environment:
+      NETWORK: mainnet
+    volumes:
+      - neutrino-data:/data/neutrino
+
+  maker:
+    build:
+      context: ..
+      dockerfile: maker/Dockerfile
+    environment:
+      MNEMONIC_FILE: /wallets/maker.mnemonic
+      BACKEND_TYPE: neutrino
+      NEUTRINO_URL: http://neutrino:8334
+      TOR_SOCKS_HOST: tor
+      TOR_SOCKS_PORT: 9050
+      TOR_CONTROL_ENABLED: "true"
+      TOR_CONTROL_HOST: tor
+      TOR_CONTROL_PORT: 9051
+      TOR_COOKIE_PATH: /var/lib/tor/control_auth_cookie
+      ONION_SERVING_HOST: 0.0.0.0
+      ONION_SERVING_PORT: 27183
+    volumes:
+      - ~/.jm/wallets:/wallets:ro
+      - tor-data:/var/lib/tor:ro  # Read-only access to cookie
+    depends_on:
+      - neutrino
+      - tor
+
+volumes:
+  neutrino-data:
+  tor-data:
+```
+
+**3. Start services:**
+
+```bash
+docker-compose up -d
+```
+
+The maker will:
+- Connect to directory servers through Tor SOCKS proxy (port 9050)
+- Generate a fresh `.onion` address via Tor control port (port 9051)
+- Advertise this ephemeral address to takers
+- Clean up the hidden service when stopped
+
+### With Neutrino (Simple)
+
+If you already have Tor running elsewhere:
 
 ```yaml
 services:
@@ -200,10 +277,37 @@ volumes:
   neutrino-data:
 ```
 
-### With Bitcoin Core
+### With Bitcoin Core and Tor
+
+**1. Create torrc configuration (if not already created):**
+
+```bash
+mkdir -p tor/conf
+cat > tor/conf/torrc << 'EOF'
+SocksPort 0.0.0.0:9050
+ControlPort 0.0.0.0:9051
+CookieAuthentication 1
+CookieAuthFile /var/lib/tor/control_auth_cookie
+DataDirectory /var/lib/tor
+Log notice stdout
+EOF
+```
+
+**2. Create docker-compose.yml:**
 
 ```yaml
 services:
+  tor:
+    image: ghcr.io/m0wer/docker-tor:latest
+    volumes:
+      - ./tor/conf/torrc:/etc/tor/torrc:ro
+      - tor-data:/var/lib/tor
+
+  bitcoind:
+    image: kylemanna/bitcoind
+    volumes:
+      - bitcoin-data:/bitcoin/.bitcoin
+
   maker:
     build:
       context: ..
@@ -214,25 +318,27 @@ services:
       BITCOIN_RPC_URL: http://bitcoind:8332
       BITCOIN_RPC_USER: rpcuser
       BITCOIN_RPC_PASSWORD: rpcpassword
+      TOR_SOCKS_HOST: tor
+      TOR_SOCKS_PORT: 9050
+      TOR_CONTROL_ENABLED: "true"
+      TOR_CONTROL_HOST: tor
+      TOR_CONTROL_PORT: 9051
+      TOR_COOKIE_PATH: /var/lib/tor/control_auth_cookie
+      ONION_SERVING_HOST: 0.0.0.0
+      ONION_SERVING_PORT: 27183
     volumes:
       - ~/.jm/wallets:/wallets:ro
+      - tor-data:/var/lib/tor:ro
     depends_on:
       - bitcoind
       - tor
 
-  bitcoind:
-    image: kylemanna/bitcoind
-    volumes:
-      - bitcoin-data:/bitcoin/.bitcoin
-
-  tor:
-    image: dperson/torproxy
-
 volumes:
   bitcoin-data:
+  tor-data:
 ```
 
-Run with:
+**3. Start services:**
 
 ```bash
 docker-compose up -d
@@ -258,6 +364,12 @@ docker-compose up -d
 | `TX_FEE_CONTRIBUTION` | `1000` | Transaction fee contribution in sats |
 | `TOR_SOCKS_HOST` | `127.0.0.1` | Tor SOCKS proxy host |
 | `TOR_SOCKS_PORT` | `9050` | Tor SOCKS proxy port |
+| `TOR_CONTROL_ENABLED` | `false` | Enable ephemeral hidden service via Tor control port |
+| `TOR_CONTROL_HOST` | `127.0.0.1` | Tor control port host |
+| `TOR_CONTROL_PORT` | `9051` | Tor control port |
+| `TOR_COOKIE_PATH` | `/var/lib/tor/control_auth_cookie` | Path to Tor control cookie |
+| `ONION_SERVING_HOST` | `127.0.0.1` | Host to bind for incoming onion connections |
+| `ONION_SERVING_PORT` | `27183` | Port for incoming onion connections |
 | `FIDELITY_BOND_LOCKTIMES` | - | Comma-separated Unix timestamps for bond locktimes |
 | `SENSITIVE_LOGGING` | - | Enable sensitive logging (set to `1` or `true`) |
 
