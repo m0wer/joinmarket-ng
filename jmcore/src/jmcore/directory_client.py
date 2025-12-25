@@ -392,7 +392,7 @@ class DirectoryClient:
             raise DirectoryClientError("Not connected")
 
         getpeerlist_msg = {"type": MessageType.GETPEERLIST.value, "line": ""}
-        logger.debug("Sending GETPEERLIST request (with features support)")
+        logger.debug("Sending GETPEERLIST request")
         await self.connection.send(json.dumps(getpeerlist_msg).encode("utf-8"))
 
         start_time = asyncio.get_event_loop().time()
@@ -434,25 +434,6 @@ class DirectoryClient:
         for entry in peerlist_str.split(","):
             # Skip empty entries
             if not entry or not entry.strip():
-                continue
-            # Skip entries without separator - these are metadata (e.g., 'peerlist_features')
-            # from the reference implementation, not actual peer entries
-            if NICK_PEERLOCATOR_SEPARATOR not in entry:
-                logger.debug(f"Skipping metadata entry in peerlist: '{entry}'")
-                continue
-            try:
-                nick, location, disconnected, features = parse_peerlist_entry(entry)
-                logger.debug(
-                    f"Parsed peer: {nick} at {location}, "
-                    f"disconnected={disconnected}, features={features.to_comma_string()}"
-                )
-                if not disconnected:
-                    peers.append((nick, location, features))
-                    # Also update peer_features cache
-                    if features:
-                        self.peer_features[nick] = features.to_dict()
-            except ValueError as e:
-                logger.warning(f"Failed to parse peerlist entry '{entry}': {e}")
                 continue
             # Skip entries without separator - these are metadata (e.g., 'peerlist_features')
             # from the reference implementation, not actual peer entries
