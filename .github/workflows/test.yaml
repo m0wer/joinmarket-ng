@@ -702,3 +702,23 @@ jobs:
             junit/test-results.xml
             coverage.xml
         if: always()
+
+  # ==========================================================================
+  # Docker build - runs only if all tests pass and on push to main/master
+  # ==========================================================================
+
+  build-images:
+    needs:
+      - test-jmcore
+      - test-directory-server
+      - test-orderbook-watcher
+      - test-taker
+      - test-jmwallet
+      - test-maker
+      - test-e2e
+      - test-reference
+      - test-neutrino
+      - test-reference-maker
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    uses: ./.github/workflows/docker.yaml
+    secrets: inherit

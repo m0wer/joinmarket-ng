@@ -1,48 +1,14 @@
 name: docker images
 
 on:
-  push:
-    branches:
-      - main
-      - master
-    paths:
-      - 'jmcore/**'
-      - 'jmwallet/**'
-      - 'directory_server/**'
-      - 'orderbook_watcher/**'
-      - 'maker/**'
-      - 'taker/**'
-      - '.github/workflows/docker.yaml'
-      - '.github/workflows/test.yaml'
-  pull_request:
-    branches:
-      - main
-      - master
-    paths:
-      - 'jmcore/**'
-      - 'jmwallet/**'
-      - 'directory_server/**'
-      - 'orderbook_watcher/**'
-      - 'maker/**'
-      - 'taker/**'
-      - '.github/workflows/docker.yaml'
-      - '.github/workflows/test.yaml'
+  workflow_call:
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
-  test:
-    uses: ./.github/workflows/test.yaml
-
-  pre-commit:
-    uses: ./.github/workflows/pre-commit.yaml
-
   build-and-push-images:
     runs-on: ubuntu-latest
-    needs: [test, pre-commit]
-    # Only push images on push to main/master, not on PRs
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     strategy:
       fail-fast: false
       matrix:
