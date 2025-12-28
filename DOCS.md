@@ -100,9 +100,14 @@ JoinMarket NG uses a dedicated data directory for persistent files that need to 
 - ASCII format: one commitment per line (hex string)
 
 **CoinJoin History** (`coinjoin_history.csv`):
-- Records all completed CoinJoin transactions
+- Records all CoinJoin transactions (both pending and confirmed)
 - Shared between maker and taker instances
-- Tracks fees, roles, peer counts, and transaction details
+- Tracks fees, roles, peer counts, transaction details, and confirmation status
+- **Pending Transaction Tracking**:
+  - New transactions are initially marked as pending (`success=False`, `confirmations=0`)
+  - Background monitor checks pending transactions every 60 seconds
+  - Transactions are marked as successful once they receive their first confirmation
+  - Protects against false-positive reporting when inputs are spent by other makers
 - CSV format for easy analysis with external tools
 - View with: `jm-wallet history --stats` or `jm-wallet history --limit 10`
 
