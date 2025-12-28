@@ -16,7 +16,9 @@ from jmwallet.history import (
     create_maker_history_entry,
     create_taker_history_entry,
     get_history_stats,
+    get_pending_transactions,
     read_history,
+    update_transaction_confirmation,
 )
 
 
@@ -270,3 +272,144 @@ class TestHelperFunctions:
         assert entry.success is False
         assert entry.failure_reason == "Maker timeout"
         assert entry.txid == ""
+
+
+class TestPendingTransactions:
+    """Tests for pending transaction functionality."""
+
+    def test_create_maker_entry_is_pending(self) -> None:
+        """Test that newly created maker entries are marked as pending."""
+        entry = create_maker_history_entry(
+            taker_nick="J5taker",
+            cj_amount=1_000_000,
+            fee_received=250,
+            txfee_contribution=50,
+            cj_address="bc1qtest...",
+            our_utxos=[("abc123", 0)],
+            txid="test_txid_123",
+        )
+
+        # Should be marked as pending initially
+        assert entry.success is False
+        assert entry.failure_reason == "Pending confirmation"
+        assert entry.confirmations == 0
+        assert entry.confirmed_at == ""
+        assert entry.completed_at == ""
+
+    def test_create_taker_entry_is_pending(self) -> None:
+        """Test that newly created taker entries are marked as pending by default."""
+        entry = create_taker_history_entry(
+            maker_nicks=["J5maker1"],
+            cj_amount=1_000_000,
+            total_maker_fees=500,
+            mining_fee=100,
+            destination="bc1qdest...",
+            source_mixdepth=0,
+            selected_utxos=[("utxo1", 0)],
+            txid="test_txid_456",
+        )
+
+        # Should be pending by default
+        assert entry.success is False
+        assert entry.failure_reason == "Pending confirmation"
+        assert entry.confirmations == 0
+        assert entry.confirmed_at == ""
+        assert entry.completed_at == ""
+
+    def test_get_pending_transactions(self, temp_data_dir: Path) -> None:
+        """Test retrieving pending transactions."""
+        # Add a pending entry
+        pending_entry = create_maker_history_entry(
+            taker_nick="J5taker",
+            cj_amount=1_000_000,
+            fee_received=250,
+            txfee_contribution=50,
+            cj_address="bc1qtest...",
+            our_utxos=[("abc123", 0)],
+            txid="pending_tx",
+        )
+        append_history_entry(pending_entry, temp_data_dir)
+
+        # Add a confirmed entry
+        confirmed_entry = TransactionHistoryEntry(
+            timestamp="2024-01-02T00:00:00",
+            role="maker",
+            txid="confirmed_tx",
+            cj_amount=2_000_000,
+            success=True,
+            confirmations=6,
+        )
+        append_history_entry(confirmed_entry, temp_data_dir)
+
+        # Get pending transactions
+        pending = get_pending_transactions(temp_data_dir)
+
+        assert len(pending) == 1
+        assert pending[0].txid == "pending_tx"
+        assert pending[0].success is False
+
+    def test_update_transaction_confirmation(self, temp_data_dir: Path) -> None:
+        """Test updating transaction confirmation status."""
+        # Create and save a pending entry
+        entry = create_maker_history_entry(
+            taker_nick="J5taker",
+            cj_amount=1_000_000,
+            fee_received=250,
+            txfee_contribution=50,
+            cj_address="bc1qtest...",
+            our_utxos=[("abc123", 0)],
+            txid="test_tx_update",
+        )
+        append_history_entry(entry, temp_data_dir)
+
+        # Verify it's pending
+        pending = get_pending_transactions(temp_data_dir)
+        assert len(pending) == 1
+
+        # Update with 1 confirmation
+        result = update_transaction_confirmation("test_tx_update", 1, temp_data_dir)
+        assert result is True
+
+        # Verify it's no longer pending
+        pending = get_pending_transactions(temp_data_dir)
+        assert len(pending) == 0
+
+        # Read the entry and verify it's marked as successful
+        entries = read_history(temp_data_dir)
+        assert len(entries) == 1
+        assert entries[0].success is True
+        assert entries[0].confirmations == 1
+        assert entries[0].confirmed_at != ""
+        assert entries[0].completed_at != ""
+        assert entries[0].failure_reason == ""
+
+    def test_update_transaction_confirmation_incremental(self, temp_data_dir: Path) -> None:
+        """Test updating confirmations incrementally."""
+        # Create and save a pending entry
+        entry = create_maker_history_entry(
+            taker_nick="J5taker",
+            cj_amount=1_000_000,
+            fee_received=250,
+            txfee_contribution=50,
+            cj_address="bc1qtest...",
+            our_utxos=[("abc123", 0)],
+            txid="test_tx_incremental",
+        )
+        append_history_entry(entry, temp_data_dir)
+
+        # Update with 1 confirmation
+        update_transaction_confirmation("test_tx_incremental", 1, temp_data_dir)
+
+        # Update with 6 confirmations
+        update_transaction_confirmation("test_tx_incremental", 6, temp_data_dir)
+
+        # Verify confirmations were updated
+        entries = read_history(temp_data_dir)
+        assert len(entries) == 1
+        assert entries[0].confirmations == 6
+        assert entries[0].success is True
+
+    def test_update_nonexistent_transaction(self, temp_data_dir: Path) -> None:
+        """Test updating a transaction that doesn't exist."""
+        result = update_transaction_confirmation("nonexistent_tx", 1, temp_data_dir)
+        assert result is False

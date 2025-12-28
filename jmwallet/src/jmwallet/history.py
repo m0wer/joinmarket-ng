@@ -33,6 +33,10 @@ class TransactionHistoryEntry:
     success: bool = True
     failure_reason: str = ""
 
+    # Confirmation tracking
+    confirmations: int = 0  # Number of confirmations (0 = unconfirmed/pending)
+    confirmed_at: str = ""  # ISO format - when first confirmation was seen
+
     # Core transaction data
     txid: str = ""
     cj_amount: int = 0  # satoshis
@@ -150,6 +154,8 @@ def read_history(
                         role=row.get("role", "taker"),  # type: ignore
                         success=row.get("success", "True").lower() == "true",
                         failure_reason=row.get("failure_reason", ""),
+                        confirmations=int(row.get("confirmations", 0) or 0),
+                        confirmed_at=row.get("confirmed_at", ""),
                         txid=row.get("txid", ""),
                         cj_amount=int(row.get("cj_amount", 0) or 0),
                         peer_count=int(row.get("peer_count", 0) or 0),
@@ -240,7 +246,11 @@ def create_maker_history_entry(
     network: str = "mainnet",
 ) -> TransactionHistoryEntry:
     """
-    Create a history entry for a completed maker CoinJoin.
+    Create a history entry for a maker CoinJoin (initially marked as pending).
+
+    The transaction is created with success=False and confirmations=0 to indicate
+    it's pending confirmation. A background task should later update this entry
+    once the transaction is confirmed on-chain.
 
     Args:
         taker_nick: The taker's nick
@@ -253,16 +263,19 @@ def create_maker_history_entry(
         network: Network name
 
     Returns:
-        TransactionHistoryEntry ready to be appended
+        TransactionHistoryEntry ready to be appended (marked as pending)
     """
     now = datetime.now().isoformat()
     net_fee = fee_received - txfee_contribution
 
     return TransactionHistoryEntry(
         timestamp=now,
-        completed_at=now,
+        completed_at="",  # Not completed until confirmed
         role="maker",
-        success=True,
+        success=False,  # Pending confirmation
+        failure_reason="Pending confirmation",
+        confirmations=0,
+        confirmed_at="",
         txid=txid or "",
         cj_amount=cj_amount,
         peer_count=1,  # Maker only sees the taker
@@ -277,6 +290,79 @@ def create_maker_history_entry(
     )
 
 
+def get_pending_transactions(data_dir: Path | None = None) -> list[TransactionHistoryEntry]:
+    """
+    Get all pending (unconfirmed) transactions from history.
+
+    Returns:
+        List of entries with success=False and confirmations=0
+    """
+    entries = read_history(data_dir)
+    return [e for e in entries if not e.success and e.confirmations == 0 and e.txid]
+
+
+def update_transaction_confirmation(
+    txid: str,
+    confirmations: int,
+    data_dir: Path | None = None,
+) -> bool:
+    """
+    Update a transaction's confirmation status in the history file.
+
+    This function rewrites the entire CSV file with the updated entry.
+    If confirmations > 0, marks the transaction as successful.
+
+    Args:
+        txid: Transaction ID to update
+        confirmations: Current number of confirmations
+        data_dir: Optional data directory
+
+    Returns:
+        True if transaction was found and updated, False otherwise
+    """
+    history_path = _get_history_path(data_dir)
+    if not history_path.exists():
+        return False
+
+    entries = read_history(data_dir)
+    updated = False
+
+    for entry in entries:
+        if entry.txid == txid:
+            entry.confirmations = confirmations
+            if confirmations > 0 and not entry.success:
+                # Mark as successful on first confirmation
+                entry.success = True
+                entry.failure_reason = ""
+                entry.confirmed_at = datetime.now().isoformat()
+                entry.completed_at = entry.confirmed_at
+                logger.info(
+                    f"Transaction {txid[:16]}... confirmed with {confirmations} confirmations"
+                )
+            elif confirmations > 0:
+                # Already marked as successful, just update confirmation count
+                logger.debug(f"Updated confirmations for {txid[:16]}...: {confirmations}")
+            updated = True
+            break
+
+    if not updated:
+        return False
+
+    # Rewrite the entire history file
+    try:
+        fieldnames = _get_fieldnames()
+        with open(history_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for entry in entries:
+                row = {f.name: getattr(entry, f.name) for f in fields(entry)}
+                writer.writerow(row)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to update history: {e}")
+        return False
+
+
 def create_taker_history_entry(
     maker_nicks: list[str],
     cj_amount: int,
@@ -288,11 +374,15 @@ def create_taker_history_entry(
     txid: str,
     broadcast_method: str = "self",
     network: str = "mainnet",
-    success: bool = True,
-    failure_reason: str = "",
+    success: bool = False,  # Default to pending
+    failure_reason: str = "Pending confirmation",
 ) -> TransactionHistoryEntry:
     """
-    Create a history entry for a completed taker CoinJoin.
+    Create a history entry for a taker CoinJoin (initially marked as pending).
+
+    The transaction is created with success=False and confirmations=0 by default
+    to indicate it's pending confirmation. A background task should later update
+    this entry once the transaction is confirmed on-chain.
 
     Args:
         maker_nicks: List of maker nicks
@@ -305,8 +395,8 @@ def create_taker_history_entry(
         txid: Transaction ID
         broadcast_method: How the tx was broadcast
         network: Network name
-        success: Whether the CoinJoin succeeded
-        failure_reason: Reason for failure if any
+        success: Whether the CoinJoin succeeded (default False for pending)
+        failure_reason: Reason for failure if any (default "Pending confirmation")
 
     Returns:
         TransactionHistoryEntry ready to be appended
@@ -316,10 +406,12 @@ def create_taker_history_entry(
 
     return TransactionHistoryEntry(
         timestamp=now,
-        completed_at=now,
+        completed_at="" if not success else now,
         role="taker",
         success=success,
         failure_reason=failure_reason,
+        confirmations=0,
+        confirmed_at="",
         txid=txid,
         cj_amount=cj_amount,
         peer_count=len(maker_nicks),

@@ -25,7 +25,12 @@ from jmcore.tor_control import (
     TorControlError,
 )
 from jmwallet.backends.base import BlockchainBackend
-from jmwallet.history import append_history_entry, create_maker_history_entry
+from jmwallet.history import (
+    append_history_entry,
+    create_maker_history_entry,
+    get_pending_transactions,
+    update_transaction_confirmation,
+)
 from jmwallet.wallet.service import WalletService
 from loguru import logger
 
@@ -336,6 +341,10 @@ class MakerBot:
                 task = asyncio.create_task(self.hidden_service_listener.serve_forever())
                 self.listen_tasks.append(task)
 
+            # Start background task to monitor pending transactions
+            monitor_task = asyncio.create_task(self._monitor_pending_transactions())
+            self.listen_tasks.append(monitor_task)
+
             # Wait for all listening tasks to complete
             await asyncio.gather(*self.listen_tasks, return_exceptions=True)
 
@@ -413,6 +422,78 @@ class MakerBot:
             logger.info(f"Wallet re-synced. New balance: {total_balance:,} sats")
         except Exception as e:
             logger.error(f"Failed to re-sync wallet after CoinJoin: {e}")
+
+    async def _monitor_pending_transactions(self) -> None:
+        """
+        Background task to monitor pending transactions and update their status.
+
+        Checks pending transactions every 60 seconds and updates their confirmation
+        status in the history file. Transactions are marked as successful once they
+        receive their first confirmation.
+        """
+        logger.info("Starting pending transaction monitor...")
+        check_interval = 60.0  # Check every 60 seconds
+
+        while self.running:
+            try:
+                await asyncio.sleep(check_interval)
+
+                pending = get_pending_transactions(data_dir=self.config.data_dir)
+                if not pending:
+                    continue
+
+                logger.debug(f"Checking {len(pending)} pending transaction(s)...")
+
+                for entry in pending:
+                    if not entry.txid:
+                        continue
+
+                    try:
+                        # Check if transaction exists and get confirmations
+                        tx_info = await self.backend.get_transaction(entry.txid)
+
+                        if tx_info is None:
+                            # Transaction not found - might have been rejected/replaced
+                            # Check how long it's been pending
+                            from datetime import datetime
+
+                            timestamp = datetime.fromisoformat(entry.timestamp)
+                            age_hours = (datetime.now() - timestamp).total_seconds() / 3600
+
+                            if age_hours > 24:
+                                # Mark as failed if pending for more than 24 hours
+                                logger.warning(
+                                    f"Transaction {entry.txid[:16]}... not found after "
+                                    f"{age_hours:.1f} hours, may have been rejected"
+                                )
+                                # Could optionally mark as failed here
+                            continue
+
+                        confirmations = tx_info.confirmations
+
+                        if confirmations > 0:
+                            # Update history with confirmation
+                            update_transaction_confirmation(
+                                txid=entry.txid,
+                                confirmations=confirmations,
+                                data_dir=self.config.data_dir,
+                            )
+
+                            logger.info(
+                                f"CoinJoin {entry.txid[:16]}... confirmed! "
+                                f"({confirmations} confirmation{'s' if confirmations != 1 else ''})"
+                            )
+
+                    except Exception as e:
+                        logger.debug(f"Error checking transaction {entry.txid[:16]}...: {e}")
+
+            except asyncio.CancelledError:
+                logger.info("Pending transaction monitor cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in pending transaction monitor: {e}")
+
+        logger.info("Pending transaction monitor stopped")
 
     async def _announce_offers(self) -> None:
         """Announce offers to all connected directory servers"""
