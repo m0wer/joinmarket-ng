@@ -4,12 +4,35 @@ Maker bot configuration.
 
 from __future__ import annotations
 
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from jmcore.constants import DUST_THRESHOLD
 from jmcore.models import NetworkType, OfferType
 from pydantic import BaseModel, Field, model_validator
+
+
+class MergeAlgorithm(str, Enum):
+    """
+    UTXO selection algorithm for makers.
+
+    Determines how many UTXOs to use when participating in a CoinJoin.
+    Since takers pay all tx fees, makers can add extra inputs "for free"
+    which helps consolidate UTXOs and improves taker privacy.
+
+    - default: Select minimum UTXOs needed (frugal)
+    - gradual: Select 1 additional UTXO beyond minimum
+    - greedy: Select ALL UTXOs from the mixdepth (max consolidation)
+    - random: Select between 0-2 additional UTXOs randomly
+
+    Reference: joinmarket-clientserver policy.py merge_algorithm
+    """
+
+    DEFAULT = "default"
+    GRADUAL = "gradual"
+    GREEDY = "greedy"
+    RANDOM = "random"
 
 
 class TorControlConfig(BaseModel):
@@ -106,6 +129,15 @@ class MakerConfig(BaseModel):
         default=DUST_THRESHOLD,
         ge=0,
         description="Dust threshold in satoshis for change outputs (default: 27300)",
+    )
+
+    # UTXO merge algorithm - how many UTXOs to use
+    merge_algorithm: MergeAlgorithm = Field(
+        default=MergeAlgorithm.DEFAULT,
+        description=(
+            "UTXO selection strategy: default (minimum), gradual (+1), "
+            "greedy (all), random (0-2 extra)"
+        ),
     )
 
     model_config = {"frozen": False}

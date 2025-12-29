@@ -8,7 +8,7 @@ import pytest
 from jmcore.models import OfferType
 from pydantic import ValidationError
 
-from maker.config import MakerConfig, TorControlConfig
+from maker.config import MakerConfig, MergeAlgorithm, TorControlConfig
 
 # Test mnemonic (BIP39 test vector)
 TEST_MNEMONIC = (
@@ -140,3 +140,60 @@ class TestMakerConfigTorControl:
         assert config.tor_control.enabled is True
         assert config.tor_control.host == "tor"
         assert config.tor_control.cookie_path == Path("/var/lib/tor/control_auth_cookie")
+
+
+class TestMergeAlgorithm:
+    """Tests for MergeAlgorithm configuration."""
+
+    def test_default_merge_algorithm(self) -> None:
+        """Test that default merge algorithm is 'default'."""
+        config = MakerConfig(mnemonic=TEST_MNEMONIC)
+        assert config.merge_algorithm == MergeAlgorithm.DEFAULT
+
+    def test_set_merge_algorithm_gradual(self) -> None:
+        """Test setting merge algorithm to gradual."""
+        config = MakerConfig(
+            mnemonic=TEST_MNEMONIC,
+            merge_algorithm=MergeAlgorithm.GRADUAL,
+        )
+        assert config.merge_algorithm == MergeAlgorithm.GRADUAL
+
+    def test_set_merge_algorithm_greedy(self) -> None:
+        """Test setting merge algorithm to greedy."""
+        config = MakerConfig(
+            mnemonic=TEST_MNEMONIC,
+            merge_algorithm=MergeAlgorithm.GREEDY,
+        )
+        assert config.merge_algorithm == MergeAlgorithm.GREEDY
+
+    def test_set_merge_algorithm_random(self) -> None:
+        """Test setting merge algorithm to random."""
+        config = MakerConfig(
+            mnemonic=TEST_MNEMONIC,
+            merge_algorithm=MergeAlgorithm.RANDOM,
+        )
+        assert config.merge_algorithm == MergeAlgorithm.RANDOM
+
+    def test_merge_algorithm_from_string(self) -> None:
+        """Test creating config with string value (JSON/YAML parsing)."""
+        config = MakerConfig(
+            mnemonic=TEST_MNEMONIC,
+            merge_algorithm="greedy",  # type: ignore[arg-type]
+        )
+        assert config.merge_algorithm == MergeAlgorithm.GREEDY
+
+    def test_merge_algorithm_value(self) -> None:
+        """Test accessing the string value of the enum."""
+        config = MakerConfig(
+            mnemonic=TEST_MNEMONIC,
+            merge_algorithm=MergeAlgorithm.GRADUAL,
+        )
+        assert config.merge_algorithm.value == "gradual"
+
+    def test_invalid_merge_algorithm(self) -> None:
+        """Test that invalid merge algorithm raises error."""
+        with pytest.raises(ValidationError):
+            MakerConfig(
+                mnemonic=TEST_MNEMONIC,
+                merge_algorithm="invalid_algo",  # type: ignore[arg-type]
+            )

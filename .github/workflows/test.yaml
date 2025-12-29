@@ -310,8 +310,8 @@ jobs:
             --cov --cov-report=term-missing --cov-report=xml \
             -v -s --timeout=300 --fail-on-skip
 
-      - name: Show logs on failure
-        if: failure()
+      - name: Show logs
+        if: always()
         run: |
           echo "=== Docker compose status ==="
           docker compose --profile e2e ps
@@ -437,8 +437,8 @@ jobs:
             --cov --cov-report=term-missing --cov-report=xml \
             -v -s --timeout=300 --fail-on-skip
 
-      - name: Show logs on failure
-        if: failure()
+      - name: Show logs
+        if: always()
         run: |
           echo "=== Docker compose status ==="
           docker compose --profile reference ps
@@ -549,8 +549,8 @@ jobs:
             --cov --cov-report=term-missing --cov-report=xml \
             -v -s --timeout=180 --reruns=3 --reruns-delay=10 --fail-on-skip
 
-      - name: Show logs on failure
-        if: failure()
+      - name: Show logs
+        if: always()
         run: |
           echo "=== Docker compose status ==="
           docker compose --profile neutrino ps
@@ -670,8 +670,8 @@ jobs:
             --cov --cov-report=term-missing --cov-report=xml \
             -v -s --timeout=300 --fail-on-skip
 
-      - name: Show logs on failure
-        if: failure()
+      - name: Show logs
+        if: always()
         run: |
           echo "=== Docker compose status ==="
           docker compose --profile reference-maker ps

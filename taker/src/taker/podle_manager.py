@@ -61,22 +61,26 @@ class PoDLEManager:
         """
         Get the number of times a UTXO has been used for PoDLE commitments.
 
-        Checks indices 0..(max_retries-1) and returns the highest index + 1
-        where a commitment is found in used_commitments.
+        Checks indices 0..(max_retries-1) in reverse order and returns the highest
+        index + 1 where a commitment is found in used_commitments.
+
+        Note: Only used in tests. Production code uses lazy evaluation in
+        generate_fresh_commitment() to avoid generating all commitments upfront.
 
         Returns:
             0 if UTXO is fresh (no used commitments)
             1-max_retries if UTXO has been used that many times
         """
+        # Early termination: stop at first match (reverse order)
         for i in reversed(range(max_retries)):
             try:
                 podle = generate_podle(private_key, utxo_str, i)
                 commitment_hex = podle.commitment.hex()
                 if commitment_hex in self.used_commitments:
-                    return i + 1
+                    return i + 1  # Found highest used index
             except Exception:
                 continue
-        return 0
+        return 0  # No used commitments found
 
     def generate_fresh_commitment(
         self,
@@ -90,8 +94,9 @@ class PoDLEManager:
         """
         Generate a fresh PoDLE commitment for a CoinJoin.
 
-        Iterates through eligible UTXOs (sorted by retry count, confirmations, value)
-        and indices (0..max_retries-1) to find an unused commitment.
+        Iterates through eligible UTXOs and tries indices 0..max_retries-1 until
+        finding an unused commitment. UTXOs are pre-sorted by confirmations and value,
+        so fresh UTXOs (which succeed at index 0) are naturally preferred.
 
         Args:
             wallet_utxos: Available wallet UTXOs
@@ -112,31 +117,16 @@ class PoDLEManager:
             logger.warning("No eligible UTXOs for PoDLE")
             return None
 
-        # Sort UTXOs: prefer low retry count, then high confirmations, then high value
-        # Pre-compute retry counts to avoid recalculating during sort
-        utxo_retry_data: list[tuple[UTXOInfo, bytes, int]] = []
+        # Try each UTXO in order (already sorted by confirmations, value)
+        # Fresh UTXOs naturally succeed faster (at index 0)
         for utxo in eligible_utxos:
             private_key = private_key_getter(utxo.address)
             if private_key is None:
                 continue
-            utxo_str = f"{utxo.txid}:{utxo.vout}"
-            retry_count = self.get_utxo_retry_count(utxo_str, private_key, max_retries)
-            utxo_retry_data.append((utxo, private_key, retry_count))
-
-        # Sort by: retry_count (ascending), confirmations (descending), value (descending)
-        utxo_retry_data.sort(key=lambda x: (x[2], -x[0].confirmations, -x[0].value))
-
-        for utxo, private_key, retry_count in utxo_retry_data:
-            # Skip UTXOs that have exhausted all retries
-            if retry_count >= max_retries:
-                logger.debug(
-                    f"Skipping {utxo.txid}:{utxo.vout} - exhausted retries "
-                    f"({retry_count}/{max_retries})"
-                )
-                continue
 
             utxo_str = f"{utxo.txid}:{utxo.vout}"
 
+            # Try indices 0..max_retries-1 for this UTXO
             for index in range(max_retries):
                 try:
                     # Generate commitment to check hash
@@ -153,8 +143,7 @@ class PoDLEManager:
 
                     logger.info(
                         f"Generated fresh PoDLE for {utxo_str} using index {index} "
-                        f"(utxo value={utxo.value}, confs={utxo.confirmations}, "
-                        f"retry_count={retry_count}/{max_retries})"
+                        f"(utxo value={utxo.value}, confs={utxo.confirmations})"
                     )
 
                     return ExtendedPoDLECommitment(
@@ -165,6 +154,9 @@ class PoDLEManager:
                 except Exception as e:
                     logger.warning(f"Failed to generate PoDLE for {utxo_str} index {index}: {e}")
                     continue
+
+            # All indices exhausted for this UTXO
+            logger.debug(f"Skipping {utxo.txid}:{utxo.vout} - all {max_retries} indices used")
 
         logger.error("Failed to generate any fresh PoDLE commitment from available UTXOs")
         return None

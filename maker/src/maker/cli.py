@@ -17,7 +17,7 @@ from jmwallet.wallet.service import WalletService
 from loguru import logger
 
 from maker.bot import MakerBot
-from maker.config import MakerConfig
+from maker.config import MakerConfig, MergeAlgorithm
 
 app = typer.Typer(add_completion=False)
 
@@ -211,6 +211,15 @@ def start(
             "If not specified, the largest bond is selected automatically.",
         ),
     ] = None,
+    merge_algorithm: Annotated[
+        str,
+        typer.Option(
+            "--merge-algorithm",
+            "-M",
+            envvar="MERGE_ALGORITHM",
+            help="UTXO selection strategy: default, gradual, greedy, random",
+        ),
+    ] = "default",
 ) -> None:
     """Start the maker bot."""
     # Load mnemonic
@@ -257,6 +266,16 @@ def start(
         directory_servers if directory_servers else get_default_directory_nodes(network)
     )
 
+    # Parse and validate merge algorithm
+    try:
+        parsed_merge_algorithm = MergeAlgorithm(merge_algorithm.lower())
+    except ValueError:
+        logger.error(
+            f"Invalid merge algorithm: {merge_algorithm}. "
+            "Must be one of: default, gradual, greedy, random"
+        )
+        raise typer.Exit(1)
+
     backend_config: dict[str, str] = {}
     if backend_type == "full_node":
         backend_config = {
@@ -286,6 +305,7 @@ def start(
         cj_fee_absolute=actual_cj_fee_absolute,
         tx_fee_contribution=tx_fee_contribution,
         fidelity_bond_locktimes=list(fidelity_bond_locktimes),
+        merge_algorithm=parsed_merge_algorithm,
     )
 
     wallet = create_wallet_service(config)

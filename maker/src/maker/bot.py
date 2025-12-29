@@ -716,6 +716,7 @@ class MakerBot:
                 wallet=self.wallet,
                 backend=self.backend,
                 session_timeout_sec=self.config.session_timeout_sec,
+                merge_algorithm=self.config.merge_algorithm.value,
             )
 
             # Pass the taker's NaCl pubkey for setting up encryption

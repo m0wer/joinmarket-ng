@@ -429,6 +429,135 @@ jmwallet: Uses scantxoutset RPC directly (no wallet needed!)
 → Beginner-friendly AND privacy-preserving
 ```
 
+### UTXO Selection Strategies
+
+JoinMarket NG implements sophisticated UTXO selection algorithms for both takers and makers, balancing privacy, fees, and UTXO consolidation.
+
+#### Taker UTXO Selection
+
+**Normal Mode (Frugal)**
+
+By default, takers select the **minimum number of UTXOs** needed to fund the CoinJoin:
+
+```python
+# Select just enough to cover cj_amount + fees + buffer
+utxos = wallet.select_utxos(mixdepth, required_amount)
+```
+
+This minimizes transaction fees and reduces fingerprinting (fewer inputs = less blockchain data).
+
+**Sweep Mode (amount=0)**
+
+When `amount=0`, the taker performs a **sweep** - using ALL UTXOs from the mixdepth with **zero change output**:
+
+```bash
+# Sweep all funds from mixdepth 0 to next mixdepth (internal)
+jm-taker coinjoin --amount=0 --mixdepth=0 --destination=INTERNAL
+
+# Sweep to external address
+jm-taker coinjoin --amount=0 --mixdepth=0 --destination=bc1q...
+
+# Sweep with environment variables
+MNEMONIC="your seed phrase..." \
+BITCOIN_RPC_URL=http://localhost:8332 \
+jm-taker coinjoin -a 0 -m 0 -d INTERNAL
+```
+
+Sweep mode provides **maximum privacy**:
+- No change output means no change-to-input linkage
+- Exact CJ amount is calculated: `cj_amount = total_inputs - maker_fees - tx_fee`
+- For relative fees, this is solved iteratively: `cj_amount = (total - tx_fee - abs_fees) / (1 + sum_rel_fees)`
+
+**Fee Handling in Sweep Mode:**
+
+Sweep transactions use **estimated maximum fees** when selecting makers, but actual fees may be lower:
+- Initial selection uses `--max-abs-fee` and `--max-rel-fee` limits
+- Final transaction uses actual maker fees (often lower than limits)
+- **Residual goes to miners** as additional transaction fee (not change output)
+
+This is intentional and beneficial:
+- ✅ No dust change output that would harm privacy
+- ✅ Higher miner fee improves confirmation speed
+- ✅ Simplifies transaction structure (fewer outputs)
+
+Example: If you sweep 1,000,000 sats with max fees of 5,000 sats but actual fees are 3,500 sats, the extra 1,500 sats becomes additional miner fee rather than creating a dust change output.
+
+**Privacy Implications:**
+- ✅ Best: Sweep (no change = no linkage)
+- ✅ Good: Single UTXO input (simple transaction)
+- ⚠️ Moderate: Multiple inputs (reveals UTXO clustering)
+
+#### Maker UTXO Selection (Merge Algorithms)
+
+Makers can configure their UTXO selection strategy via the `merge_algorithm` setting. Since **takers pay all transaction fees**, makers can add extra inputs at no cost to consolidate their UTXOs.
+
+**Available Algorithms:**
+
+| Algorithm | Behavior | Use Case |
+|-----------|----------|----------|
+| `default` | Minimum UTXOs needed | Minimize blockchain footprint |
+| `gradual` | +1 extra UTXO beyond minimum | Slow consolidation |
+| `greedy` | ALL UTXOs from mixdepth | Maximum consolidation |
+| `random` | +0 to +2 extra UTXOs randomly | Obfuscate strategy |
+
+**Configuration Example:**
+
+```bash
+# Start maker with greedy merge algorithm (consolidate all UTXOs)
+jm-maker start \
+  --mnemonic-file=mnemonic.txt \
+  --merge-algorithm=greedy \
+  --rpc-url=http://localhost:8332 \
+  --rpc-user=user --rpc-password=pass
+
+# Use environment variables
+MNEMONIC="your seed phrase..." \
+BITCOIN_RPC_URL=http://localhost:8332 \
+BITCOIN_RPC_USER=user \
+BITCOIN_RPC_PASSWORD=pass \
+MERGE_ALGORITHM=gradual \
+jm-maker start
+
+# Default (minimum UTXOs) - most private
+jm-maker start -f mnemonic.txt
+```
+
+Alternatively, configure programmatically:
+
+```python
+from maker.config import MakerConfig, MergeAlgorithm
+
+config = MakerConfig(
+    mnemonic="your seed phrase...",
+    merge_algorithm=MergeAlgorithm.GREEDY,  # Maximize consolidation
+)
+```
+
+**How It Works:**
+
+```python
+# 1. Select minimum UTXOs needed
+min_utxos = select_minimum(required_amount)
+
+# 2. Apply merge algorithm
+if merge_algorithm == "greedy":
+    utxos = get_all_utxos(mixdepth)  # Add ALL remaining
+elif merge_algorithm == "gradual":
+    utxos = min_utxos + [smallest_remaining]  # Add 1 small UTXO
+elif merge_algorithm == "random":
+    extra = random.randint(0, 2)
+    utxos = min_utxos + random_sample(extra)  # Add 0-2 random
+```
+
+**Privacy Trade-offs:**
+
+- **Greedy**: Fast consolidation but reveals full UTXO set per CoinJoin
+- **Gradual**: Slower consolidation but smaller transactions
+- **Random**: Obfuscates intent but unpredictable consolidation rate
+- **Default**: Minimum inputs but may accumulate dust UTXOs
+
+**Key Insight:** Makers benefit from merge algorithms because takers pay the fees, but this reveals more about the maker's UTXO set. The choice depends on whether UTXO consolidation outweighs privacy concerns.
+
 ---
 
 ## Neutrino Light Client
@@ -1452,25 +1581,42 @@ Since J(0) ≠ J(1) ≠ J(2) ..., even with the same k:
 taker_utxo_retries = 3  # Allows indices 0,1,2
 ```
 
-**Our Implementation:**
+**Our Implementation (Lazy Evaluation):**
 
-We match the reference implementation's PoDLE retry logic:
+We match the reference implementation's PoDLE retry logic using an optimized lazy evaluation approach:
 
-1. **UTXO Deprioritization**: UTXOs are sorted by:
-   - Retry count (ascending) - UTXOs with fewer used indices are preferred
-   - Confirmations (descending) - Older UTXOs are better for privacy
-   - Value (descending) - Larger UTXOs provide stronger commitment
+1. **Pre-sort UTXOs** by confirmations (descending) and value (descending)
+   - Older UTXOs provide better privacy
+   - Larger UTXOs provide stronger commitment
 
-2. **Retry Limit Enforcement**: UTXOs that have exhausted `taker_utxo_retries` indices are skipped
+2. **Try each UTXO** in order, testing indices 0..max_retries-1 sequentially
+   - Generate PoDLE commitment for the current index
+   - Check if commitment has been used
+   - Stop immediately when finding an unused commitment
 
-3. **Commitment Tracking**: Used commitments are persisted to `~/.joinmarket-ng/cmtdata/commitments.json`
+3. **Skip to next UTXO** if all indices exhausted (retry_count >= max_retries)
+
+4. **Commitment Tracking**: Used commitments are persisted to `~/.joinmarket-ng/cmtdata/commitments.json`
+
+**Benefits of Lazy Evaluation:**
+- Dramatically reduces PoDLE generations (1-3 instead of 15+)
+- Fresh UTXOs naturally succeed faster (at index 0)
+- Respects retry limits without expensive pre-computation
 
 **Example Flow:**
 
 ```python
-# UTXO_A: 30 BTC, 10 confs, 0 retries (fresh)
-# UTXO_B: 25 BTC, 20 confs, 2 retries (indices 0,1 used)
-# Selection order: UTXO_A (fewer retries beats higher confirmations)
+# UTXO_A: 30 BTC, 50 confs, fresh (no indices used)
+# UTXO_B: 25 BTC, 20 confs, indices 0,1 used
+
+# Selection with lazy evaluation:
+# 1. Try UTXO_A first (50 confs > 20 confs)
+#    - Try index 0 → unused! Success (1 generation)
+
+# If UTXO_A had all indices 0,1,2 used:
+# 1. Try UTXO_A: index 0 used, index 1 used, index 2 used (3 generations)
+#    - All indices exhausted, skip to next UTXO
+# 2. Try UTXO_B: index 0 used, index 1 used, index 2 → unused! Success (6 total)
 
 # After 3 failed CoinJoins with UTXO_A (indices 0,1,2 used):
 # UTXO_A is now exhausted (retry_count=3 >= max_retries=3)

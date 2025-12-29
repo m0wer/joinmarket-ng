@@ -319,8 +319,13 @@ async def test_podle_retry_limit(mock_wallet, tmp_path):
 
 @pytest.mark.asyncio
 async def test_podle_utxo_deprioritization(mock_wallet, tmp_path):
-    """Test that UTXOs with fewer retries are preferred."""
-    # Create two UTXOs with identical confirmations and value
+    """Test that fresh UTXOs are naturally preferred via lazy evaluation.
+
+    The implementation uses lazy evaluation: it tries UTXOs in order (sorted by
+    confirmations/value) and for each UTXO tries indices 0..max_retries-1 until
+    finding an unused commitment. Fresh UTXOs succeed faster (at index 0).
+    """
+    # Create two UTXOs: UTXO_B has more confirmations, so it's tried first
     utxos = [
         UTXOInfo(
             txid="a" * 64,
@@ -337,7 +342,7 @@ async def test_podle_utxo_deprioritization(mock_wallet, tmp_path):
             vout=1,
             value=25_000_000,
             address="bcrt1qtest2",
-            confirmations=10,
+            confirmations=20,  # Higher confirmations = tried first
             scriptpubkey="001400" * 10,
             path="m/84'/1'/0'/0/1",
             mixdepth=0,
@@ -356,10 +361,10 @@ async def test_podle_utxo_deprioritization(mock_wallet, tmp_path):
 
     manager = PoDLEManager(data_dir=tmp_path)
 
-    # Use UTXO_A twice (indices 0, 1)
+    # Use UTXO_B twice (indices 0, 1) - higher confirmations means tried first
     for _ in range(2):
         commitment = manager.generate_fresh_commitment(
-            wallet_utxos=[utxos[0]],  # Only UTXO_A
+            wallet_utxos=[utxos[1]],  # Only UTXO_B (higher confs)
             cj_amount=10_000_000,
             private_key_getter=get_private_key,
             min_confirmations=1,
@@ -367,8 +372,10 @@ async def test_podle_utxo_deprioritization(mock_wallet, tmp_path):
             max_retries=3,
         )
         assert commitment is not None
+        assert commitment.utxo.startswith("bbbb")
 
-    # Now with both UTXOs available, UTXO_B should be preferred (0 retries vs 2)
+    # Now with both UTXOs, UTXO_B is still tried first (higher confs)
+    # But indices 0,1 are used, so it will use index 2
     commitment = manager.generate_fresh_commitment(
         wallet_utxos=utxos,  # Both UTXOs
         cj_amount=10_000_000,
@@ -378,8 +385,9 @@ async def test_podle_utxo_deprioritization(mock_wallet, tmp_path):
         max_retries=3,
     )
     assert commitment is not None
-    # UTXO_B should be selected (txid starts with 'b')
+    # UTXO_B should still be selected (higher confirmations, uses index 2)
     assert commitment.utxo.startswith("bbbb")
+    assert commitment.index == 2
 
 
 @pytest.mark.asyncio

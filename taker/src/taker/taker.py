@@ -303,13 +303,15 @@ class Taker:
 
         # Current CoinJoin session data
         self.cj_amount = 0
+        self.is_sweep = False  # True when amount=0 (sweep mode, no change output)
         self.maker_sessions: dict[str, MakerSession] = {}
         self.podle_commitment: ExtendedPoDLECommitment | None = None
         self.unsigned_tx: bytes = b""
         self.tx_metadata: dict[str, Any] = {}
         self.final_tx: bytes = b""
         self.txid: str = ""
-        self.selected_utxos: list[UTXOInfo] = []  # Taker's selected UTXOs for signing
+        self.preselected_utxos: list[UTXOInfo] = []  # UTXOs pre-selected for CoinJoin
+        self.selected_utxos: list[UTXOInfo] = []  # Taker's final selected UTXOs for signing
         self.cj_destination: str = ""  # Taker's CJ destination address for broadcast verification
         self.taker_change_address: str = ""  # Taker's change address for broadcast verification
 
@@ -390,19 +392,11 @@ class Taker:
                 self.state = TakerState.FAILED
                 return None
 
+            # Track if this is a sweep (no change) transaction
+            self.is_sweep = amount == 0
+
             # Select UTXOs from wallet
             logger.info(f"Selecting UTXOs from mixdepth {mixdepth}...")
-            balance = await self.wallet.get_balance(mixdepth)
-
-            if amount == 0:
-                # Sweep - use all available
-                self.cj_amount = balance
-            else:
-                self.cj_amount = amount
-
-            # Select makers
-            self.state = TakerState.SELECTING_MAKERS
-            logger.info(f"Selecting {n_makers} makers for {self.cj_amount:,} sats...")
 
             # NOTE: Neutrino takers require makers that support extended UTXO metadata
             # (scriptPubKey + blockheight). This is negotiated during the CoinJoin handshake
@@ -412,15 +406,90 @@ class Taker:
             if self.backend.requires_neutrino_metadata():
                 logger.info("Neutrino backend: will negotiate neutrino_compat during handshake")
 
-            selected_offers, total_fee = self.orderbook_manager.select_makers(
-                cj_amount=self.cj_amount,
-                n=n_makers,
-            )
+            self.state = TakerState.SELECTING_MAKERS
 
-            if len(selected_offers) < self.config.minimum_makers:
-                logger.error(f"Not enough makers selected: {len(selected_offers)}")
-                self.state = TakerState.FAILED
-                return None
+            if self.is_sweep:
+                # SWEEP MODE: Select ALL UTXOs and calculate exact cj_amount for zero change
+                logger.info("Sweep mode: selecting all UTXOs from mixdepth")
+
+                # Get ALL UTXOs from the mixdepth
+                self.preselected_utxos = self.wallet.get_all_utxos(
+                    mixdepth, self.config.taker_utxo_age
+                )
+
+                if not self.preselected_utxos:
+                    logger.error(f"No eligible UTXOs in mixdepth {mixdepth}")
+                    self.state = TakerState.FAILED
+                    return None
+
+                total_input_value = sum(u.value for u in self.preselected_utxos)
+                logger.info(
+                    f"Sweep: {len(self.preselected_utxos)} UTXOs, "
+                    f"total value: {total_input_value:,} sats"
+                )
+
+                # Estimate tx fee for sweep order calculation
+                # Conservative estimate: assume 2 maker inputs per maker
+                estimated_inputs = len(self.preselected_utxos) + n_makers * 2
+                # CJ outputs + maker changes (no taker change in sweep!)
+                estimated_outputs = 1 + n_makers + n_makers
+                estimated_tx_fee = self._estimate_tx_fee(estimated_inputs, estimated_outputs)
+
+                # Use sweep order selection - this calculates exact cj_amount for zero change
+                selected_offers, self.cj_amount, total_fee = (
+                    self.orderbook_manager.select_makers_for_sweep(
+                        total_input_value=total_input_value,
+                        my_txfee=estimated_tx_fee,
+                        n=n_makers,
+                    )
+                )
+
+                if len(selected_offers) < self.config.minimum_makers:
+                    logger.error(f"Not enough makers for sweep: {len(selected_offers)}")
+                    self.state = TakerState.FAILED
+                    return None
+
+                logger.info(f"Sweep: cj_amount={self.cj_amount:,} sats calculated for zero change")
+
+            else:
+                # NORMAL MODE: Select minimum UTXOs needed
+                self.cj_amount = amount
+                logger.info(f"Selecting {n_makers} makers for {self.cj_amount:,} sats...")
+
+                selected_offers, total_fee = self.orderbook_manager.select_makers(
+                    cj_amount=self.cj_amount,
+                    n=n_makers,
+                )
+
+                if len(selected_offers) < self.config.minimum_makers:
+                    logger.error(f"Not enough makers selected: {len(selected_offers)}")
+                    self.state = TakerState.FAILED
+                    return None
+
+                # Pre-select UTXOs for CoinJoin, then generate PoDLE from one of them
+                # This ensures the PoDLE UTXO is one we'll actually use in the transaction
+                logger.info("Selecting UTXOs and generating PoDLE commitment...")
+
+                # Estimate required amount (conservative estimate for UTXO pre-selection)
+                # We'll refine this in _phase_build_tx once we have exact maker UTXOs
+                estimated_inputs = 2 + len(selected_offers) * 2  # Rough estimate
+                estimated_outputs = 2 + len(selected_offers) * 2
+                estimated_tx_fee = self._estimate_tx_fee(estimated_inputs, estimated_outputs)
+                estimated_required = self.cj_amount + total_fee + estimated_tx_fee
+
+                # Pre-select UTXOs for the CoinJoin
+                try:
+                    self.preselected_utxos = self.wallet.select_utxos(
+                        mixdepth, estimated_required, self.config.taker_utxo_age
+                    )
+                    logger.info(
+                        f"Pre-selected {len(self.preselected_utxos)} UTXOs for CoinJoin "
+                        f"(total: {sum(u.value for u in self.preselected_utxos):,} sats)"
+                    )
+                except ValueError as e:
+                    logger.error(f"Insufficient funds for CoinJoin: {e}")
+                    self.state = TakerState.FAILED
+                    return None
 
             # Initialize maker sessions - neutrino_compat will be detected during handshake
             # when we receive the !pubkey response with features field
@@ -433,18 +502,16 @@ class Taker:
                 f"Selected {len(self.maker_sessions)} makers, total fee: {total_fee:,} sats"
             )
 
-            # Generate PoDLE commitment
-            logger.info("Generating PoDLE commitment...")
-            wallet_utxos = await self.wallet.get_utxos(mixdepth)
-
             def get_private_key(addr: str) -> bytes | None:
                 key = self.wallet.get_key_for_address(addr)
                 if key is None:
                     return None
                 return key.get_private_key_bytes()
 
+            # Generate PoDLE from pre-selected UTXOs only
+            # This ensures the commitment is from a UTXO that will be in the transaction
             self.podle_commitment = self.podle_manager.generate_fresh_commitment(
-                wallet_utxos=wallet_utxos,
+                wallet_utxos=self.preselected_utxos,  # Only from pre-selected UTXOs!
                 cj_amount=self.cj_amount,
                 private_key_getter=get_private_key,
                 min_confirmations=self.config.taker_utxo_age,
@@ -898,36 +965,116 @@ class Taker:
             # Store destination for broadcast verification
             self.cj_destination = destination
 
-            # Get taker's UTXOs
-            taker_utxos = await self.wallet.get_utxos(mixdepth)
-
-            # Calculate total input needed
+            # Calculate total input needed (now with exact maker UTXOs)
             total_maker_fee = sum(
                 calculate_cj_fee(s.offer, self.cj_amount) for s in self.maker_sessions.values()
             )
 
-            # Estimate tx fee
-            num_inputs = len(taker_utxos) + sum(len(s.utxos) for s in self.maker_sessions.values())
-            num_outputs = 1 + len(self.maker_sessions) + 1 + len(self.maker_sessions)  # CJ + change
+            # Estimate tx fee with actual input counts
+            num_taker_inputs = len(self.preselected_utxos)
+            num_maker_inputs = sum(len(s.utxos) for s in self.maker_sessions.values())
+            num_inputs = num_taker_inputs + num_maker_inputs
+
+            # Output count depends on sweep mode:
+            # - Normal: CJ outputs (1 + n_makers) + change outputs (1 + n_makers)
+            # - Sweep: CJ outputs (1 + n_makers) + maker changes only (n_makers)
+            if self.is_sweep:
+                # No taker change output in sweep mode
+                num_outputs = 1 + len(self.maker_sessions) + len(self.maker_sessions)
+            else:
+                # Normal mode: include taker change
+                num_outputs = 1 + len(self.maker_sessions) + 1 + len(self.maker_sessions)
+
             tx_fee = self._estimate_tx_fee(num_inputs, num_outputs)
 
-            # Select taker UTXOs
-            required = self.cj_amount + total_maker_fee + tx_fee
+            preselected_total = sum(u.value for u in self.preselected_utxos)
 
-            # Ensure PoDLE UTXO is included
-            include_utxos = []
-            if self.podle_commitment:
-                podle_txid, podle_vout = self.podle_commitment.utxo.split(":")[:2]
-                podle_vout = int(podle_vout)
-                for u in taker_utxos:
-                    if u.txid == podle_txid and u.vout == podle_vout:
-                        include_utxos.append(u)
-                        logger.info(f"Including PoDLE UTXO: {podle_txid}:{podle_vout}")
-                        break
+            if self.is_sweep:
+                # SWEEP MODE: Use ALL preselected UTXOs, adjust cj_amount for exact zero change
+                selected_utxos = self.preselected_utxos
+                logger.info(
+                    f"Sweep mode: using all {len(selected_utxos)} UTXOs, "
+                    f"total {preselected_total:,} sats"
+                )
 
-            selected_utxos = self.wallet.select_utxos(
-                mixdepth, required, self.config.taker_utxo_age, include_utxos=include_utxos
-            )
+                # Recalculate exact cj_amount for zero change with final tx fee
+                # cj_amount = total_input - maker_fees - tx_fee
+                # For relative fees, solve:
+                #   cj_amount = (total_in - tx_fee - sum(abs_fees)) / (1 + sum(rel_fees))
+                from decimal import Decimal
+
+                from jmcore.models import OfferType
+
+                sum_abs_fees = 0
+                sum_rel_fees = Decimal("0")
+
+                for session in self.maker_sessions.values():
+                    offer = session.offer
+                    if offer.ordertype in (OfferType.SW0_ABSOLUTE, OfferType.SWA_ABSOLUTE):
+                        sum_abs_fees += int(offer.cjfee)
+                    else:
+                        sum_rel_fees += Decimal(str(offer.cjfee))
+
+                available = preselected_total - tx_fee - sum_abs_fees
+                self.cj_amount = int(Decimal(available) / (1 + sum_rel_fees))
+
+                # Recalculate final maker fees with updated cj_amount
+                total_maker_fee = sum(
+                    calculate_cj_fee(s.offer, self.cj_amount) for s in self.maker_sessions.values()
+                )
+
+                # Verify: taker_change should be 0 or small (dust/rounding)
+                # Any residual becomes additional miner fee (this is intentional!)
+                # Residual can occur when:
+                # - Actual maker fees < estimated max fees used in initial selection
+                # - A maker from pre-selection doesn't respond and is replaced
+                # - Decimal rounding in fee calculations
+                taker_change = preselected_total - self.cj_amount - total_maker_fee - tx_fee
+                logger.info(
+                    f"Sweep: final cj_amount={self.cj_amount:,}, "
+                    f"maker_fees={total_maker_fee:,}, tx_fee={tx_fee:,}, "
+                    f"residual={taker_change} sats"
+                )
+
+                if taker_change < 0:
+                    logger.error(f"Sweep calculation error: negative residual {taker_change}")
+                    return False
+
+                # Log if residual is significant (more than expected dust)
+                if taker_change > self.config.dust_threshold:
+                    logger.warning(
+                        f"Sweep: residual {taker_change} sats exceeds dust threshold "
+                        f"({self.config.dust_threshold}). This will become additional miner fee. "
+                        "This can happen if actual maker fees are much lower than estimated."
+                    )
+
+            else:
+                # NORMAL MODE: Use pre-selected UTXOs, add more if needed
+                required = self.cj_amount + total_maker_fee + tx_fee
+
+                # Use pre-selected UTXOs (which include the PoDLE UTXO)
+                # These were selected during PoDLE generation to ensure the commitment
+                # UTXO is one we'll actually use in the transaction
+                if preselected_total >= required:
+                    # Pre-selected UTXOs are sufficient
+                    selected_utxos = self.preselected_utxos
+                    logger.info(
+                        f"Using pre-selected UTXOs: {len(selected_utxos)} UTXOs, "
+                        f"total {preselected_total:,} sats (need {required:,})"
+                    )
+                else:
+                    # Need additional UTXOs beyond pre-selection
+                    # This can happen if actual fees were higher than estimated
+                    logger.warning(
+                        f"Pre-selected UTXOs insufficient: have {preselected_total:,}, "
+                        f"need {required:,}. Selecting additional UTXOs..."
+                    )
+                    selected_utxos = self.wallet.select_utxos(
+                        mixdepth,
+                        required,
+                        self.config.taker_utxo_age,
+                        include_utxos=self.preselected_utxos,  # Include pre-selected (PoDLE UTXO)
+                    )
 
             if not selected_utxos:
                 logger.error("Failed to select enough UTXOs")
@@ -939,6 +1086,7 @@ class Taker:
             taker_total = sum(u.value for u in selected_utxos)
 
             # Taker change address - store for broadcast verification
+            # (Even for sweep, we generate one in case of dust handling)
             change_index = self.wallet.get_next_address_index(mixdepth, 1)
             taker_change_address = self.wallet.get_change_address(mixdepth, change_index)
             self.taker_change_address = taker_change_address

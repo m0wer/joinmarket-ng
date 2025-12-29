@@ -606,6 +606,104 @@ class WalletService:
 
         return selected
 
+    def get_all_utxos(
+        self,
+        mixdepth: int,
+        min_confirmations: int = 1,
+    ) -> list[UTXOInfo]:
+        """
+        Get all UTXOs from a mixdepth for sweep operations.
+
+        Unlike select_utxos(), this returns ALL eligible UTXOs regardless of
+        target amount. Used for sweep mode to ensure no change output.
+
+        Args:
+            mixdepth: Mixdepth to get UTXOs from
+            min_confirmations: Minimum confirmations required
+
+        Returns:
+            List of all eligible UTXOs in the mixdepth
+        """
+        utxos = self.utxo_cache.get(mixdepth, [])
+        eligible = [utxo for utxo in utxos if utxo.confirmations >= min_confirmations]
+        return eligible
+
+    def select_utxos_with_merge(
+        self,
+        mixdepth: int,
+        target_amount: int,
+        min_confirmations: int = 1,
+        merge_algorithm: str = "default",
+    ) -> list[UTXOInfo]:
+        """
+        Select UTXOs with merge algorithm for maker UTXO consolidation.
+
+        Unlike regular select_utxos(), this method can select MORE UTXOs than
+        strictly necessary based on the merge algorithm. Since takers pay tx fees,
+        makers can add extra inputs "for free" to consolidate their UTXOs.
+
+        Args:
+            mixdepth: Mixdepth to select from
+            target_amount: Minimum target amount in satoshis
+            min_confirmations: Minimum confirmations required
+            merge_algorithm: Selection strategy:
+                - "default": Minimum UTXOs needed (same as select_utxos)
+                - "gradual": +1 additional UTXO beyond minimum
+                - "greedy": ALL eligible UTXOs from the mixdepth
+                - "random": +0 to +2 additional UTXOs randomly
+
+        Returns:
+            List of selected UTXOs
+
+        Raises:
+            ValueError: If insufficient funds
+        """
+        import random as rand_module
+
+        utxos = self.utxo_cache.get(mixdepth, [])
+        eligible = [utxo for utxo in utxos if utxo.confirmations >= min_confirmations]
+
+        # Sort by value descending for efficient selection
+        eligible.sort(key=lambda u: u.value, reverse=True)
+
+        # First, select minimum needed (greedy by value)
+        selected = []
+        total = 0
+
+        for utxo in eligible:
+            selected.append(utxo)
+            total += utxo.value
+            if total >= target_amount:
+                break
+
+        if total < target_amount:
+            raise ValueError(f"Insufficient funds: need {target_amount}, have {total}")
+
+        # Record where minimum selection ends
+        min_count = len(selected)
+
+        # Get remaining eligible UTXOs not yet selected
+        remaining = eligible[min_count:]
+
+        # Apply merge algorithm to add additional UTXOs
+        if merge_algorithm == "greedy":
+            # Add ALL remaining UTXOs
+            selected.extend(remaining)
+        elif merge_algorithm == "gradual" and remaining:
+            # Add exactly 1 more UTXO (smallest to preserve larger ones)
+            remaining_sorted = sorted(remaining, key=lambda u: u.value)
+            selected.append(remaining_sorted[0])
+        elif merge_algorithm == "random" and remaining:
+            # Add 0-2 additional UTXOs randomly
+            extra_count = rand_module.randint(0, min(2, len(remaining)))
+            if extra_count > 0:
+                # Prefer smaller UTXOs for consolidation
+                remaining_sorted = sorted(remaining, key=lambda u: u.value)
+                selected.extend(remaining_sorted[:extra_count])
+        # "default" - no additional UTXOs
+
+        return selected
+
     def get_next_address_index(self, mixdepth: int, change: int) -> int:
         """Get next unused address index for mixdepth/change"""
         max_index = -1

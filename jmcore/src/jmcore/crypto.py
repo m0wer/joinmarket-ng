@@ -124,8 +124,8 @@ def ecdsa_verify(message: str, signature_b64: str, pubkey_bytes: bytes) -> bool:
         # Decode signature from base64
         signature = base64.b64decode(signature_b64)
 
-        # Verify with coincurve
-        return coincurve_verify(signature, msg_hash, pubkey_bytes)
+        # Verify with coincurve (hasher=None because we already hashed)
+        return coincurve_verify(signature, msg_hash, pubkey_bytes, hasher=None)
     except Exception:
         return False
 

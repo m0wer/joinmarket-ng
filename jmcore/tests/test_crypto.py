@@ -11,6 +11,8 @@ from coincurve import PrivateKey
 from jmcore.crypto import (
     KeyPair,
     base58_encode,
+    ecdsa_sign,
+    ecdsa_verify,
     generate_jm_nick,
     get_ascii_cert_msg,
     get_cert_msg,
@@ -42,6 +44,42 @@ def test_generate_jm_nick():
     # v5 nicks for reference implementation compatibility
     assert nick.startswith("J5")
     # Check general structure if possible, but it's hash based
+
+
+def test_ecdsa_sign_verify():
+    """Test ECDSA signing and verification used for BTC signature in !ioauth."""
+    priv_key = PrivateKey()
+    priv_key_bytes = priv_key.secret
+    pub_key_bytes = priv_key.public_key.format(compressed=True)
+
+    # Sign a hex string message (as used in maker's !ioauth)
+    message = "0123456789abcdef" * 4  # 64-char hex string (like NaCl pubkey)
+    sig_b64 = ecdsa_sign(message, priv_key_bytes)
+
+    # Verify with same message and pubkey
+    assert ecdsa_verify(message, sig_b64, pub_key_bytes)
+
+    # Verify fails with wrong message
+    assert not ecdsa_verify("wrong message", sig_b64, pub_key_bytes)
+
+    # Verify fails with wrong pubkey
+    wrong_key = PrivateKey().public_key.format(compressed=True)
+    assert not ecdsa_verify(message, sig_b64, wrong_key)
+
+
+def test_ecdsa_verify_invalid_signature():
+    """Test that ecdsa_verify handles invalid signatures gracefully."""
+    priv_key = PrivateKey()
+    pub_key_bytes = priv_key.public_key.format(compressed=True)
+
+    # Invalid base64
+    assert not ecdsa_verify("test", "not-valid-base64!!!", pub_key_bytes)
+
+    # Valid base64 but invalid signature
+    import base64
+
+    invalid_sig = base64.b64encode(b"x" * 64).decode()
+    assert not ecdsa_verify("test", invalid_sig, pub_key_bytes)
 
 
 def test_keypair_signing():

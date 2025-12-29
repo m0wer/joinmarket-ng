@@ -67,6 +67,7 @@ class CoinJoinSession:
         taker_utxo_age: int = 5,
         taker_utxo_amtpercent: int = 20,
         session_timeout_sec: int = 300,
+        merge_algorithm: str = "default",
     ):
         self.taker_nick = taker_nick
         self.offer = offer
@@ -76,6 +77,7 @@ class CoinJoinSession:
         self.taker_utxo_retries = taker_utxo_retries
         self.taker_utxo_age = taker_utxo_age
         self.taker_utxo_amtpercent = taker_utxo_amtpercent
+        self.merge_algorithm = merge_algorithm  # UTXO selection strategy
 
         self.state = CoinJoinState.IDLE
         self.amount = 0
@@ -404,6 +406,12 @@ class CoinJoinSession:
         """
         Select our UTXOs for the CoinJoin.
 
+        Uses the configured merge_algorithm to determine UTXO selection:
+        - default: Minimum UTXOs needed
+        - gradual: +1 additional UTXO
+        - greedy: ALL UTXOs from the mixdepth
+        - random: +0 to +2 additional UTXOs
+
         Returns:
             (utxos_dict, cj_address, change_address, mixdepth)
         """
@@ -434,8 +442,13 @@ class CoinJoinSession:
 
             max_mixdepth = max(eligible_mixdepths, key=lambda md: eligible_mixdepths[md])
 
-            selected = self.wallet.select_utxos(
-                max_mixdepth, required_amount, self.min_confirmations
+            # Use merge algorithm for UTXO selection
+            # Makers can consolidate UTXOs "for free" since takers pay all fees
+            selected = self.wallet.select_utxos_with_merge(
+                max_mixdepth,
+                required_amount,
+                self.min_confirmations,
+                merge_algorithm=self.merge_algorithm,
             )
 
             utxos_dict = {(utxo.txid, utxo.vout): utxo for utxo in selected}
@@ -448,7 +461,8 @@ class CoinJoinSession:
             change_address = self.wallet.get_change_address(max_mixdepth, change_index)
 
             logger.info(
-                f"Selected {len(selected)} UTXOs from mixdepth {max_mixdepth}, "
+                f"Selected {len(selected)} UTXOs from mixdepth {max_mixdepth} "
+                f"(merge_algorithm={self.merge_algorithm}), "
                 f"total value: {sum(u.value for u in selected)} sats"
             )
 
