@@ -424,6 +424,9 @@ class MakerBot:
 
         await self.wallet.sync_all()
 
+        # Update pending history immediately after sync (in case of restart)
+        await self._update_pending_history()
+
         # Get new max balance after resync
         new_max_balance = 0
         for mixdepth in range(self.wallet.mixdepth_count):
@@ -525,6 +528,61 @@ class MakerBot:
         except Exception as e:
             logger.error(f"Failed to re-sync wallet after CoinJoin: {e}")
 
+    async def _update_pending_history(self) -> None:
+        """Check and update status of pending transactions in history."""
+        try:
+            pending = get_pending_transactions(data_dir=self.config.data_dir)
+            if not pending:
+                return
+
+            logger.debug(f"Checking {len(pending)} pending transaction(s)...")
+
+            for entry in pending:
+                if not entry.txid:
+                    continue
+
+                try:
+                    # Check if transaction exists and get confirmations
+                    tx_info = await self.backend.get_transaction(entry.txid)
+
+                    if tx_info is None:
+                        # Transaction not found - might have been rejected/replaced
+                        # Check how long it's been pending
+                        from datetime import datetime
+
+                        timestamp = datetime.fromisoformat(entry.timestamp)
+                        age_hours = (datetime.now() - timestamp).total_seconds() / 3600
+
+                        if age_hours > 24:
+                            # Mark as failed if pending for more than 24 hours
+                            logger.warning(
+                                f"Transaction {entry.txid[:16]}... not found after "
+                                f"{age_hours:.1f} hours, may have been rejected"
+                            )
+                            # Could optionally mark as failed here
+                        continue
+
+                    confirmations = tx_info.confirmations
+
+                    if confirmations > 0:
+                        # Update history with confirmation
+                        update_transaction_confirmation(
+                            txid=entry.txid,
+                            confirmations=confirmations,
+                            data_dir=self.config.data_dir,
+                        )
+
+                        logger.info(
+                            f"CoinJoin {entry.txid[:16]}... confirmed! "
+                            f"({confirmations} confirmation{'s' if confirmations != 1 else ''})"
+                        )
+
+                except Exception as e:
+                    logger.debug(f"Error checking transaction {entry.txid[:16]}...: {e}")
+
+        except Exception as e:
+            logger.error(f"Error updating pending history: {e}")
+
     async def _monitor_pending_transactions(self) -> None:
         """
         Background task to monitor pending transactions and update their status.
@@ -539,55 +597,7 @@ class MakerBot:
         while self.running:
             try:
                 await asyncio.sleep(check_interval)
-
-                pending = get_pending_transactions(data_dir=self.config.data_dir)
-                if not pending:
-                    continue
-
-                logger.debug(f"Checking {len(pending)} pending transaction(s)...")
-
-                for entry in pending:
-                    if not entry.txid:
-                        continue
-
-                    try:
-                        # Check if transaction exists and get confirmations
-                        tx_info = await self.backend.get_transaction(entry.txid)
-
-                        if tx_info is None:
-                            # Transaction not found - might have been rejected/replaced
-                            # Check how long it's been pending
-                            from datetime import datetime
-
-                            timestamp = datetime.fromisoformat(entry.timestamp)
-                            age_hours = (datetime.now() - timestamp).total_seconds() / 3600
-
-                            if age_hours > 24:
-                                # Mark as failed if pending for more than 24 hours
-                                logger.warning(
-                                    f"Transaction {entry.txid[:16]}... not found after "
-                                    f"{age_hours:.1f} hours, may have been rejected"
-                                )
-                                # Could optionally mark as failed here
-                            continue
-
-                        confirmations = tx_info.confirmations
-
-                        if confirmations > 0:
-                            # Update history with confirmation
-                            update_transaction_confirmation(
-                                txid=entry.txid,
-                                confirmations=confirmations,
-                                data_dir=self.config.data_dir,
-                            )
-
-                            logger.info(
-                                f"CoinJoin {entry.txid[:16]}... confirmed! "
-                                f"({confirmations} confirmation{'s' if confirmations != 1 else ''})"
-                            )
-
-                    except Exception as e:
-                        logger.debug(f"Error checking transaction {entry.txid[:16]}...: {e}")
+                await self._update_pending_history()
 
             except asyncio.CancelledError:
                 logger.info("Pending transaction monitor cancelled")
