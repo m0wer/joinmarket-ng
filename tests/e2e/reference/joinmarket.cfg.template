@@ -11,8 +11,11 @@ daemon_host = localhost
 use_ssl = false
 
 [BLOCKCHAIN]
-# Use regtest
+# Use 'regtest' source to connect to regtest Bitcoin Core and generate bcrt1 addresses
+# blockchain_source options: bitcoin-rpc, regtest, bitcoin-rpc-no-history
+# Note: 'regtest' source automatically sets network params correctly for regtest
 blockchain_source = regtest
+# network is set automatically by regtest source, but testnet value is required by config parser
 network = testnet
 rpc_host = jm-bitcoin-jam
 rpc_port = 18445

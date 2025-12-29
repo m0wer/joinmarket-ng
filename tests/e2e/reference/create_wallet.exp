@@ -18,7 +18,7 @@ if {$wallet_name eq ""} {
 }
 
 # Start wallet-tool.py generate
-spawn python3 /src/scripts/wallet-tool.py --datadir=/root/.joinmarket generate
+spawn python3 /src/scripts/wallet-tool.py --datadir=/root/.joinmarket-ng generate
 
 # Question: Would you like to use a two-factor mnemonic recovery phrase?
 expect {
