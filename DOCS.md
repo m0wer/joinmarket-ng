@@ -118,6 +118,33 @@ JoinMarket NG uses a dedicated data directory for persistent files that need to 
 - CSV format for easy analysis with external tools
 - View with: `jm-wallet history --stats` or `jm-wallet history --limit 10`
 
+### Periodic Wallet Rescan
+
+Both maker and taker support periodic wallet rescanning to detect balance changes from external sources (deposits, spends via Sparrow, etc.) and confirm pending transactions.
+
+**Configuration:**
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `rescan_interval_sec` | 600 (10 min) | How often to rescan the wallet |
+| `post_coinjoin_rescan_delay` | 60 | Seconds to wait after CoinJoin before rescanning (maker only) |
+
+**Maker Behavior:**
+- After a CoinJoin, waits `post_coinjoin_rescan_delay` (default: 60s) before rescanning
+- This delay allows the transaction to propagate in the mempool before scanning
+- If the max balance across mixdepths changes, offers are automatically recreated and re-announced
+- Periodic rescans every `rescan_interval_sec` also trigger offer updates if balance changed
+- This enables "set and forget" maker operation - balance changes are handled automatically
+
+**Taker Behavior:**
+- Periodic rescans update wallet state between schedule/tumbler entries
+- Pending transaction monitor updates confirmation status
+
+**Use Cases:**
+- Maker can run in background while user does manual transactions from Sparrow
+- After external deposits, maker automatically updates offer maxsize
+- After a CoinJoin, confirmation is tracked without manual intervention
+
 ---
 
 ## Dependency Management

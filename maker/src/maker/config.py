@@ -94,6 +94,18 @@ class MakerConfig(WalletConfig):
         description="Maximum time for a CoinJoin session to complete (all states)",
     )
 
+    # Wallet rescan configuration
+    post_coinjoin_rescan_delay: int = Field(
+        default=60,
+        ge=5,
+        description="Seconds to wait before rescanning wallet after CoinJoin completion",
+    )
+    rescan_interval_sec: int = Field(
+        default=600,
+        ge=60,
+        description="Interval in seconds for periodic wallet rescans (default: 10 minutes)",
+    )
+
     # UTXO merge algorithm - how many UTXOs to use
     merge_algorithm: MergeAlgorithm = Field(
         default=MergeAlgorithm.DEFAULT,

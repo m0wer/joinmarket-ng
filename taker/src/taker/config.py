@@ -102,6 +102,13 @@ class TakerConfig(WalletConfig):
     )
     minimum_makers: int = Field(default=2, ge=1, description="Minimum number of makers required")
 
+    # Wallet rescan configuration
+    rescan_interval_sec: int = Field(
+        default=600,
+        ge=60,
+        description="Interval in seconds for periodic wallet rescans (default: 10 minutes)",
+    )
+
     @model_validator(mode="after")
     def set_bitcoin_network_default(self) -> TakerConfig:
         """If bitcoin_network is not set, default to the protocol network."""

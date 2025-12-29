@@ -345,6 +345,10 @@ class MakerBot:
             monitor_task = asyncio.create_task(self._monitor_pending_transactions())
             self.listen_tasks.append(monitor_task)
 
+            # Start periodic wallet rescan task
+            rescan_task = asyncio.create_task(self._periodic_rescan())
+            self.listen_tasks.append(rescan_task)
+
             # Wait for all listening tasks to complete
             await asyncio.gather(*self.listen_tasks, return_exceptions=True)
 
@@ -403,23 +407,121 @@ class MakerBot:
             )
             del self.active_sessions[nick]
 
+    async def _resync_wallet_and_update_offers(self) -> None:
+        """Re-sync wallet and update offers if balance changed.
+
+        This is the core rescan logic used by both post-CoinJoin resync
+        and periodic rescan. It:
+        1. Saves the current max balance
+        2. Re-syncs the wallet
+        3. If max balance changed, recreates and re-announces offers
+        """
+        # Get current max balance before resync
+        old_max_balance = 0
+        for mixdepth in range(self.wallet.mixdepth_count):
+            balance = await self.wallet.get_balance(mixdepth)
+            old_max_balance = max(old_max_balance, balance)
+
+        await self.wallet.sync_all()
+
+        # Get new max balance after resync
+        new_max_balance = 0
+        for mixdepth in range(self.wallet.mixdepth_count):
+            balance = await self.wallet.get_balance(mixdepth)
+            new_max_balance = max(new_max_balance, balance)
+
+        total_balance = await self.wallet.get_total_balance()
+        logger.info(f"Wallet re-synced. Total balance: {total_balance:,} sats")
+
+        # If max balance changed, update offers
+        if old_max_balance != new_max_balance:
+            logger.info(
+                f"Max balance changed: {old_max_balance:,} -> {new_max_balance:,} sats. "
+                "Updating offers..."
+            )
+            await self._update_offers()
+        else:
+            logger.debug(f"Max balance unchanged at {new_max_balance:,} sats")
+
+    async def _update_offers(self) -> None:
+        """Recreate and re-announce offers based on current wallet state.
+
+        Called when wallet balance changes (after CoinJoin, external transaction,
+        or deposit). This allows the maker to adapt to changing balances without
+        requiring a restart.
+        """
+        try:
+            new_offers = await self.offer_manager.create_offers()
+
+            if not new_offers:
+                logger.warning(
+                    "No offers could be created (insufficient balance?). "
+                    "Keeping existing offers active."
+                )
+                return
+
+            # Check if offers actually changed
+            if self.current_offers and new_offers:
+                old_maxsize = self.current_offers[0].maxsize
+                new_maxsize = new_offers[0].maxsize
+                if old_maxsize == new_maxsize:
+                    logger.debug("Offer maxsize unchanged, skipping re-announcement")
+                    return
+
+            self.current_offers = new_offers
+            await self._announce_offers()
+            logger.info(f"Updated and re-announced offers: maxsize={new_offers[0].maxsize:,} sats")
+        except Exception as e:
+            logger.error(f"Failed to update offers: {e}")
+
+    async def _periodic_rescan(self) -> None:
+        """Background task to periodically rescan wallet and update offers.
+
+        This runs every `rescan_interval_sec` (default: 10 minutes) to:
+        1. Detect external transactions (deposits, Sparrow spends, etc.)
+        2. Update pending transaction confirmations
+        3. Update offers if balance changed
+
+        This allows the maker to run in the background and adapt to balance
+        changes without manual intervention.
+        """
+        logger.info(
+            f"Starting periodic rescan task (interval: {self.config.rescan_interval_sec}s)..."
+        )
+
+        while self.running:
+            try:
+                await asyncio.sleep(self.config.rescan_interval_sec)
+
+                if not self.running:
+                    break
+
+                logger.info("Periodic wallet rescan starting...")
+                await self._resync_wallet_and_update_offers()
+
+            except asyncio.CancelledError:
+                logger.info("Periodic rescan task cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in periodic rescan: {e}")
+
+        logger.info("Periodic rescan task stopped")
+
     async def _deferred_wallet_resync(self) -> None:
         """Re-sync wallet after CoinJoin completion in background.
 
         This is deferred to a background task to avoid blocking message processing.
         The transaction might not be broadcast yet (!push comes after !tx), so we
-        add a small delay to give the transaction time to propagate.
+        add a configurable delay to give the transaction time to propagate.
         """
         try:
-            # Wait a bit before rescanning to:
+            # Wait before rescanning to:
             # 1. Allow !push message to be processed
             # 2. Give transaction time to propagate in mempool
-            await asyncio.sleep(5.0)
+            await asyncio.sleep(self.config.post_coinjoin_rescan_delay)
 
             logger.info("Re-syncing wallet after CoinJoin completion...")
-            await self.wallet.sync_all()
-            total_balance = await self.wallet.get_total_balance()
-            logger.info(f"Wallet re-synced. New balance: {total_balance:,} sats")
+            await self._resync_wallet_and_update_offers()
         except Exception as e:
             logger.error(f"Failed to re-sync wallet after CoinJoin: {e}")
 

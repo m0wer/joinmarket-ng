@@ -111,6 +111,26 @@ class TestTakerConfig:
         with pytest.raises(ValidationError):
             TakerConfig(mnemonic=sample_mnemonic, gap_limit=5)
 
+    def test_rescan_interval_default(self, sample_mnemonic: str) -> None:
+        """Test default rescan interval is 600 seconds (10 minutes)."""
+        config = TakerConfig(mnemonic=sample_mnemonic)
+        assert config.rescan_interval_sec == 600
+
+    def test_rescan_interval_custom(self, sample_mnemonic: str) -> None:
+        """Test custom rescan interval."""
+        config = TakerConfig(mnemonic=sample_mnemonic, rescan_interval_sec=120)
+        assert config.rescan_interval_sec == 120
+
+    def test_rescan_interval_minimum(self, sample_mnemonic: str) -> None:
+        """Test rescan interval must be at least 60 seconds."""
+        # Valid minimum
+        config = TakerConfig(mnemonic=sample_mnemonic, rescan_interval_sec=60)
+        assert config.rescan_interval_sec == 60
+
+        # Invalid - too low
+        with pytest.raises(ValidationError):
+            TakerConfig(mnemonic=sample_mnemonic, rescan_interval_sec=30)
+
 
 class TestScheduleEntry:
     """Tests for ScheduleEntry model."""

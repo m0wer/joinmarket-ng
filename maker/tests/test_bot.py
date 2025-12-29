@@ -486,5 +486,171 @@ class TestHandlePush:
         assert push_called, "_handle_push should have been called"
 
 
+class TestWalletRescanAndOfferUpdate:
+    """Tests for wallet rescan and automatic offer update functionality."""
+
+    @pytest.fixture
+    def mock_wallet(self):
+        """Create a mock wallet service."""
+        from unittest.mock import AsyncMock
+
+        wallet = MagicMock()
+        wallet.mixdepth_count = 5
+        wallet.utxo_cache = {}
+        wallet.sync_all = AsyncMock()
+        wallet.get_total_balance = AsyncMock(return_value=1_000_000)
+        wallet.get_balance = AsyncMock(return_value=500_000)
+        return wallet
+
+    @pytest.fixture
+    def mock_backend(self):
+        """Create a mock blockchain backend."""
+        backend = MagicMock()
+        backend.can_provide_neutrino_metadata = MagicMock(return_value=True)
+        return backend
+
+    @pytest.fixture
+    def config(self):
+        """Create a test maker config."""
+        return MakerConfig(
+            mnemonic="test " * 12,
+            directory_servers=["localhost:5222"],
+            network=NetworkType.REGTEST,
+            post_coinjoin_rescan_delay=5,  # Minimum value for testing
+            rescan_interval_sec=60,
+        )
+
+    @pytest.fixture
+    def maker_bot(self, mock_wallet, mock_backend, config):
+        """Create a MakerBot instance for testing."""
+        bot = MakerBot(
+            wallet=mock_wallet,
+            backend=mock_backend,
+            config=config,
+        )
+        # Set up current offers
+        bot.current_offers = [
+            Offer(
+                counterparty=bot.nick,
+                oid=0,
+                ordertype=OfferType.SW0_RELATIVE,
+                minsize=100_000,
+                maxsize=400_000,  # Initial maxsize
+                txfee=1000,
+                cjfee="0.001",
+            )
+        ]
+        return bot
+
+    @pytest.mark.asyncio
+    async def test_resync_wallet_updates_offers_on_balance_change(self, maker_bot, mock_wallet):
+        """Test that offers are updated when max balance changes."""
+        from unittest.mock import AsyncMock
+
+        # Set up balances: first return old balance, then new balance
+        old_balance = 400_000
+        new_balance = 600_000
+        balance_calls = [old_balance] * 5 + [new_balance] * 5
+        mock_wallet.get_balance = AsyncMock(side_effect=balance_calls)
+
+        # Mock offer creation
+        new_offer = Offer(
+            counterparty=maker_bot.nick,
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=100_000,
+            maxsize=550_000,  # New maxsize after balance increase
+            txfee=1000,
+            cjfee="0.001",
+        )
+        maker_bot.offer_manager.create_offers = AsyncMock(return_value=[new_offer])
+        maker_bot._announce_offers = AsyncMock()
+
+        await maker_bot._resync_wallet_and_update_offers()
+
+        # Wallet should have been synced
+        mock_wallet.sync_all.assert_called_once()
+
+        # Offers should have been updated (balance changed)
+        maker_bot.offer_manager.create_offers.assert_called_once()
+        maker_bot._announce_offers.assert_called_once()
+        assert maker_bot.current_offers[0].maxsize == 550_000
+
+    @pytest.mark.asyncio
+    async def test_resync_wallet_no_update_when_balance_unchanged(self, maker_bot, mock_wallet):
+        """Test that offers are not updated when balance doesn't change."""
+        from unittest.mock import AsyncMock
+
+        # Same balance before and after sync
+        mock_wallet.get_balance = AsyncMock(return_value=400_000)
+
+        maker_bot.offer_manager.create_offers = AsyncMock()
+        maker_bot._announce_offers = AsyncMock()
+
+        await maker_bot._resync_wallet_and_update_offers()
+
+        # Wallet should have been synced
+        mock_wallet.sync_all.assert_called_once()
+
+        # Offers should NOT have been updated (balance unchanged)
+        maker_bot.offer_manager.create_offers.assert_not_called()
+        maker_bot._announce_offers.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_offers_keeps_old_if_create_fails(self, maker_bot):
+        """Test that old offers are kept if new offer creation fails."""
+        from unittest.mock import AsyncMock
+
+        old_maxsize = maker_bot.current_offers[0].maxsize
+        maker_bot.offer_manager.create_offers = AsyncMock(return_value=[])  # No offers created
+        maker_bot._announce_offers = AsyncMock()
+
+        await maker_bot._update_offers()
+
+        # Old offers should be kept
+        assert maker_bot.current_offers[0].maxsize == old_maxsize
+        maker_bot._announce_offers.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_offers_skips_if_maxsize_unchanged(self, maker_bot):
+        """Test that re-announcement is skipped if maxsize didn't change."""
+        from unittest.mock import AsyncMock
+
+        old_maxsize = maker_bot.current_offers[0].maxsize
+        new_offer = Offer(
+            counterparty=maker_bot.nick,
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=100_000,
+            maxsize=old_maxsize,  # Same maxsize
+            txfee=1000,
+            cjfee="0.001",
+        )
+        maker_bot.offer_manager.create_offers = AsyncMock(return_value=[new_offer])
+        maker_bot._announce_offers = AsyncMock()
+
+        await maker_bot._update_offers()
+
+        # Announcement should be skipped (no change)
+        maker_bot._announce_offers.assert_not_called()
+
+    def test_config_has_rescan_settings(self, config):
+        """Test that maker config includes rescan settings."""
+        assert hasattr(config, "post_coinjoin_rescan_delay")
+        assert hasattr(config, "rescan_interval_sec")
+        assert config.post_coinjoin_rescan_delay == 5
+        assert config.rescan_interval_sec == 60
+
+    def test_config_default_rescan_values(self):
+        """Test default values for rescan settings."""
+        default_config = MakerConfig(
+            mnemonic="test " * 12,
+            directory_servers=["localhost:5222"],
+            network=NetworkType.REGTEST,
+        )
+        assert default_config.post_coinjoin_rescan_delay == 60
+        assert default_config.rescan_interval_sec == 600
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

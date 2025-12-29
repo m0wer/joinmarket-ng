@@ -27,6 +27,12 @@ from jmcore.encryption import CryptoSession
 from jmcore.models import Offer
 from jmcore.protocol import JM_VERSION, parse_utxo_list
 from jmwallet.backends.base import BlockchainBackend
+from jmwallet.history import (
+    append_history_entry,
+    create_taker_history_entry,
+    get_pending_transactions,
+    update_transaction_confirmation,
+)
 from jmwallet.wallet.models import UTXOInfo
 from jmwallet.wallet.service import WalletService
 from jmwallet.wallet.signing import (
@@ -321,6 +327,10 @@ class Taker:
         # Schedule for tumbler-style operations
         self.schedule: Schedule | None = None
 
+        # Background task tracking
+        self.running = False
+        self._background_tasks: list[asyncio.Task[None]] = []
+
     async def start(self) -> None:
         """Start the taker and connect to directory servers."""
         logger.info(f"Starting taker (nick: {self.nick})")
@@ -344,12 +354,140 @@ class Taker:
 
         logger.info(f"Connected to {connected} directory servers")
 
+        # Mark as running and start background tasks
+        self.running = True
+
+        # Start pending transaction monitor
+        monitor_task = asyncio.create_task(self._monitor_pending_transactions())
+        self._background_tasks.append(monitor_task)
+
+        # Start periodic rescan task (useful for schedule mode)
+        rescan_task = asyncio.create_task(self._periodic_rescan())
+        self._background_tasks.append(rescan_task)
+
     async def stop(self) -> None:
         """Stop the taker and close connections."""
         logger.info("Stopping taker...")
+        self.running = False
+
+        # Cancel all background tasks
+        for task in self._background_tasks:
+            task.cancel()
+
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+        self._background_tasks.clear()
+
         await self.directory_client.close_all()
         await self.wallet.close()
         logger.info("Taker stopped")
+
+    async def _monitor_pending_transactions(self) -> None:
+        """
+        Background task to monitor pending transactions and update their status.
+
+        Checks pending transactions every 60 seconds and updates their confirmation
+        status in the history file. Transactions are marked as successful once they
+        receive their first confirmation.
+        """
+        logger.info("Starting pending transaction monitor...")
+        check_interval = 60.0  # Check every 60 seconds
+
+        while self.running:
+            try:
+                await asyncio.sleep(check_interval)
+
+                if not self.running:
+                    break
+
+                pending = get_pending_transactions(data_dir=self.config.data_dir)
+                if not pending:
+                    continue
+
+                logger.debug(f"Checking {len(pending)} pending transaction(s)...")
+
+                for entry in pending:
+                    if not entry.txid:
+                        continue
+
+                    try:
+                        # Check if transaction exists and get confirmations
+                        tx_info = await self.backend.get_transaction(entry.txid)
+
+                        if tx_info is None:
+                            # Transaction not found - might have been rejected/replaced
+                            from datetime import datetime
+
+                            timestamp = datetime.fromisoformat(entry.timestamp)
+                            age_hours = (datetime.now() - timestamp).total_seconds() / 3600
+
+                            if age_hours > 24:
+                                logger.warning(
+                                    f"Transaction {entry.txid[:16]}... not found after "
+                                    f"{age_hours:.1f} hours, may have been rejected"
+                                )
+                            continue
+
+                        confirmations = tx_info.confirmations
+
+                        if confirmations > 0:
+                            # Update history with confirmation
+                            update_transaction_confirmation(
+                                txid=entry.txid,
+                                confirmations=confirmations,
+                                data_dir=self.config.data_dir,
+                            )
+
+                            logger.info(
+                                f"CoinJoin {entry.txid[:16]}... confirmed! "
+                                f"({confirmations} confirmation{'s' if confirmations != 1 else ''})"
+                            )
+
+                    except Exception as e:
+                        logger.debug(f"Error checking transaction {entry.txid[:16]}...: {e}")
+
+            except asyncio.CancelledError:
+                logger.info("Pending transaction monitor cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in pending transaction monitor: {e}")
+
+        logger.info("Pending transaction monitor stopped")
+
+    async def _periodic_rescan(self) -> None:
+        """Background task to periodically rescan wallet.
+
+        This runs every `rescan_interval_sec` (default: 10 minutes) to:
+        1. Detect confirmed transactions
+        2. Update wallet balance after external transactions
+        3. Update pending transaction status
+
+        This is useful when running schedule/tumbler mode to ensure wallet
+        state is fresh between CoinJoins.
+        """
+        logger.info(
+            f"Starting periodic rescan task (interval: {self.config.rescan_interval_sec}s)..."
+        )
+
+        while self.running:
+            try:
+                await asyncio.sleep(self.config.rescan_interval_sec)
+
+                if not self.running:
+                    break
+
+                logger.info("Periodic wallet rescan starting...")
+                await self.wallet.sync_all()
+                total_balance = await self.wallet.get_total_balance()
+                logger.info(f"Wallet re-synced. Total balance: {total_balance:,} sats")
+
+            except asyncio.CancelledError:
+                logger.info("Periodic rescan task cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in periodic rescan: {e}")
+
+        logger.info("Periodic rescan task stopped")
 
     async def do_coinjoin(
         self,
@@ -579,6 +717,39 @@ class Taker:
 
             self.state = TakerState.COMPLETE
             logger.info(f"CoinJoin COMPLETE! txid: {self.txid}")
+
+            # Record transaction in history
+            try:
+                # Calculate total maker fees paid
+                total_maker_fees = sum(
+                    calculate_cj_fee(session.offer, self.cj_amount)
+                    for session in self.maker_sessions.values()
+                )
+                mining_fee = self.tx_metadata.get("fee", 0)
+                maker_nicks = list(self.maker_sessions.keys())
+
+                # Determine broadcast method
+                broadcast_method = self.config.tx_broadcast.value
+
+                history_entry = create_taker_history_entry(
+                    maker_nicks=maker_nicks,
+                    cj_amount=self.cj_amount,
+                    total_maker_fees=total_maker_fees,
+                    mining_fee=mining_fee,
+                    destination=self.cj_destination,
+                    source_mixdepth=self.tx_metadata.get("source_mixdepth", 0),
+                    selected_utxos=[(utxo.txid, utxo.vout) for utxo in self.selected_utxos],
+                    txid=self.txid,
+                    broadcast_method=broadcast_method,
+                    network=self.config.network.value,
+                )
+                append_history_entry(history_entry, data_dir=self.config.data_dir)
+                logger.debug(
+                    f"Recorded CoinJoin in history: {len(maker_nicks)} makers, "
+                    f"fees={total_maker_fees + mining_fee} sats"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to record CoinJoin history: {e}")
 
             return self.txid
 
