@@ -227,3 +227,73 @@ class TestSelectUtxosWithMerge:
         # All 5 UTXOs needed to meet 200k (total is 210k)
         # No remaining to add, so same as default
         assert len(selected) == 5
+
+
+class TestFindUTXOByAddress:
+    """Tests for find_utxo_by_address method."""
+
+    def test_find_utxo_by_address_found(self, wallet_service: WalletService):
+        """Test finding a UTXO by address."""
+        # Use an address from the pre-populated cache
+        utxo = wallet_service.find_utxo_by_address("bcrt1test1")
+
+        assert utxo is not None
+        assert utxo.address == "bcrt1test1"
+        assert utxo.txid == "a" * 64
+        assert utxo.vout == 0
+        assert utxo.value == 100_000
+
+    def test_find_utxo_by_address_not_found(self, wallet_service: WalletService):
+        """Test finding a UTXO by address that doesn't exist."""
+        utxo = wallet_service.find_utxo_by_address("bc1qnonexistent123456")
+
+        assert utxo is None
+
+    def test_find_utxo_by_address_across_mixdepths(self, wallet_service: WalletService):
+        """Test that find_utxo_by_address searches all mixdepths."""
+        # Add a UTXO in mixdepth 1 to test cross-mixdepth search
+        wallet_service.utxo_cache[1] = [
+            UTXOInfo(
+                txid="f" * 64,
+                vout=0,
+                value=200_000,
+                address="bcrt1test_md1",
+                confirmations=5,
+                scriptpubkey="0014" + "ff" * 20,
+                path="m/84'/0'/1'/0/0",
+                mixdepth=1,
+            )
+        ]
+
+        # Find address from mixdepth 1
+        utxo = wallet_service.find_utxo_by_address("bcrt1test_md1")
+
+        assert utxo is not None
+        assert utxo.address == "bcrt1test_md1"
+        assert utxo.value == 200_000
+        assert utxo.mixdepth == 1
+
+    def test_find_utxo_by_address_returns_first_match(self, wallet_service: WalletService):
+        """Test that find_utxo_by_address returns the first match if duplicates exist."""
+        # Add a duplicate address to a different mixdepth (edge case)
+        duplicate_utxo = UTXOInfo(
+            txid="z" * 64,
+            vout=5,
+            value=999_999,
+            address="bcrt1test1",  # Same address as mixdepth 0
+            confirmations=20,
+            scriptpubkey="0014" + "zz" * 20,
+            path="m/84'/0'/2'/0/0",
+            mixdepth=2,
+        )
+        wallet_service.utxo_cache[2] = [duplicate_utxo]
+
+        # Should find the first one (from mixdepth 0)
+        utxo = wallet_service.find_utxo_by_address("bcrt1test1")
+
+        assert utxo is not None
+        assert utxo.address == "bcrt1test1"
+        # Should be the first match from mixdepth 0
+        assert utxo.value == 100_000
+        assert utxo.txid == "a" * 64
+        assert utxo.mixdepth == 0

@@ -17,7 +17,9 @@ from jmwallet.history import (
     create_taker_history_entry,
     get_history_stats,
     get_pending_transactions,
+    get_used_addresses,
     read_history,
+    update_pending_transaction_txid,
     update_transaction_confirmation,
 )
 
@@ -213,6 +215,7 @@ class TestHelperFunctions:
             fee_received=250,
             txfee_contribution=50,
             cj_address="bc1qtest...",
+            change_address="bc1qchange...",
             our_utxos=[("abc123", 0), ("def456", 1)],
             txid="txid" * 16,
             network="regtest",
@@ -285,6 +288,7 @@ class TestPendingTransactions:
             fee_received=250,
             txfee_contribution=50,
             cj_address="bc1qtest...",
+            change_address="bc1qchange...",
             our_utxos=[("abc123", 0)],
             txid="test_txid_123",
         )
@@ -325,6 +329,7 @@ class TestPendingTransactions:
             fee_received=250,
             txfee_contribution=50,
             cj_address="bc1qtest...",
+            change_address="bc1qchange...",
             our_utxos=[("abc123", 0)],
             txid="pending_tx",
         )
@@ -357,6 +362,7 @@ class TestPendingTransactions:
             fee_received=250,
             txfee_contribution=50,
             cj_address="bc1qtest...",
+            change_address="bc1qchange...",
             our_utxos=[("abc123", 0)],
             txid="test_tx_update",
         )
@@ -392,6 +398,7 @@ class TestPendingTransactions:
             fee_received=250,
             txfee_contribution=50,
             cj_address="bc1qtest...",
+            change_address="bc1qchange...",
             our_utxos=[("abc123", 0)],
             txid="test_tx_incremental",
         )
@@ -413,3 +420,201 @@ class TestPendingTransactions:
         """Test updating a transaction that doesn't exist."""
         result = update_transaction_confirmation("nonexistent_tx", 1, temp_data_dir)
         assert result is False
+
+
+class TestUsedAddressTracking:
+    """Tests for used address tracking and txid discovery."""
+
+    def test_get_used_addresses_empty(self, temp_data_dir: Path) -> None:
+        """Test get_used_addresses with no history."""
+
+        used = get_used_addresses(temp_data_dir)
+        assert len(used) == 0
+        assert isinstance(used, set)
+
+    def test_get_used_addresses_with_history(self, temp_data_dir: Path) -> None:
+        """Test get_used_addresses returns addresses from history."""
+
+        # Add entries with different addresses
+        entry1 = create_maker_history_entry(
+            taker_nick="J5taker",
+            cj_amount=1_000_000,
+            fee_received=250,
+            txfee_contribution=50,
+            cj_address="bc1qtest1address111111",
+            change_address="bc1qchange...",
+            our_utxos=[("abc123", 0)],
+            txid="txid1" * 16,
+        )
+        append_history_entry(entry1, temp_data_dir)
+
+        entry2 = create_taker_history_entry(
+            maker_nicks=["J5maker1"],
+            cj_amount=2_000_000,
+            total_maker_fees=500,
+            mining_fee=100,
+            destination="bc1qtest2address222222",
+            source_mixdepth=0,
+            selected_utxos=[("utxo1", 0)],
+            txid="txid2" * 16,
+        )
+        append_history_entry(entry2, temp_data_dir)
+
+        # Get used addresses
+        used = get_used_addresses(temp_data_dir)
+
+        assert len(used) == 3  # 2 CJ addresses (maker+taker) + 1 change address (maker only)
+        assert "bc1qtest1address111111" in used
+        assert "bc1qtest2address222222" in used
+
+    def test_get_used_addresses_deduplication(self, temp_data_dir: Path) -> None:
+        """Test that get_used_addresses deduplicates addresses."""
+
+        # Add two entries with the same destination address
+        entry1 = create_maker_history_entry(
+            taker_nick="J5taker1",
+            cj_amount=1_000_000,
+            fee_received=250,
+            txfee_contribution=50,
+            cj_address="bc1qsameaddress123456",
+            change_address="bc1qchange...",
+            our_utxos=[("abc123", 0)],
+            txid="txid1" * 16,
+        )
+        append_history_entry(entry1, temp_data_dir)
+
+        entry2 = create_maker_history_entry(
+            taker_nick="J5taker2",
+            cj_amount=2_000_000,
+            fee_received=500,
+            txfee_contribution=100,
+            cj_address="bc1qsameaddress123456",
+            change_address="bc1qchange...",
+            our_utxos=[("def456", 0)],
+            txid="txid2" * 16,
+        )
+        append_history_entry(entry2, temp_data_dir)
+
+        # Should only have one address despite two entries
+        used = get_used_addresses(temp_data_dir)
+        assert len(used) == 2  # CJ address + change address
+        assert "bc1qsameaddress123456" in used
+
+    def test_get_used_addresses_includes_pending(self, temp_data_dir: Path) -> None:
+        """Test that get_used_addresses includes pending transactions."""
+
+        # Add a pending entry (no txid)
+        entry = create_maker_history_entry(
+            taker_nick="J5taker",
+            cj_amount=1_000_000,
+            fee_received=250,
+            txfee_contribution=50,
+            cj_address="bc1qpending12345678",
+            change_address="bc1qchange...",
+            our_utxos=[("abc123", 0)],
+            txid="",  # No txid yet - pending
+        )
+        append_history_entry(entry, temp_data_dir)
+
+        # Address should still be marked as used (privacy!)
+        used = get_used_addresses(temp_data_dir)
+        assert len(used) == 2  # CJ address + change address
+        assert "bc1qpending12345678" in used
+
+    def test_update_pending_transaction_txid(self, temp_data_dir: Path) -> None:
+        """Test updating pending transaction with discovered txid."""
+
+        # Create a pending entry without txid
+        entry = create_maker_history_entry(
+            taker_nick="J5taker",
+            cj_amount=1_000_000,
+            fee_received=250,
+            txfee_contribution=50,
+            cj_address="bc1qdiscovered123456",
+            change_address="bc1qchange...",
+            our_utxos=[("abc123", 0)],
+            txid="",  # No txid initially
+        )
+        append_history_entry(entry, temp_data_dir)
+
+        # Verify it's pending without txid
+        pending = get_pending_transactions(temp_data_dir)
+        assert len(pending) == 1
+        assert pending[0].txid == ""
+        assert pending[0].destination_address == "bc1qdiscovered123456"
+
+        # Update with discovered txid
+        result = update_pending_transaction_txid(
+            destination_address="bc1qdiscovered123456",
+            txid="discovered_txid_12345678",
+            data_dir=temp_data_dir,
+        )
+        assert result is True
+
+        # Verify txid was updated
+        pending = get_pending_transactions(temp_data_dir)
+        assert len(pending) == 1
+        assert pending[0].txid == "discovered_txid_12345678"
+        assert pending[0].destination_address == "bc1qdiscovered123456"
+
+    def test_update_pending_transaction_txid_nonexistent(self, temp_data_dir: Path) -> None:
+        """Test update_pending_transaction_txid with nonexistent address."""
+
+        result = update_pending_transaction_txid(
+            destination_address="bc1qnonexistent1234",
+            txid="some_txid",
+            data_dir=temp_data_dir,
+        )
+        assert result is False
+
+    def test_update_pending_transaction_txid_already_has_txid(self, temp_data_dir: Path) -> None:
+        """Test that update_pending_transaction_txid only updates entries without txid."""
+
+        # Create entry that already has a txid
+        entry = create_maker_history_entry(
+            taker_nick="J5taker",
+            cj_amount=1_000_000,
+            fee_received=250,
+            txfee_contribution=50,
+            cj_address="bc1qalreadyhas123456",
+            change_address="bc1qchange...",
+            our_utxos=[("abc123", 0)],
+            txid="original_txid_12345678",
+        )
+        append_history_entry(entry, temp_data_dir)
+
+        # Try to update - should not match (entry has txid)
+        result = update_pending_transaction_txid(
+            destination_address="bc1qalreadyhas123456",
+            txid="new_txid_different",
+            data_dir=temp_data_dir,
+        )
+        assert result is False
+
+        # Verify original txid unchanged
+        entries = read_history(temp_data_dir)
+        assert len(entries) == 1
+        assert entries[0].txid == "original_txid_12345678"
+
+    def test_get_used_addresses_includes_change_addresses(self, temp_data_dir: Path) -> None:
+        """Test that get_used_addresses includes both CJ and change addresses."""
+        from jmwallet.history import get_used_addresses
+
+        # Add entry with both cj_address and change_address
+        entry = create_maker_history_entry(
+            taker_nick="J5taker",
+            cj_amount=1_000_000,
+            fee_received=250,
+            txfee_contribution=50,
+            cj_address="bc1qcoinjoin123456",
+            change_address="bc1qchange789012345",
+            our_utxos=[("abc123", 0)],
+            txid="txid1" * 16,
+        )
+        append_history_entry(entry, temp_data_dir)
+
+        # Both addresses should be in the used set
+        used = get_used_addresses(temp_data_dir)
+        assert len(used) == 2  # 1 CJ address + 1 change address
+        assert "bc1qcoinjoin123456" in used
+        assert "bc1qchange789012345" in used

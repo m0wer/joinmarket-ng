@@ -30,6 +30,7 @@ from jmwallet.history import (
     append_history_entry,
     create_maker_history_entry,
     get_pending_transactions,
+    update_pending_transaction_txid,
     update_transaction_confirmation,
 )
 from jmwallet.wallet.service import WalletService
@@ -538,6 +539,28 @@ class MakerBot:
             logger.debug(f"Checking {len(pending)} pending transaction(s)...")
 
             for entry in pending:
+                # First, try to discover missing txids by looking up destination addresses
+                if not entry.txid and entry.destination_address:
+                    logger.debug(
+                        f"Looking for txid by destination address "
+                        f"{entry.destination_address[:20]}..."
+                    )
+                    utxo = self.wallet.find_utxo_by_address(entry.destination_address)
+                    if utxo:
+                        # Found the UTXO - update history with the txid
+                        logger.info(
+                            f"Discovered txid {utxo.txid[:16]}... for pending CoinJoin "
+                            f"at {entry.destination_address[:20]}..."
+                        )
+                        update_pending_transaction_txid(
+                            destination_address=entry.destination_address,
+                            txid=utxo.txid,
+                            data_dir=self.config.data_dir,
+                        )
+                        # Update the entry object so we can check confirmations below
+                        entry.txid = utxo.txid
+
+                # Now check confirmations for entries with txids
                 if not entry.txid:
                     continue
 
@@ -619,7 +642,7 @@ class MakerBot:
                 except Exception as e:
                     logger.error(f"Failed to announce offer: {e}")
 
-    def _format_offer_announcement(self, offer) -> str:
+    def _format_offer_announcement(self, offer: Offer) -> str:
         """Format offer for announcement (just the offer content, without nick!PUBLIC! prefix).
 
         Format: <ordertype> <oid> <minsize> <maxsize> <txfee> <cjfee>[!neutrino][!tbond <proof>]
@@ -1007,6 +1030,7 @@ class MakerBot:
                         fee_received=fee_received,
                         txfee_contribution=txfee_contribution,
                         cj_address=session.cj_address,
+                        change_address=session.change_address,
                         our_utxos=our_utxos,
                         txid=response.get("txid"),
                         network=self.config.network.value,

@@ -57,6 +57,7 @@ class TransactionHistoryEntry:
     # UTXO/address info
     source_mixdepth: int = 0
     destination_address: str = ""
+    change_address: str = ""  # Change output address (must also be blacklisted!)
     utxos_used: str = ""  # comma-separated txid:vout
 
     # Broadcast method
@@ -167,6 +168,7 @@ def read_history(
                         net_fee=int(row.get("net_fee", 0) or 0),
                         source_mixdepth=int(row.get("source_mixdepth", 0) or 0),
                         destination_address=row.get("destination_address", ""),
+                        change_address=row.get("change_address", ""),
                         utxos_used=row.get("utxos_used", ""),
                         broadcast_method=row.get("broadcast_method", ""),
                         network=row.get("network", "mainnet"),
@@ -241,6 +243,7 @@ def create_maker_history_entry(
     fee_received: int,
     txfee_contribution: int,
     cj_address: str,
+    change_address: str,
     our_utxos: list[tuple[str, int]],
     txid: str | None = None,
     network: str = "mainnet",
@@ -258,6 +261,7 @@ def create_maker_history_entry(
         fee_received: CoinJoin fee received
         txfee_contribution: Mining fee contribution
         cj_address: Our CoinJoin output address
+        change_address: Our change output address
         our_utxos: List of (txid, vout) tuples for our inputs
         txid: Transaction ID (may not be known by maker)
         network: Network name
@@ -285,6 +289,7 @@ def create_maker_history_entry(
         net_fee=net_fee,
         source_mixdepth=0,  # Would need to determine from UTXOs
         destination_address=cj_address,
+        change_address=change_address,
         utxos_used=",".join(f"{txid}:{vout}" for txid, vout in our_utxos),
         network=network,
     )
@@ -294,11 +299,15 @@ def get_pending_transactions(data_dir: Path | None = None) -> list[TransactionHi
     """
     Get all pending (unconfirmed) transactions from history.
 
+    Returns entries that are:
+    - Not yet confirmed (success=False, confirmations=0)
+    - Either have a txid waiting for confirmation, or no txid yet (needs discovery)
+
     Returns:
-        List of entries with success=False and confirmations=0
+        List of pending entries (includes entries without txid)
     """
     entries = read_history(data_dir)
-    return [e for e in entries if not e.success and e.confirmations == 0 and e.txid]
+    return [e for e in entries if not e.success and e.confirmations == 0]
 
 
 def update_transaction_confirmation(
@@ -342,6 +351,61 @@ def update_transaction_confirmation(
             elif confirmations > 0:
                 # Already marked as successful, just update confirmation count
                 logger.debug(f"Updated confirmations for {txid[:16]}...: {confirmations}")
+            updated = True
+            break
+
+    if not updated:
+        return False
+
+    # Rewrite the entire history file
+    try:
+        fieldnames = _get_fieldnames()
+        with open(history_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for entry in entries:
+                row = {f.name: getattr(entry, f.name) for f in fields(entry)}
+                writer.writerow(row)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to update history: {e}")
+        return False
+
+
+def update_pending_transaction_txid(
+    destination_address: str,
+    txid: str,
+    data_dir: Path | None = None,
+) -> bool:
+    """
+    Update a pending transaction's txid by matching the destination address.
+
+    This is used when a maker doesn't initially know the txid (didn't receive !push),
+    but can discover it later by finding which transaction paid to the CoinJoin address.
+
+    Args:
+        destination_address: The CoinJoin destination address to match
+        txid: The discovered transaction ID
+        data_dir: Optional data directory
+
+    Returns:
+        True if a matching entry was found and updated, False otherwise
+    """
+    history_path = _get_history_path(data_dir)
+    if not history_path.exists():
+        return False
+
+    entries = read_history(data_dir)
+    updated = False
+
+    for entry in entries:
+        # Match by destination address and empty txid (pending without txid)
+        if entry.destination_address == destination_address and not entry.txid:
+            entry.txid = txid
+            logger.info(
+                f"Updated pending transaction for {destination_address[:20]}... "
+                f"with txid {txid[:16]}..."
+            )
             updated = True
             break
 
@@ -425,3 +489,32 @@ def create_taker_history_entry(
         broadcast_method=broadcast_method,
         network=network,
     )
+
+
+def get_used_addresses(data_dir: Path | None = None) -> set[str]:
+    """
+    Get all addresses that have been used in CoinJoin history.
+
+    Returns both destination addresses (CoinJoin outputs) and change addresses
+    from all history entries, regardless of success or confirmation status.
+
+    This is critical for privacy: once an address has been shared with peers
+    (even if the transaction failed or wasn't confirmed), it should never be
+    reused.
+
+    Args:
+        data_dir: Optional data directory
+
+    Returns:
+        Set of addresses that should not be reused
+    """
+    entries = read_history(data_dir)
+    used_addresses = set()
+
+    for entry in entries:
+        if entry.destination_address:
+            used_addresses.add(entry.destination_address)
+        if entry.change_address:
+            used_addresses.add(entry.change_address)
+
+    return used_addresses

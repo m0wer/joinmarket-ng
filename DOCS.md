@@ -115,6 +115,21 @@ JoinMarket NG uses a dedicated data directory for persistent files that need to 
   - Background monitor checks pending transactions every 60 seconds
   - Transactions are marked as successful once they receive their first confirmation
   - Protects against false-positive reporting when inputs are spent by other makers
+- **Maker Transaction ID Discovery**:
+  - Makers may not initially know the final transaction ID (`txid`) when creating history entries
+  - By default, takers only send the full signed transaction (`!push`) to one random maker
+  - Other participating makers sign the transaction but don't receive the final txid
+  - History entries without txid are marked as pending until discovered
+  - **Automatic Discovery**: After restart and wallet rescan, makers discover the txid by:
+    1. Checking if their CoinJoin destination address received funds
+    2. Matching the UTXO's txid to the pending history entry
+    3. Updating the history with the discovered txid and checking confirmations
+  - **Address Privacy Protection**: Once shared with peers, **both** CoinJoin destination and change addresses are permanently blacklisted from reuse, even if:
+    - The transaction was never confirmed
+    - The maker doesn't know the txid
+    - The CoinJoin failed for any reason
+  - Wallet automatically skips address indices that would generate blacklisted addresses during CoinJoin
+  - **UTXO Reuse**: Makers can immediately reuse their input UTXOs in new CoinJoins without waiting for confirmation (history tracking is independent of UTXO availability)
 - CSV format for easy analysis with external tools
 - View with: `jm-wallet history --stats` or `jm-wallet history --limit 10`
 
@@ -540,6 +555,16 @@ Taker assembles final transaction with all signatures and broadcasts based on po
 **Broadcast Request**: `!push <base64_tx>` (not encrypted, sent via PRIVMSG)
 
 **Maker handling**: Broadcasts "unquestioningly" since they already signed. Rate limiting prevents spam abuse.
+
+**Maker transaction ID awareness**: By default (`random-peer` policy), only one randomly selected maker receives the `!push` request and therefore knows the final txid immediately. Other participating makers do not receive the full transaction and cannot compute the txid at that moment.
+
+This is intentional for privacy - it reduces the number of parties who can correlate signing events with broadcast events. Makers without the txid will:
+1. Create a pending history entry with the CoinJoin destination address but no txid
+2. The address is permanently blacklisted from reuse (critical for privacy)
+3. After wallet rescan (on restart or periodic check), they discover the txid by finding a UTXO at the destination address
+4. The history entry is updated with the discovered txid and confirmation status
+
+See "Maker Transaction ID Discovery" under Transaction History Tracking for implementation details.
 
 **Verification**: Taker monitors network to confirm transaction appeared. For Neutrino backends, uses address-based UTXO lookup. If maker broadcast fails within timeout, fallback policy applies.
 
