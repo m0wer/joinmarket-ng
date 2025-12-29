@@ -6,9 +6,33 @@
 
 Modern, clean alternative implementation of [JoinMarket](https://github.com/JoinMarket-Org/joinmarket-clientserver/) components.
 
-## About This Project
+## What is JoinMarket?
 
-This project is an alternative implementation of the reference JoinMarket protocol from [joinmarket-clientserver](https://github.com/JoinMarket-Org/joinmarket-clientserver/). The goal is to provide a clean, maintainable, and auditable codebase while maintaining full backwards compatibility with the existing JoinMarket network.
+**JoinMarket is a decentralized CoinJoin protocol for Bitcoin privacy.**
+
+CoinJoin transactions combine multiple users' funds into a single transaction, making it difficult to trace the the coins. This enhances financial privacy.
+
+How it works is by crafting a transaction with several equal amount outputs from inputs belonging to different users. This way, an outside observer cannot determine which input corresponds to which equal amount output, effectively obfuscating the transaction history.
+Change outputs are also included, but they are of different amounts and can be easily identified as change and sometimes matched to inputs using heuristics. However, the equal amount outputs remain ambiguous.
+
+One round of CoinJoin increases privacy, but generally multiple rounds are needed to achieve strong anonymity. JoinMarket facilitates this by connecting users who want to mix their coins (takers) with those willing to provide liquidity for a fee (makers).
+
+### Why Financial Privacy Matters
+
+Just as you wouldn't want your employer to see your bank balance when paying you, or a friend to know your net worth when splitting a bill, Bitcoin users deserve financial privacy. JoinMarket helps individuals exercise their right to financial freedom without promoting illegal activities.
+
+### What Makes JoinMarket Different
+
+Unlike other CoinJoin implementations (Wasabi, Whirlpool), JoinMarket has **no central coordinator**:
+
+- **Taker acts as coordinator**: Chooses peers, gains maximum privacy (doesn't share inputs/outputs with a centralized party)
+- **Most censorship-resistant**: Directory servers are easily replaceable and don't route communications, only host the orderbook
+- **Multiple fallbacks**: Works with IRC, Tor hidden services, and can easily move to alternatives like Nostr relays
+- **Peer-to-peer**: Direct encrypted communication between participants
+
+### JoinMarket-NG vs Reference Implementation
+
+This project is an alternative implementation of the reference JoinMarket protocol from [joinmarket-clientserver](https://github.com/JoinMarket-Org/joinmarket-clientserver/). The goal is to provide a clean, maintainable, and auditable codebase while maintaining full wire protocol compatibility with the existing JoinMarket network.
 
 ### Key Features
 
@@ -17,13 +41,12 @@ This project is an alternative implementation of the reference JoinMarket protoc
 - **Privacy-Preserving**: Tor integration, Neutrino filters never reveal your addresses
 - **Modern Stack**: Python 3.14+, Pydantic v2, AsyncIO
 
-### Goals
+### Implementation Goals
 
 - **Clean Code**: Easy to understand, review, and audit
-- **Maintainability**: SOLID principles, modern Python patterns, comprehensive tests
-- **Security**: Isolated architecture, minimal attack surface, security-first design
-- **Performance**: Optimized for low latency and high throughput
-- **Auditability**: Clear separation of concerns, well-documented code
+- **Modern Stack**: Python 3.14+, Pydantic v2, AsyncIO
+- **Security First**: Isolated architecture, minimal attack surface
+- **Full Compatibility**: Works seamlessly with reference implementation peers
 
 ### Tor Integration
 
@@ -52,7 +75,7 @@ All components are fully implemented. Future work will focus on improvements, op
 
 ### Compatibility & Feature Negotiation
 
-This implementation uses protocol v5 and is **fully backward-compatible** with the reference JoinMarket implementation from [joinmarket-clientserver](https://github.com/JoinMarket-Org/joinmarket-clientserver/). New features like Neutrino support are negotiated via the **handshake features dict**, not protocol version bumps.
+This implementation uses protocol v5 and maintains **full wire protocol compatibility** with the reference implementation. New features like Neutrino support are negotiated via the handshake features dict, not protocol version bumps.
 
 **Design principles:**
 - **Smooth rollout**: Features are adopted gradually without requiring network-wide upgrades
@@ -157,18 +180,6 @@ Lightweight SPV server using BIP157/158 compact block filters.
 - **Fast sync**: Minutes instead of days
 - **Written in Go**: Wraps lightninglabs/neutrino library
 - **REST API**: Simple HTTP interface for wallet integration
-
-## Development Philosophy
-
-- **SOLID Principles**: Clean architecture with clear separation of concerns
-- **Type Safety**: Full Pydantic models and type hints
-- **Modern Python**: Python 3.14+ features, async/await where beneficial
-- **Performance**: Optimized for low latency and high throughput
-- **Observability**: Structured logging with loguru
-- **Testability**: High test coverage with pytest
-- **Code Quality**: Pre-commit hooks with ruff for linting and formatting
-
-See more at [DOCS.md](./DOCS.md).
 
 ## Getting Started
 
