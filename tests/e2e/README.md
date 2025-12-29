@@ -217,7 +217,7 @@ The test fixture automatically clears PoDLE commitment blacklists before running
 This is necessary because:
 - PoDLE commitments are blacklisted after first use (anti-sybil protection)
 - Without clearing, subsequent test runs with the same UTXO fail
-- The blacklist file is at `/root/.joinmarket/cmtdata/commitmentlist` in JAM containers
+- The blacklist file is at `/root/.joinmarket-ng/cmtdata/commitmentlist` in JAM containers
 
 ## Running Specific Tests
 
@@ -564,8 +564,8 @@ This means the PoDLE commitment was already used in a previous coinjoin attempt.
 Solutions:
 1. **Clear the blacklist** (for testing):
    ```bash
-   docker compose exec -T jam-maker1 rm -f /root/.joinmarket/cmtdata/commitmentlist
-   docker compose exec -T jam-maker2 rm -f /root/.joinmarket/cmtdata/commitmentlist
+   docker compose exec -T jam-maker1 rm -f /root/.joinmarket-ng/cmtdata/commitmentlist
+   docker compose exec -T jam-maker2 rm -f /root/.joinmarket-ng/cmtdata/commitmentlist
    ```
 2. **Fund a fresh address** to get a new UTXO with an unused commitment
 3. **Use a different NUMS index** (the taker can rotate through indices 0-15)

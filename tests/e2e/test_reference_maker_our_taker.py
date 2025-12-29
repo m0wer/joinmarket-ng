@@ -86,7 +86,7 @@ def create_jam_maker_wallet(
     # Check if wallet already exists
     result = run_jam_maker_cmd(
         maker_id,
-        ["ls", f"/root/.joinmarket/wallets/{wallet_name}"],
+        ["ls", f"/root/.joinmarket-ng/wallets/{wallet_name}"],
         timeout=10,
     )
     if result.returncode == 0:
@@ -100,7 +100,7 @@ def create_jam_maker_wallet(
         [
             "python3",
             "/src/scripts/genwallet.py",
-            "--datadir=/root/.joinmarket",
+            "--datadir=/root/.joinmarket-ng",
             wallet_name,
             password,
         ],
@@ -146,8 +146,8 @@ def get_jam_maker_address(maker_id: int, wallet_name: str, password: str) -> str
         "bash",
         "-c",
         f"echo '{password}' | python3 /src/scripts/wallet-tool.py "
-        f"--datadir=/root/.joinmarket --wallet-password-stdin "
-        f"/root/.joinmarket/wallets/{wallet_name} display",
+        f"--datadir=/root/.joinmarket-ng --wallet-password-stdin "
+        f"/root/.joinmarket-ng/wallets/{wallet_name} display",
     ]
 
     result = subprocess.run(
@@ -324,7 +324,7 @@ def clear_podle_blacklist(maker_id: int) -> bool:
         f"jam-maker{maker_id}",
         "rm",
         "-f",
-        "/root/.joinmarket/cmtdata/commitmentlist",
+        "/root/.joinmarket-ng/cmtdata/commitmentlist",
     ]
 
     result = subprocess.run(
@@ -369,7 +369,7 @@ def cleanup_yieldgenerator(maker_id: int, wallet_name: str) -> None:
     subprocess.run(kill_cmd, capture_output=True, timeout=10, check=False)
 
     # Remove the wallet lock file if it exists
-    lock_file = f"/root/.joinmarket/wallets/.{wallet_name}.lock"
+    lock_file = f"/root/.joinmarket-ng/wallets/.{wallet_name}.lock"
     rm_cmd = [
         "docker",
         "compose",
@@ -419,8 +419,8 @@ def start_yieldgenerator(
         "bash",
         "-c",
         f"echo '{password}' | python3 /src/scripts/yg-privacyenhanced.py "
-        f"--datadir=/root/.joinmarket --wallet-password-stdin "
-        f"/root/.joinmarket/wallets/{wallet_name}",
+        f"--datadir=/root/.joinmarket-ng --wallet-password-stdin "
+        f"/root/.joinmarket-ng/wallets/{wallet_name}",
     ]
 
     logger.info(f"Starting yieldgenerator for jam-maker{maker_id}...")

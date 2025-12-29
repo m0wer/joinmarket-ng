@@ -240,8 +240,8 @@ async def test_reference_taker_coinjoin_with_our_makers(
         "bash",
         "-c",
         f"echo '{wallet_password}' | python3 /src/scripts/sendpayment.py "
-        f"--datadir=/root/.joinmarket --wallet-password-stdin "
-        f"-N 2 -m 0 /root/.joinmarket/wallets/{wallet_name} "
+        f"--datadir=/root/.joinmarket-ng --wallet-password-stdin "
+        f"-N 2 -m 0 /root/.joinmarket-ng/wallets/{wallet_name} "
         f"10000000 {dest_address} --yes",
     ]
 

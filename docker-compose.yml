@@ -157,7 +157,7 @@ services:
       - TX_FEE_CONTRIBUTION=500
       - CJ_FEE_RELATIVE=0.001
     volumes:
-      - maker-data:/home/jm/.joinmarket
+      - maker-data:/home/jm/.joinmarket-ng
     networks:
       - jm-network
     depends_on:
@@ -193,7 +193,7 @@ services:
       - MAX_CJ_FEE_REL=0.01
       - MAX_CJ_FEE_ABS=10000
     volumes:
-      - taker-data:/home/jm/.joinmarket
+      - taker-data:/home/jm/.joinmarket-ng
     networks:
       - jm-network
     depends_on:
@@ -257,7 +257,7 @@ services:
       # Fidelity bond locktime: Jan 1, 2100 (Unix timestamp)
       - FIDELITY_BOND_LOCKTIMES=4102444800
     volumes:
-      - maker1-data:/home/jm/.joinmarket
+      - maker1-data:/home/jm/.joinmarket-ng
     networks:
       - jm-network
     depends_on:
@@ -294,7 +294,7 @@ services:
       - TX_FEE_CONTRIBUTION=500
       - CJ_FEE_RELATIVE=0.00025
     volumes:
-      - maker2-data:/home/jm/.joinmarket
+      - maker2-data:/home/jm/.joinmarket-ng
     networks:
       - jm-network
     depends_on:
@@ -495,6 +495,7 @@ services:
     image: ghcr.io/joinmarket-webui/jam-standalone:v0.4.0-clientserver-v0.9.11
     container_name: jm-jam
     environment:
+      - JOINMARKET_DATA_DIR=/root/.joinmarket-ng
       - JM_RPC_HOST=jm-bitcoin-jam
       - JM_RPC_PORT=18445
       - JM_RPC_USER=test
@@ -508,7 +509,7 @@ services:
       - JM_MAX_CJ_FEE_ABS=100000
       - JM_MAX_CJ_FEE_REL=0.01
     volumes:
-      - jam-data:/root/.joinmarket
+      - jam-data:/root/.joinmarket-ng
       # Mount wallet creation automation script
       - ./tests/e2e/reference/create_wallet.exp:/scripts/create_wallet.exp:ro
     networks:
@@ -544,6 +545,7 @@ services:
     container_name: jm-jam-maker1
     restart: unless-stopped
     environment:
+      - JOINMARKET_DATA_DIR=/root/.joinmarket-ng
       - JM_RPC_HOST=jm-bitcoin-jam
       - JM_RPC_PORT=18445
       - JM_RPC_USER=test
@@ -554,7 +556,7 @@ services:
       - REMOVE_LOCK_FILES=true
       - RESTORE_DEFAULT_CONFIG=false
     volumes:
-      - jam-maker1-data:/root/.joinmarket
+      - jam-maker1-data:/root/.joinmarket-ng
       - ./tests/e2e/reference/create_wallet.exp:/scripts/create_wallet.exp:ro
     networks:
       - jm-network
@@ -588,6 +590,7 @@ services:
     container_name: jm-jam-maker2
     restart: unless-stopped
     environment:
+      - JOINMARKET_DATA_DIR=/root/.joinmarket-ng
       - JM_RPC_HOST=jm-bitcoin-jam
       - JM_RPC_PORT=18445
       - JM_RPC_USER=test
@@ -598,7 +601,7 @@ services:
       - REMOVE_LOCK_FILES=true
       - RESTORE_DEFAULT_CONFIG=false
     volumes:
-      - jam-maker2-data:/root/.joinmarket
+      - jam-maker2-data:/root/.joinmarket-ng
       - ./tests/e2e/reference/create_wallet.exp:/scripts/create_wallet.exp:ro
     networks:
       - jm-network
@@ -675,7 +678,7 @@ services:
       - TX_FEE_CONTRIBUTION=500
       - CJ_FEE_RELATIVE=0.001
     volumes:
-      - maker-neutrino-data:/home/jm/.joinmarket
+      - maker-neutrino-data:/home/jm/.joinmarket-ng
     networks:
       - jm-network
     depends_on:
@@ -709,7 +712,7 @@ services:
       - MAX_CJ_FEE_REL=0.01
       - MAX_CJ_FEE_ABS=10000
     volumes:
-      - taker-neutrino-data:/home/jm/.joinmarket
+      - taker-neutrino-data:/home/jm/.joinmarket-ng
     networks:
       - jm-network
     depends_on:

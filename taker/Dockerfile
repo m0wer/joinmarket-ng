@@ -44,10 +44,10 @@ USER jm
 
 # Create data directory for JoinMarket files
 # This includes commitment blacklist, history, and other persistent data
-RUN mkdir -p /home/jm/.joinmarket && chmod 700 /home/jm/.joinmarket
+RUN mkdir -p /home/jm/.joinmarket-ng && chmod 700 /home/jm/.joinmarket-ng
 
 # Declare volume for persistent data
-VOLUME /home/jm/.joinmarket
+VOLUME /home/jm/.joinmarket-ng
 
 # Environment variables
 ENV NETWORK=mainnet
@@ -90,7 +90,7 @@ ENV DIRECTORY_SERVERS=
 ENV SENSITIVE_LOGGING=
 
 # Data directory for JoinMarket files (commitment blacklist, history)
-# Set to /home/jm/.joinmarket to use the volume mount
-ENV JOINMARKET_DATA_DIR=/home/jm/.joinmarket
+# Set to /home/jm/.joinmarket-ng to use the volume mount
+ENV JOINMARKET_DATA_DIR=/home/jm/.joinmarket-ng
 
 CMD ["jm-taker", "--help"]

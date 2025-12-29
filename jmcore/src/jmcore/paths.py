@@ -19,7 +19,7 @@ def get_default_data_dir() -> Path:
     Creates the directory if it doesn't exist.
 
     For compatibility with reference JoinMarket in Docker, users can
-    set JOINMARKET_DATA_DIR=/home/jm/.joinmarket to share the same volume.
+    set JOINMARKET_DATA_DIR=/home/jm/.joinmarket-ng to share the same volume.
     """
     env_path = os.getenv("JOINMARKET_DATA_DIR")
     data_dir = Path(env_path) if env_path else Path.home() / ".joinmarket-ng"

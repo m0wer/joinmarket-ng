@@ -195,7 +195,7 @@ def wait_for_services(timeout: int = STARTUP_TIMEOUT) -> bool:
 
 def cleanup_wallet_lock(wallet_name: str = "test_wallet.jmdat") -> None:
     """Remove stale wallet lock file if it exists."""
-    lock_file = f"/root/.joinmarket/wallets/.{wallet_name}.lock"
+    lock_file = f"/root/.joinmarket-ng/wallets/.{wallet_name}.lock"
     result = run_jam_cmd(["rm", "-f", lock_file], timeout=10)
     if result.returncode == 0:
         logger.debug(f"Cleaned up lock file: {lock_file}")
@@ -214,7 +214,7 @@ def create_jam_wallet(
 
     # Check if wallet already exists
     result = run_jam_cmd(
-        ["ls", f"/root/.joinmarket/wallets/{wallet_name}"],
+        ["ls", f"/root/.joinmarket-ng/wallets/{wallet_name}"],
         timeout=30,
     )
     if result.returncode == 0:
@@ -273,9 +273,9 @@ def get_jam_wallet_address(
         "bash",
         "-c",
         f"echo '{password}' | python3 /src/scripts/wallet-tool.py "
-        f"--datadir=/root/.joinmarket "
+        f"--datadir=/root/.joinmarket-ng "
         f"--wallet-password-stdin "
-        f"/root/.joinmarket/wallets/{wallet_name} display",
+        f"/root/.joinmarket-ng/wallets/{wallet_name} display",
     ]
 
     logger.debug(f"Getting address with command: {' '.join(cmd)}")
@@ -679,8 +679,8 @@ async def test_execute_reference_coinjoin(funded_jam_wallet):
         "bash",
         "-c",
         f"echo '{wallet_password}' | python3 /src/scripts/sendpayment.py "
-        f"--datadir=/root/.joinmarket --wallet-password-stdin "
-        f"-N 2 -m 0 /root/.joinmarket/wallets/{wallet_name} "
+        f"--datadir=/root/.joinmarket-ng --wallet-password-stdin "
+        f"-N 2 -m 0 /root/.joinmarket-ng/wallets/{wallet_name} "
         f"10000000 {dest_address} --yes",
     ]
 

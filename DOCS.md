@@ -84,7 +84,7 @@ JoinMarket NG uses a dedicated data directory for persistent files that need to 
 - Override with `--data-dir` CLI flag or `$JOINMARKET_DATA_DIR` environment variable
 
 **Docker usage:**
-- Default: `/home/jm/.joinmarket` (mounted as volume)
+- Default: `/home/jm/.joinmarket-ng` (mounted as volume)
 - Volumes persist across container restarts
 - Makers and takers can share volumes for commitment blacklist
 
