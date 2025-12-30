@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from coincurve import PrivateKey
 from jmcore.bond_calc import calculate_timelocked_fidelity_bond_value
+from jmcore.crypto import bitcoin_message_hash
 from jmwallet.wallet.service import WalletService
 from loguru import logger
 
@@ -189,29 +190,6 @@ def _pad_signature(sig_der: bytes, target_len: int = 72) -> bytes:
     return sig_der.rjust(target_len, b"\xff")
 
 
-def _bitcoin_message_hash(message: bytes) -> bytes:
-    """
-    Hash a message using Bitcoin's message signing format.
-
-    Format: SHA256(SHA256("\\x18Bitcoin Signed Message:\\n" + varint(len) + message))
-
-    This matches the reference implementation's signing format.
-    """
-    prefix = b"\x18Bitcoin Signed Message:\n"
-    msg_len = len(message)
-    if msg_len < 253:
-        varint = bytes([msg_len])
-    elif msg_len < 0x10000:
-        varint = b"\xfd" + msg_len.to_bytes(2, "little")
-    elif msg_len < 0x100000000:
-        varint = b"\xfe" + msg_len.to_bytes(4, "little")
-    else:
-        varint = b"\xff" + msg_len.to_bytes(8, "little")
-
-    full_msg = prefix + varint + message
-    return hashlib.sha256(hashlib.sha256(full_msg).digest()).digest()
-
-
 def _sign_message_bitcoin(private_key: PrivateKey, message: bytes) -> bytes:
     """
     Sign a message using Bitcoin message signing format.
@@ -223,7 +201,7 @@ def _sign_message_bitcoin(private_key: PrivateKey, message: bytes) -> bytes:
     Returns:
         DER-encoded signature
     """
-    msg_hash = _bitcoin_message_hash(message)
+    msg_hash = bitcoin_message_hash(message)
     return private_key.sign(msg_hash, hasher=None)
 
 

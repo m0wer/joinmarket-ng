@@ -1549,12 +1549,12 @@ def generate_certificate(
     )
 
     # Sign with Bitcoin message format
-    from maker.fidelity import _bitcoin_message_hash
-
     from coincurve import PrivateKey
 
-    privkey = PrivateKey(key.private_key)
-    msg_hash = _bitcoin_message_hash(cert_msg)
+    from jmcore.crypto import bitcoin_message_hash
+
+    privkey = key.private_key  # HDKey.private_key returns PrivateKey object
+    msg_hash = bitcoin_message_hash(cert_msg)
     cert_signature = privkey.sign(msg_hash, hasher=None)
 
     print("\n" + "=" * 80)
@@ -1645,13 +1645,14 @@ def import_certificate(
 
     # Verify certificate signature
     from coincurve import PublicKey
-    from maker.fidelity import _bitcoin_message_hash
+
+    from jmcore.crypto import bitcoin_message_hash
 
     try:
         cert_msg = (
             b"fidelity-bond-cert|" + cert_pubkey_bytes + b"|" + str(cert_expiry).encode("ascii")
         )
-        msg_hash = _bitcoin_message_hash(cert_msg)
+        msg_hash = bitcoin_message_hash(cert_msg)
 
         # Get the bond's utxo pubkey to verify
         utxo_pubkey = bytes.fromhex(bond.pubkey)
