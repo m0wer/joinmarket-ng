@@ -34,11 +34,12 @@ Tests use pytest markers to organize by Docker profile:
 - **Naming**: `snake_case` for functions/vars, `PascalCase` for classes/models.
 - **Error Handling**: Use descriptive custom exceptions (inheriting from `Exception`).
 
-## Gerneral Guidelines
+## General Guidelines
 - Check the documentation at README.md and DOCS.md.
 - Add tests and verify the new and existing tests pass, you can use the docker compose setup.
 - Improve the documentation as needed.
-- Don't break backwards compatinbility, even with the reference implementation. Use feature flags if needed.
+- Don't break backwards compatibility even with the reference implementation. Use feature flags if needed.
+- Use external reputable libraries when appropriate, avoid reinventing the wheel.
 
 ## Project Structure
 Monorepo with `src/` layout. Root `pytest.ini` handles global tests.
