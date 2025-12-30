@@ -125,6 +125,30 @@ jm-wallet info --mnemonic-file ~/.joinmarket-ng/wallets/wallet.mnemonic --backen
 jm-wallet list-bonds --mnemonic-file ~/.joinmarket-ng/wallets/wallet.mnemonic
 ```
 
+### Fee Configuration
+
+The `send` command supports flexible fee rate configuration:
+
+```bash
+# Auto-estimate fee from Bitcoin Core (default: 3 blocks)
+jm-wallet send bc1q... --amount 100000 --mnemonic-file wallet.mnemonic
+
+# Custom block target for fee estimation (faster = higher fee)
+jm-wallet send bc1q... --amount 100000 --fee-block-target 1
+
+# Manual fee rate (supports sub-1 sat/vB for low priority)
+jm-wallet send bc1q... --amount 100000 --fee-rate 0.5
+
+# Manual fee rate for high priority
+jm-wallet send bc1q... --amount 100000 --fee-rate 10.0
+```
+
+**Fee Estimation Behavior:**
+- **Default**: Automatically estimates from Bitcoin Core for 3-block confirmation
+- **`--fee-block-target N`**: Estimate for N-block confirmation (1=fast/expensive, 6+=slow/cheap)
+- **`--fee-rate X`**: Override with manual rate in sat/vB (supports decimals like 0.5 or 1.5)
+- **Fallback**: Uses 1 sat/vB when estimation unavailable
+
 ### All Commands
 
 ```bash
@@ -132,6 +156,7 @@ jm-wallet --help
 jm-wallet generate --help
 jm-wallet info --help
 jm-wallet list-bonds --help
+jm-wallet send --help
 ```
 
 ## Features

@@ -385,7 +385,7 @@ class NeutrinoBackend(BlockchainBackend):
             logger.warning(f"Error verifying tx output {txid}:{vout}: {e}")
             return False
 
-    async def estimate_fee(self, target_blocks: int) -> int:
+    async def estimate_fee(self, target_blocks: int) -> float:
         """
         Estimate fee in sat/vbyte for target confirmation blocks.
 
@@ -402,20 +402,20 @@ class NeutrinoBackend(BlockchainBackend):
             fee_rate = result.get("fee_rate", 0)
             if fee_rate > 0:
                 logger.debug(f"Estimated fee for {target_blocks} blocks: {fee_rate} sat/vB")
-                return int(fee_rate)
+                return float(fee_rate)
 
         except Exception as e:
             logger.warning(f"Fee estimation failed: {e}")
 
         # Fallback fee rates based on target
         if target_blocks <= 1:
-            return 20
+            return 5.0
         elif target_blocks <= 3:
-            return 10
+            return 2.0
         elif target_blocks <= 6:
-            return 5
+            return 1.5
         else:
-            return 2
+            return 1.0
 
     async def get_block_height(self) -> int:
         """Get current blockchain height from neutrino."""

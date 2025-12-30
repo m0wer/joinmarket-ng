@@ -685,7 +685,13 @@ def send(
     mnemonic_file: Annotated[Path | None, typer.Option("--mnemonic-file", "-f")] = None,
     password: Annotated[str | None, typer.Option("--password", "-p")] = None,
     mixdepth: Annotated[int, typer.Option("--mixdepth", "-m", help="Source mixdepth")] = 0,
-    fee_rate: Annotated[int, typer.Option("--fee-rate", help="Fee rate in sat/vB")] = 10,
+    fee_rate: Annotated[
+        float | None,
+        typer.Option("--fee-rate", help="Fee rate in sat/vB (default: auto-estimate)"),
+    ] = None,
+    fee_block_target: Annotated[
+        int, typer.Option("--fee-block-target", help="Target blocks for fee estimation")
+    ] = 3,
     network: Annotated[str, typer.Option("--network", "-n")] = "mainnet",
     rpc_url: Annotated[
         str, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")
@@ -716,6 +722,7 @@ def send(
             amount,
             mixdepth,
             fee_rate,
+            fee_block_target,
             network,
             rpc_url,
             rpc_user,
@@ -731,7 +738,8 @@ async def _send_transaction(
     destination: str,
     amount: int,
     mixdepth: int,
-    fee_rate: int,
+    fee_rate: float | None,
+    fee_block_target: int,
     network: str,
     rpc_url: str,
     rpc_user: str,
@@ -763,6 +771,16 @@ async def _send_transaction(
     try:
         await wallet.sync_all()
 
+        # Estimate fee if not provided
+        if fee_rate is None:
+            fee_rate = await backend.estimate_fee(fee_block_target)
+            logger.info(
+                f"Using auto-estimated fee rate: {fee_rate} sat/vB "
+                f"(target: {fee_block_target} blocks)"
+            )
+        else:
+            logger.info(f"Using manual fee rate: {fee_rate} sat/vB")
+
         balance = await wallet.get_balance(mixdepth)
         logger.info(f"Mixdepth {mixdepth} balance: {balance:,} sats")
 
@@ -788,7 +806,7 @@ async def _send_transaction(
         num_inputs = len(utxos)
         num_outputs = 2 if amount > 0 else 1  # destination + optional change
         estimated_vsize = 11 + num_inputs * 68 + num_outputs * 31
-        estimated_fee = estimated_vsize * fee_rate
+        estimated_fee = int(estimated_vsize * fee_rate)
 
         if amount == 0:
             # Sweep: subtract fee from send amount
@@ -809,7 +827,7 @@ async def _send_transaction(
                 num_outputs = 1
 
         logger.info(f"Sending {send_amount:,} sats to {destination}")
-        logger.info(f"Fee: {estimated_fee:,} sats ({fee_rate} sat/vB)")
+        logger.info(f"Fee: {estimated_fee:,} sats ({fee_rate:.2f} sat/vB)")
         if change_amount > 0:
             logger.info(f"Change: {change_amount:,} sats")
 
@@ -825,7 +843,7 @@ async def _send_transaction(
                 additional_info={
                     "Source Mixdepth": mixdepth,
                     "Change": f"{change_amount:,} sats" if change_amount > 0 else "None",
-                    "Fee Rate": f"{fee_rate} sat/vB",
+                    "Fee Rate": f"{fee_rate:.2f} sat/vB",
                 },
                 skip_confirmation=skip_confirmation,
             )

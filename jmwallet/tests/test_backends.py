@@ -6,8 +6,107 @@ import pytest
 from jmcore.crypto import KeyPair
 
 from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
+from jmwallet.backends.mempool import MempoolBackend
 from jmwallet.backends.neutrino import NeutrinoBackend, NeutrinoConfig
 from jmwallet.wallet.address import pubkey_to_p2wpkh_address
+
+
+class TestFeeEstimation:
+    """Unit tests for fee estimation (non-Docker)."""
+
+    @pytest.mark.asyncio
+    async def test_bitcoin_core_fallback_fee_is_float(self):
+        """Test that Bitcoin Core backend returns float fallback fee."""
+        from unittest.mock import AsyncMock
+
+        backend = BitcoinCoreBackend(
+            rpc_url="http://localhost:18443", rpc_user="test", rpc_password="test"
+        )
+        # Mock _rpc_call to simulate fee estimation unavailable
+        backend._rpc_call = AsyncMock(return_value={})
+
+        fee = await backend.estimate_fee(3)
+        assert isinstance(fee, float)
+        assert fee == 1.0
+        await backend.close()
+
+    @pytest.mark.asyncio
+    async def test_bitcoin_core_estimated_fee_is_float(self):
+        """Test that Bitcoin Core backend returns float from estimation."""
+        from unittest.mock import AsyncMock
+
+        backend = BitcoinCoreBackend(
+            rpc_url="http://localhost:18443", rpc_user="test", rpc_password="test"
+        )
+        # Mock _rpc_call to return a fee rate
+        # Bitcoin Core returns BTC/kB, we convert to sat/vB
+        backend._rpc_call = AsyncMock(return_value={"feerate": 0.00001})
+
+        fee = await backend.estimate_fee(3)
+        assert isinstance(fee, float)
+        assert abs(fee - 1.0) < 0.01  # Allow for floating point precision
+        await backend.close()
+
+    @pytest.mark.asyncio
+    async def test_mempool_backend_fallback_fee_is_float(self):
+        """Test that Mempool backend returns float fallback fee."""
+        import httpx
+        from unittest.mock import AsyncMock, MagicMock
+
+        backend = MempoolBackend(base_url="https://mempool.space/api")
+        # Mock the client.get to raise an HTTPError
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock(side_effect=httpx.HTTPError("Network error"))
+        backend.client = MagicMock()
+        backend.client.get = AsyncMock(return_value=mock_response)
+        backend.client.aclose = AsyncMock()
+
+        fee = await backend.estimate_fee(6)
+        assert isinstance(fee, float)
+        assert fee == 1.0
+        await backend.close()
+
+    @pytest.mark.asyncio
+    async def test_neutrino_backend_fallback_fees_are_float(self):
+        """Test that Neutrino backend returns float fallback fees."""
+        from unittest.mock import AsyncMock
+
+        backend = NeutrinoBackend(neutrino_url="http://localhost:8334")
+        # Mock _api_call to simulate fee estimation unavailable
+        backend._api_call = AsyncMock(side_effect=Exception("API error"))
+
+        # Test different block targets
+        fee_1 = await backend.estimate_fee(1)
+        fee_3 = await backend.estimate_fee(3)
+        fee_6 = await backend.estimate_fee(6)
+        fee_12 = await backend.estimate_fee(12)
+
+        assert isinstance(fee_1, float)
+        assert isinstance(fee_3, float)
+        assert isinstance(fee_6, float)
+        assert isinstance(fee_12, float)
+
+        # Verify fallback values
+        assert fee_1 == 5.0
+        assert fee_3 == 2.0
+        assert fee_6 == 1.5
+        assert fee_12 == 1.0
+
+        await backend.close()
+
+    @pytest.mark.asyncio
+    async def test_neutrino_backend_supports_sub_1_sat_vb(self):
+        """Test that Neutrino backend can return sub-1 sat/vB fees."""
+        from unittest.mock import AsyncMock
+
+        backend = NeutrinoBackend(neutrino_url="http://localhost:8334")
+        # Mock _api_call to return a sub-1 sat/vB fee
+        backend._api_call = AsyncMock(return_value={"fee_rate": 0.5})
+
+        fee = await backend.estimate_fee(6)
+        assert isinstance(fee, float)
+        assert fee == 0.5
+        await backend.close()
 
 
 @pytest.mark.docker
@@ -65,6 +164,15 @@ async def test_bitcoin_core_backend_integration():
         # Test estimate_fee
         fee = await backend.estimate_fee(2)
         assert fee > 0
+        assert isinstance(fee, float), "Fee should be a float"
+
+        # Test estimate_fee with different block targets
+        fee_1_block = await backend.estimate_fee(1)
+        fee_6_blocks = await backend.estimate_fee(6)
+        assert isinstance(fee_1_block, float)
+        assert isinstance(fee_6_blocks, float)
+        # Note: In regtest, fee estimation might not be very meaningful,
+        # but the function should still return valid float values
 
     finally:
         await backend.close()
@@ -248,6 +356,14 @@ async def test_neutrino_backend_integration():
         # Test fee estimation (fallback values)
         fee = await backend.estimate_fee(6)
         assert fee > 0
+        assert isinstance(fee, float), "Fee should be a float"
+
+        # Test that different block targets return different or valid rates
+        fee_1 = await backend.estimate_fee(1)
+        fee_3 = await backend.estimate_fee(3)
+        assert isinstance(fee_1, float)
+        assert isinstance(fee_3, float)
+        assert fee_1 > 0 and fee_3 > 0
 
         # Test watching a valid bech32 address (valid P2WPKH)
         # Use a known valid regtest address

@@ -575,7 +575,7 @@ class Taker:
                 estimated_inputs = len(self.preselected_utxos) + n_makers * 2
                 # CJ outputs + maker changes (no taker change in sweep!)
                 estimated_outputs = 1 + n_makers + n_makers
-                estimated_tx_fee = self._estimate_tx_fee(estimated_inputs, estimated_outputs)
+                estimated_tx_fee = await self._estimate_tx_fee(estimated_inputs, estimated_outputs)
 
                 # Use sweep order selection - this calculates exact cj_amount for zero change
                 selected_offers, self.cj_amount, total_fee = (
@@ -616,7 +616,7 @@ class Taker:
                 # We'll refine this in _phase_build_tx once we have exact maker UTXOs
                 estimated_inputs = 2 + len(selected_offers) * 2  # Rough estimate
                 estimated_outputs = 2 + len(selected_offers) * 2
-                estimated_tx_fee = self._estimate_tx_fee(estimated_inputs, estimated_outputs)
+                estimated_tx_fee = await self._estimate_tx_fee(estimated_inputs, estimated_outputs)
                 estimated_required = self.cj_amount + total_fee + estimated_tx_fee
 
                 # Pre-select UTXOs for the CoinJoin
@@ -1191,7 +1191,7 @@ class Taker:
                 # Normal mode: include taker change
                 num_outputs = 1 + len(self.maker_sessions) + 1 + len(self.maker_sessions)
 
-            tx_fee = self._estimate_tx_fee(num_inputs, num_outputs)
+            tx_fee = await self._estimate_tx_fee(num_inputs, num_outputs)
 
             preselected_total = sum(u.value for u in self.preselected_utxos)
 
@@ -1338,11 +1338,12 @@ class Taker:
             logger.error(f"Failed to build transaction: {e}")
             return False
 
-    def _estimate_tx_fee(self, num_inputs: int, num_outputs: int) -> int:
+    async def _estimate_tx_fee(self, num_inputs: int, num_outputs: int) -> int:
         """Estimate transaction fee."""
         # P2WPKH: ~68 vbytes per input, 31 vbytes per output, ~11 overhead
         vsize = num_inputs * 68 + num_outputs * 31 + 11
-        fee_rate = 10  # sat/vbyte, should come from backend
+        # Get fee rate from backend (default 3 blocks)
+        fee_rate = await self.backend.estimate_fee(3)
         return int(vsize * fee_rate * self.config.tx_fee_factor)
 
     def _get_taker_cj_output_index(self) -> int | None:

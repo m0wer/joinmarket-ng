@@ -69,7 +69,7 @@ class BlockchainBackend(ABC):
         """Get transaction by txid"""
 
     @abstractmethod
-    async def estimate_fee(self, target_blocks: int) -> int:
+    async def estimate_fee(self, target_blocks: int) -> float:
         """Estimate fee in sat/vbyte for target confirmation blocks"""
 
     @abstractmethod
