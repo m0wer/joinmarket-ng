@@ -95,24 +95,20 @@ def sats_to_btc(sats: int) -> float:
 
 def format_amount(sats: int, include_unit: bool = True) -> str:
     """
-    Format satoshi amount as BTC string.
+    Format satoshi amount as string.
+    Default: '1,000,000 sats (0.01000000 BTC)'
 
     Args:
         sats: Amount in satoshis
-        include_unit: Whether to include "BTC" suffix
+        include_unit: Whether to include units and BTC conversion
 
     Returns:
-        Formatted string (e.g. "0.00000001 BTC")
+        Formatted string
     """
-    btc_val = sats_to_btc(sats)
-    # Format with up to 8 decimal places, removing trailing zeros
-    formatted = f"{btc_val:.8f}".rstrip("0").rstrip(".")
-    if formatted == "":
-        formatted = "0"
-
     if include_unit:
-        return f"{formatted} BTC"
-    return formatted
+        btc_val = sats_to_btc(sats)
+        return f"{sats:,} sats ({btc_val:.8f} BTC)"
+    return f"{sats:,}"
 
 
 def validate_satoshi_amount(sats: int) -> None:

@@ -791,7 +791,17 @@ async def _send_transaction(
         total_input = sum(u.value for u in utxos)
         num_inputs = len(utxos)
         num_outputs = 2 if amount > 0 else 1  # destination + optional change
-        estimated_vsize = 11 + num_inputs * 68 + num_outputs * 31
+
+        # Estimate output size based on destination address length
+        # P2WPKH (42 chars) -> 31 vbytes
+        # P2WSH (62 chars) -> 43 vbytes
+        dest_output_size = 43 if len(destination) > 50 else 31
+        change_output_size = 31
+
+        estimated_vsize = 11 + num_inputs * 68 + dest_output_size
+        if num_outputs > 1:
+            estimated_vsize += change_output_size
+
         estimated_fee = estimated_vsize * fee_rate
 
         if amount == 0:
@@ -811,11 +821,17 @@ async def _send_transaction(
                 estimated_fee += change_amount
                 change_amount = 0
                 num_outputs = 1
+                # Re-estimate without change output
+                estimated_vsize -= change_output_size
+                estimated_fee = estimated_vsize * fee_rate
 
-        logger.info(f"Sending {send_amount:,} sats to {destination}")
-        logger.info(f"Fee: {estimated_fee:,} sats ({fee_rate} sat/vB)")
+        # Use new format_amount for display
+        from jmcore.bitcoin import format_amount
+
+        logger.info(f"Sending {format_amount(send_amount)} to {destination}")
+        logger.info(f"Fee: {format_amount(estimated_fee)} ({fee_rate} sat/vB)")
         if change_amount > 0:
-            logger.info(f"Change: {change_amount:,} sats")
+            logger.info(f"Change: {format_amount(change_amount)}")
 
         # Prompt for confirmation before building transaction
         from jmcore.confirmation import confirm_transaction
@@ -828,7 +844,7 @@ async def _send_transaction(
                 fee=estimated_fee,
                 additional_info={
                     "Source Mixdepth": mixdepth,
-                    "Change": f"{change_amount:,} sats" if change_amount > 0 else "None",
+                    "Change": format_amount(change_amount) if change_amount > 0 else "None",
                     "Fee Rate": f"{fee_rate} sat/vB",
                 },
                 skip_confirmation=skip_confirmation,
