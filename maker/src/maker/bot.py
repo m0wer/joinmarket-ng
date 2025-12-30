@@ -271,21 +271,23 @@ class MakerBot:
             onion_host = self.config.onion_host
 
             logger.info("Connecting to directory servers...")
-            for dir_server in self.config.directory_servers:
+
+            # Advertise neutrino_compat if our backend can provide extended UTXO metadata.
+            # This tells Neutrino takers that we can provide scriptpubkey and blockheight.
+            # Full nodes (Bitcoin Core) can provide this; light clients (Neutrino) cannot.
+            neutrino_compat = self.backend.can_provide_neutrino_metadata()
+
+            # Determine location for handshake:
+            # If we have an onion_host configured (static or ephemeral), advertise it
+            # Otherwise, use NOT-SERVING-ONION
+            location = onion_host or "NOT-SERVING-ONION"
+
+            async def connect_to_directory(dir_server: str) -> tuple[str, DirectoryClient | None]:
+                """Connect to a single directory server."""
                 try:
                     parts = dir_server.split(":")
                     host = parts[0]
                     port = int(parts[1]) if len(parts) > 1 else 5222
-
-                    # Determine location for handshake:
-                    # If we have an onion_host configured (static or ephemeral), advertise it
-                    # Otherwise, use NOT-SERVING-ONION
-                    location = onion_host or "NOT-SERVING-ONION"
-
-                    # Advertise neutrino_compat if our backend can provide extended UTXO metadata.
-                    # This tells Neutrino takers that we can provide scriptpubkey and blockheight.
-                    # Full nodes (Bitcoin Core) can provide this; light clients (Neutrino) cannot.
-                    neutrino_compat = self.backend.can_provide_neutrino_metadata()
 
                     # Create DirectoryClient with SOCKS config for Tor connections
                     client = DirectoryClient(
@@ -301,12 +303,25 @@ class MakerBot:
 
                     await client.connect()
                     node_id = f"{host}:{port}"
-                    self.directory_clients[node_id] = client
-
                     logger.info(f"Connected to directory: {dir_server}")
+                    return node_id, client
 
                 except Exception as e:
                     logger.error(f"Failed to connect to {dir_server}: {e}")
+                    return "", None
+
+            # Connect to all directory servers simultaneously
+            connection_tasks = [connect_to_directory(ds) for ds in self.config.directory_servers]
+            results = await asyncio.gather(*connection_tasks, return_exceptions=True)
+
+            # Process results
+            for result in results:
+                if isinstance(result, BaseException):
+                    logger.error(f"Directory connection raised exception: {result}")
+                    continue
+                node_id, client = result
+                if client is not None:
+                    self.directory_clients[node_id] = client
 
             if not self.directory_clients:
                 logger.error("Failed to connect to any directory server")
