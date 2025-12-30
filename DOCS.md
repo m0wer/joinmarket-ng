@@ -865,6 +865,55 @@ UTXO keypair (cold) → signs → certificate (hot) → signs → nick proofs (p
 
 Allows cold storage of bond privkey while hot wallet handles per-session proofs.
 
+#### Cold Wallet Setup
+
+For maximum security, fidelity bonds can use a certificate chain that keeps the bond UTXO private key offline:
+
+1. **Generate hot wallet keypair** (on hot wallet):
+   ```bash
+   jm-wallet generate-hot-keypair
+   ```
+   This creates a random keypair. Store the private key securely, and note the public key for the next step.
+
+2. **Generate certificate** (on cold wallet with bond mnemonic):
+   ```bash
+   jm-wallet generate-certificate \
+     --mnemonic-file cold-wallet.enc \
+     --password "..." \
+     --index 0 \
+     --locktime-date "2026-01-01" \
+     --cert-pubkey <hot_wallet_pubkey> \
+     --cert-expiry-blocks 104832  # ~2 years
+   ```
+   This signs a certificate binding the hot wallet public key to the bond UTXO, using the cold wallet's private key.
+
+3. **Import certificate** (on hot wallet):
+   ```bash
+   jm-wallet import-certificate <bond_address> \
+     --cert-pubkey <hot_wallet_pubkey> \
+     --cert-privkey <hot_wallet_privkey> \
+     --cert-signature <signature_from_step_2> \
+     --cert-expiry 52  # Periods (from step 2)
+   ```
+   This imports the certificate into the hot wallet's bond registry.
+
+4. **Run maker** (on hot wallet):
+   ```bash
+   jm-maker start --mnemonic-file hot-wallet.enc
+   ```
+   The maker will automatically detect the certificate and use it to create bond proofs without needing the cold wallet's private key.
+
+**Security benefits:**
+- Bond UTXO private key never touches the online machine
+- Certificate expires after a configurable period (default ~2 years)
+- If hot wallet is compromised, attacker can only impersonate the bond until expiry
+- Bond funds remain safe in cold storage
+
+**Certificate expiry:**
+- Specified in 2016-block periods (Bitcoin difficulty adjustment period)
+- Example: `cert_expiry=52` means 52 × 2016 = 104,832 blocks ≈ 2 years
+- After expiry, generate a new certificate to continue using the bond
+
 ### Context-Specific Verification
 
 - **Public offers** (PUBMSG): Maker self-signs using own nick as taker
