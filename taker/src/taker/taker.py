@@ -238,6 +238,7 @@ class TakerState(str, Enum):
     BROADCASTING = "broadcasting"
     COMPLETE = "complete"
     FAILED = "failed"
+    CANCELLED = "cancelled"  # User cancelled the operation
 
 
 @dataclass
@@ -269,6 +270,7 @@ class Taker:
         wallet: WalletService,
         backend: BlockchainBackend,
         config: TakerConfig,
+        confirmation_callback: Any | None = None,
     ):
         """
         Initialize the Taker.
@@ -277,10 +279,12 @@ class Taker:
             wallet: Wallet service for UTXO management and signing
             backend: Blockchain backend for broadcasting
             config: Taker configuration
+            confirmation_callback: Optional callback for user confirmation before proceeding
         """
         self.wallet = wallet
         self.backend = backend
         self.config = config
+        self.confirmation_callback = confirmation_callback
 
         self.nick_identity = NickIdentity(JM_VERSION)
         self.nick = self.nick_identity.nick
@@ -639,6 +643,37 @@ class Taker:
             logger.info(
                 f"Selected {len(self.maker_sessions)} makers, total fee: {total_fee:,} sats"
             )
+
+            # Prompt for confirmation after maker selection
+            if hasattr(self, "confirmation_callback") and self.confirmation_callback:
+                try:
+                    # Build maker details for confirmation
+                    maker_details = []
+                    for nick, session in self.maker_sessions.items():
+                        fee = session.offer.calculate_fee(self.cj_amount)
+                        bond_value = session.offer.fidelity_bond_value
+                        maker_details.append(
+                            {
+                                "nick": nick,
+                                "fee": fee,
+                                "bond_value": bond_value,
+                            }
+                        )
+
+                    confirmed = self.confirmation_callback(
+                        maker_details=maker_details,
+                        cj_amount=self.cj_amount,
+                        total_fee=total_fee,
+                        destination=destination,
+                    )
+                    if not confirmed:
+                        logger.info("CoinJoin cancelled by user")
+                        self.state = TakerState.CANCELLED
+                        return None
+                except Exception as e:
+                    logger.error(f"Confirmation failed: {e}")
+                    self.state = TakerState.FAILED
+                    return None
 
             def get_private_key(addr: str) -> bytes | None:
                 key = self.wallet.get_key_for_address(addr)
