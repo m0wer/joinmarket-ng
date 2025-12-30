@@ -6,12 +6,38 @@ Creates and manages liquidity offers based on wallet balance and configuration.
 
 from __future__ import annotations
 
+import random
+
 from jmcore.models import Offer, OfferType
 from jmwallet.wallet.service import WalletService
 from loguru import logger
 
 from maker.config import MakerConfig
 from maker.fidelity import get_best_fidelity_bond
+
+
+def randomize_value(value: int | float, percent: float, is_float: bool = False) -> int | float:
+    """
+    Randomize a value by +/- a percentage.
+
+    Args:
+        value: Base value to randomize
+        percent: Maximum percentage variation (e.g., 0.2 for ±20%)
+        is_float: If True, return float; otherwise return int
+
+    Returns:
+        Randomized value
+    """
+    if percent <= 0:
+        return value
+
+    # Random factor between (1 - percent) and (1 + percent)
+    factor = 1 + random.uniform(-percent, percent)
+    result = value * factor
+
+    if is_float:
+        return result
+    return int(result)
 
 
 class OfferManager:
@@ -62,22 +88,63 @@ class OfferManager:
                 return []
 
             if self.config.offer_type in (OfferType.SW0_RELATIVE, OfferType.SWA_RELATIVE):
-                cjfee = self.config.cj_fee_relative
+                cj_fee_base = float(self.config.cj_fee_relative)
 
                 # Validate cj_fee_relative to prevent division by zero
-                cj_fee_float = float(self.config.cj_fee_relative)
-                if cj_fee_float <= 0:
+                if cj_fee_base <= 0:
                     logger.error(
                         f"Invalid cj_fee_relative: {self.config.cj_fee_relative}. "
                         "Must be > 0 for relative offer types."
                     )
                     return []
 
-                min_size_for_profit = int(1.5 * self.config.tx_fee_contribution / cj_fee_float)
+                # Apply fee randomization if enabled
+                if self.config.randomize_offer_fee:
+                    cj_fee_randomized = randomize_value(
+                        cj_fee_base, self.config.fee_randomization_percent, is_float=True
+                    )
+                    # Ensure it stays positive
+                    cj_fee_randomized = max(cj_fee_randomized, cj_fee_base * 0.5)
+                    cjfee = f"{cj_fee_randomized:.6f}"
+                    logger.debug(
+                        f"Randomized relative fee: {self.config.cj_fee_relative} -> {cjfee}"
+                    )
+                else:
+                    cjfee = self.config.cj_fee_relative
+
+                min_size_for_profit = int(1.5 * self.config.tx_fee_contribution / cj_fee_base)
                 min_size = max(min_size_for_profit, self.config.min_size)
             else:
-                cjfee = str(self.config.cj_fee_absolute)
+                # Absolute fee
+                cj_fee_base = self.config.cj_fee_absolute
+
+                # Apply fee randomization if enabled
+                if self.config.randomize_offer_fee:
+                    cj_fee_randomized = randomize_value(
+                        cj_fee_base, self.config.fee_randomization_percent, is_float=False
+                    )
+                    # Ensure it stays positive and reasonable
+                    cj_fee_randomized = max(int(cj_fee_randomized), cj_fee_base // 2)
+                    cjfee = str(cj_fee_randomized)
+                    logger.debug(f"Randomized absolute fee: {cj_fee_base} -> {cjfee}")
+                else:
+                    cjfee = str(cj_fee_base)
+
                 min_size = self.config.min_size
+
+            # Apply size randomization if enabled
+            if self.config.randomize_offer_size:
+                min_size = randomize_value(min_size, self.config.size_randomization_percent)
+                max_available = randomize_value(
+                    max_available, self.config.size_randomization_percent
+                )
+                # Ensure min_size < max_available
+                if min_size >= max_available:
+                    min_size = int(max_available * 0.5)
+                logger.debug(
+                    f"Randomized sizes: min={min_size:,} max={max_available:,} "
+                    f"(±{self.config.size_randomization_percent * 100}%)"
+                )
 
             # Get fidelity bond value if available
             fidelity_bond_value = 0
