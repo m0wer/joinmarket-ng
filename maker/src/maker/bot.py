@@ -308,7 +308,8 @@ class MakerBot:
 
                 except Exception as e:
                     logger.error(f"Failed to connect to {dir_server}: {e}")
-                    return "", None
+                    # Return the original server string for consistency with taker
+                    return dir_server, None
 
             # Connect to all directory servers simultaneously
             connection_tasks = [connect_to_directory(ds) for ds in self.config.directory_servers]
