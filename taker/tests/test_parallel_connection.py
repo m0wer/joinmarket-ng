@@ -137,15 +137,23 @@ async def test_connect_all_with_exceptions():
     )
 
     with patch("taker.taker.DirectoryClient") as MockDirectoryClient:
-        mock_instance = AsyncMock()
-        # First connection succeeds, second raises exception
-        mock_instance.connect = AsyncMock(
-            side_effect=[AsyncMock(), Exception("Network error")]
-        )
-        MockDirectoryClient.return_value = mock_instance
 
-        # Execute - should not crash
+        def create_mock_client(host, port, *args, **kwargs):
+            mock_instance = AsyncMock()
+            if host == "server2.onion":
+                # Simulate connection exception for second server
+                mock_instance.connect = AsyncMock(side_effect=Exception("Network error"))
+            else:
+                # Successful connection for first server
+                mock_instance.connect = AsyncMock()
+            return mock_instance
+
+        MockDirectoryClient.side_effect = create_mock_client
+
+        # Execute - should not crash and should connect to at least one
         connected_count = await client.connect_all()
 
-        # At least one should succeed (actual count may vary due to timing)
-        assert connected_count >= 0
+        # First server should succeed
+        assert connected_count == 1
+        assert "server1.onion:5222" in client.clients
+        assert "server2.onion:5222" not in client.clients
