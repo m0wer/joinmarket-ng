@@ -66,7 +66,10 @@ P2SH_VERSION = {
 
 def btc_to_sats(btc: float) -> int:
     """
-    Convert BTC to satoshis. Only use for external input parsing.
+    Convert BTC to satoshis safely.
+
+    Uses round() instead of int() to avoid floating point precision errors
+    that can truncate values (e.g. 0.0003 * 1e8 = 29999.999...).
 
     Args:
         btc: Amount in BTC
@@ -74,7 +77,7 @@ def btc_to_sats(btc: float) -> int:
     Returns:
         Amount in satoshis
     """
-    return int(btc * SATS_PER_BTC)
+    return round(btc * SATS_PER_BTC)
 
 
 def sats_to_btc(sats: int) -> float:
@@ -90,17 +93,26 @@ def sats_to_btc(sats: int) -> float:
     return sats / SATS_PER_BTC
 
 
-def format_amount(sats: int) -> str:
+def format_amount(sats: int, include_unit: bool = True) -> str:
     """
-    Format satoshi amount for display (e.g., '1,000,000 sats (0.01000000 BTC)').
+    Format satoshi amount as BTC string.
 
     Args:
         sats: Amount in satoshis
+        include_unit: Whether to include "BTC" suffix
 
     Returns:
-        Formatted string
+        Formatted string (e.g. "0.00000001 BTC")
     """
-    return f"{sats:,} sats ({sats_to_btc(sats):.8f} BTC)"
+    btc_val = sats_to_btc(sats)
+    # Format with up to 8 decimal places, removing trailing zeros
+    formatted = f"{btc_val:.8f}".rstrip("0").rstrip(".")
+    if formatted == "":
+        formatted = "0"
+
+    if include_unit:
+        return f"{formatted} BTC"
+    return formatted
 
 
 def validate_satoshi_amount(sats: int) -> None:

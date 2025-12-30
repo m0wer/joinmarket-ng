@@ -13,7 +13,6 @@ from typing import Any
 
 import httpx
 from jmcore.bitcoin import btc_to_sats
-from jmcore.constants import SATS_PER_BTC
 from loguru import logger
 
 from jmwallet.backends.base import UTXO, BlockchainBackend, Transaction
@@ -365,7 +364,8 @@ class BitcoinCoreBackend(BlockchainBackend):
 
             if "feerate" in result:
                 btc_per_kb = result["feerate"]
-                sat_per_vbyte = int((btc_per_kb * SATS_PER_BTC) / 1000)
+                # Convert BTC/kB to sat/vB
+                sat_per_vbyte = round(btc_to_sats(btc_per_kb) / 1000)
                 logger.debug(f"Estimated fee for {target_blocks} blocks: {sat_per_vbyte} sat/vB")
                 return sat_per_vbyte
             else:
