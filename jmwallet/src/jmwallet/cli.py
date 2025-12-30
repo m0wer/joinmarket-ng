@@ -958,23 +958,23 @@ def history(
             )
     else:
         print(f"\nCoinJoin History ({len(entries)} entries):")
-        print("=" * 100)
+        print("=" * 140)
         header = f"{'Timestamp':<20} {'Role':<7} {'Amount':>12} {'Peers':>6}"
-        header += f" {'Net Fee':>12} {'TXID':<20}"
+        header += f" {'Net Fee':>12} {'TXID':<64}"
         print(header)
-        print("-" * 100)
+        print("-" * 140)
 
         for entry in entries:
             status = "" if entry.success else " [FAILED]"
-            txid_short = entry.txid[:16] + "..." if entry.txid else "N/A"
+            txid_full = entry.txid if entry.txid else "N/A"
             fee_str = f"{entry.net_fee:+,}" if entry.net_fee != 0 else "0"
 
             print(
                 f"{entry.timestamp[:19]:<20} {entry.role:<7} {entry.cj_amount:>12,} "
-                f"{entry.peer_count:>6} {fee_str:>12} {txid_short:<20}{status}"
+                f"{entry.peer_count:>6} {fee_str:>12} {txid_full:<64}{status}"
             )
 
-        print("=" * 100)
+        print("=" * 140)
 
 
 @app.command()
