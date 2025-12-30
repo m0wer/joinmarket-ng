@@ -1427,6 +1427,265 @@ async def _sync_bonds_async(
     print(f"Active (funded & not expired): {len(active)}")
 
 
+@app.command("generate-hot-keypair")
+def generate_hot_keypair(
+    log_level: Annotated[str, typer.Option("--log-level")] = "INFO",
+) -> None:
+    """
+    Generate a hot wallet keypair for fidelity bond certificates.
+
+    This generates a random keypair that will be used for signing nick messages
+    in the fidelity bond proof. The private key stays in the hot wallet, while
+    the public key is used to create a certificate signed by the cold wallet.
+    """
+    setup_logging(log_level)
+
+    from coincurve import PrivateKey
+
+    # Generate a random private key
+    privkey = PrivateKey()
+    pubkey = privkey.public_key.format(compressed=True)
+
+    print("\n" + "=" * 80)
+    print("HOT WALLET KEYPAIR FOR FIDELITY BOND CERTIFICATE")
+    print("=" * 80)
+    print(f"\nPrivate Key (hex): {privkey.secret.hex()}")
+    print(f"Public Key (hex):  {pubkey.hex()}")
+    print("\n" + "=" * 80)
+    print("IMPORTANT:")
+    print("  1. Store the private key securely in your hot wallet")
+    print("  2. Use the public key with 'generate-certificate' on your cold wallet")
+    print("  3. Import both certificate signature and private key with 'import-certificate'")
+    print("=" * 80 + "\n")
+
+
+@app.command("generate-certificate")
+def generate_certificate(
+    mnemonic: Annotated[str | None, typer.Option("--mnemonic")] = None,
+    mnemonic_file: Annotated[Path | None, typer.Option("--mnemonic-file", "-f")] = None,
+    password: Annotated[str | None, typer.Option("--password", "-p")] = None,
+    index: Annotated[int, typer.Option("--index", "-i", help="Bond index")] = 0,
+    locktime: Annotated[
+        int, typer.Option("--locktime", "-L", help="Locktime as Unix timestamp")
+    ] = 0,
+    locktime_date: Annotated[
+        str | None,
+        typer.Option(
+            "--locktime-date", "-d", help="Locktime as date (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)"
+        ),
+    ] = None,
+    cert_pubkey: Annotated[
+        str, typer.Option("--cert-pubkey", help="Certificate public key (hex)")
+    ] = "",
+    cert_expiry_blocks: Annotated[
+        int, typer.Option("--cert-expiry-blocks", help="Certificate expiry in blocks")
+    ] = 104832,  # ~2 years (52 * 2016)
+    network: Annotated[str, typer.Option("--network", "-n")] = "mainnet",
+    log_level: Annotated[str, typer.Option("--log-level")] = "INFO",
+) -> None:
+    """
+    Generate a certificate signature for a fidelity bond (cold wallet support).
+
+    This allows you to sign a certificate with your cold wallet's private key,
+    which can then be imported into a hot wallet for making offers.
+
+    The certificate proves ownership of the bond UTXO without exposing the
+    cold wallet private key online.
+    """
+    setup_logging(log_level)
+
+    if not cert_pubkey:
+        logger.error("--cert-pubkey is required")
+        raise typer.Exit(1)
+
+    try:
+        resolved_mnemonic = _resolve_mnemonic(mnemonic, mnemonic_file, password, True)
+    except (FileNotFoundError, ValueError) as e:
+        logger.error(str(e))
+        raise typer.Exit(1)
+
+    # Parse locktime
+    if locktime_date:
+        try:
+            try:
+                dt = datetime.strptime(locktime_date, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                dt = datetime.strptime(locktime_date, "%Y-%m-%d")
+            locktime = int(dt.timestamp())
+        except ValueError:
+            logger.error(f"Invalid date format: {locktime_date}")
+            logger.info("Use format: YYYY-MM-DD or YYYY-MM-DD HH:MM:SS")
+            raise typer.Exit(1)
+
+    if locktime <= 0:
+        logger.error("Locktime is required. Use --locktime or --locktime-date")
+        raise typer.Exit(1)
+
+    # Validate cert_pubkey
+    try:
+        cert_pubkey_bytes = bytes.fromhex(cert_pubkey)
+        if len(cert_pubkey_bytes) != 33:
+            raise ValueError("Certificate pubkey must be 33 bytes (compressed)")
+    except ValueError as e:
+        logger.error(f"Invalid certificate pubkey: {e}")
+        raise typer.Exit(1)
+
+    from jmwallet.wallet.bip32 import HDKey, mnemonic_to_seed
+    from jmwallet.wallet.service import FIDELITY_BOND_BRANCH
+
+    # Derive the bond private key
+    seed = mnemonic_to_seed(resolved_mnemonic)
+    master_key = HDKey.from_seed(seed)
+    coin_type = 0 if network == "mainnet" else 1
+    path = f"m/84'/{coin_type}'/0'/{FIDELITY_BOND_BRANCH}/{index}"
+    key = master_key.derive(path)
+
+    # Calculate cert_expiry as 2016-block periods
+    cert_expiry = cert_expiry_blocks // 2016
+
+    # Create certificate message
+    cert_msg = (
+        b"fidelity-bond-cert|" + cert_pubkey_bytes + b"|" + str(cert_expiry).encode("ascii")
+    )
+
+    # Sign with Bitcoin message format
+    from coincurve import PrivateKey
+
+    from jmcore.crypto import bitcoin_message_hash
+
+    privkey = key.private_key  # HDKey.private_key returns PrivateKey object
+    msg_hash = bitcoin_message_hash(cert_msg)
+    cert_signature = privkey.sign(msg_hash, hasher=None)
+
+    print("\n" + "=" * 80)
+    print("FIDELITY BOND CERTIFICATE")
+    print("=" * 80)
+    print(f"\nBond Index:            {index}")
+    print(f"Bond Path:             {path}")
+    print(f"Bond Locktime:         {locktime} ({datetime.fromtimestamp(locktime)})")
+    print(f"Certificate Pubkey:    {cert_pubkey}")
+    print(f"Certificate Expiry:    {cert_expiry} periods ({cert_expiry_blocks} blocks)")
+    print(f"Certificate Signature: {cert_signature.hex()}")
+    print("\n" + "=" * 80)
+    print("IMPORTANT: Store this certificate signature securely!")
+    print("           Use 'jm-wallet import-certificate' to import it into your hot wallet.")
+    print("=" * 80 + "\n")
+
+
+@app.command("import-certificate")
+def import_certificate(
+    address: Annotated[str, typer.Argument(help="Bond address")],
+    cert_pubkey: Annotated[str, typer.Option("--cert-pubkey", help="Certificate pubkey (hex)")],
+    cert_privkey: Annotated[
+        str, typer.Option("--cert-privkey", help="Certificate private key (hex)")
+    ],
+    cert_signature: Annotated[
+        str, typer.Option("--cert-signature", help="Certificate signature (hex)")
+    ],
+    cert_expiry: Annotated[int, typer.Option("--cert-expiry", help="Certificate expiry (periods)")],
+    data_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-dir",
+            help="Data directory (default: ~/.joinmarket-ng or $JOINMARKET_DATA_DIR)",
+        ),
+    ] = None,
+    log_level: Annotated[str, typer.Option("--log-level")] = "INFO",
+) -> None:
+    """
+    Import a certificate signature for a fidelity bond (cold wallet support).
+
+    This imports a certificate generated with 'generate-certificate' into the
+    bond registry, allowing the hot wallet to use it for making offers.
+
+    You need to provide:
+    - cert_pubkey: Hot wallet public key (from generate-hot-keypair)
+    - cert_privkey: Hot wallet private key (from generate-hot-keypair)
+    - cert_signature: Certificate signature (from generate-certificate)
+    - cert_expiry: Certificate expiry in periods (from generate-certificate)
+    """
+    setup_logging(log_level)
+
+    from jmcore.paths import get_default_data_dir
+    from jmwallet.wallet.bond_registry import load_registry, save_registry
+
+    # Validate inputs
+    try:
+        cert_pubkey_bytes = bytes.fromhex(cert_pubkey)
+        if len(cert_pubkey_bytes) != 33:
+            raise ValueError("Certificate pubkey must be 33 bytes")
+        cert_privkey_bytes = bytes.fromhex(cert_privkey)
+        if len(cert_privkey_bytes) != 32:
+            raise ValueError("Certificate privkey must be 32 bytes")
+        cert_sig_bytes = bytes.fromhex(cert_signature)
+        if len(cert_sig_bytes) < 64 or len(cert_sig_bytes) > 73:
+            raise ValueError("Invalid signature length")
+
+        # Verify that privkey matches pubkey
+        from coincurve import PrivateKey
+
+        privkey = PrivateKey(cert_privkey_bytes)
+        derived_pubkey = privkey.public_key.format(compressed=True)
+        if derived_pubkey != cert_pubkey_bytes:
+            raise ValueError("Certificate privkey does not match cert_pubkey!")
+
+    except ValueError as e:
+        logger.error(f"Invalid input: {e}")
+        raise typer.Exit(1)
+
+    # Load registry
+    resolved_data_dir = data_dir if data_dir else get_default_data_dir()
+    registry = load_registry(resolved_data_dir)
+
+    # Find bond by address
+    bond = registry.get_bond_by_address(address)
+    if not bond:
+        logger.error(f"Bond not found for address: {address}")
+        raise typer.Exit(1)
+
+    # Verify certificate signature
+    from coincurve import PublicKey
+
+    from jmcore.crypto import bitcoin_message_hash
+
+    try:
+        cert_msg = (
+            b"fidelity-bond-cert|" + cert_pubkey_bytes + b"|" + str(cert_expiry).encode("ascii")
+        )
+        msg_hash = bitcoin_message_hash(cert_msg)
+
+        # Get the bond's utxo pubkey to verify
+        utxo_pubkey = bytes.fromhex(bond.pubkey)
+        pubkey = PublicKey(utxo_pubkey)
+
+        # Verify signature
+        if not pubkey.verify(cert_sig_bytes, msg_hash, hasher=None):
+            logger.error("Certificate signature verification failed!")
+            logger.error("The signature does not match the bond's public key.")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        logger.error(f"Failed to verify certificate: {e}")
+        raise typer.Exit(1)
+
+    # Update bond with certificate
+    bond.cert_pubkey = cert_pubkey
+    bond.cert_privkey = cert_privkey
+    bond.cert_signature = cert_signature
+    bond.cert_expiry = cert_expiry
+
+    save_registry(registry, resolved_data_dir)
+
+    print("\n" + "=" * 80)
+    print("CERTIFICATE IMPORTED SUCCESSFULLY")
+    print("=" * 80)
+    print(f"\nBond Address:          {address}")
+    print(f"Certificate Pubkey:    {cert_pubkey}")
+    print(f"Certificate Expiry:    {cert_expiry} periods ({cert_expiry * 2016} blocks)")
+    print(f"\nRegistry updated: {resolved_data_dir / 'fidelity_bonds.json'}")
+    print("=" * 80 + "\n")
+
+
 def main() -> None:
     """CLI entry point."""
     app()

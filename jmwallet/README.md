@@ -132,7 +132,65 @@ jm-wallet --help
 jm-wallet generate --help
 jm-wallet info --help
 jm-wallet list-bonds --help
+jm-wallet generate-bond-address --help
+jm-wallet generate-hot-keypair --help
+jm-wallet generate-certificate --help
+jm-wallet import-certificate --help
 ```
+
+## Cold Wallet Fidelity Bonds
+
+For maximum security, fidelity bonds can use a certificate chain that keeps the bond UTXO private key in cold storage:
+
+### Workflow
+
+1. **Generate hot wallet keypair** (on online machine):
+   ```bash
+   jm-wallet generate-hot-keypair
+   ```
+   Save both the private and public keys securely.
+
+2. **Generate bond address** (can be on cold wallet):
+   ```bash
+   jm-wallet generate-bond-address \
+     --mnemonic-file cold-wallet.enc \
+     --password "..." \
+     --locktime-date "2026-01-01" \
+     --index 0
+   ```
+   Fund this address with Bitcoin to create the bond.
+
+3. **Generate certificate** (on cold wallet):
+   ```bash
+   jm-wallet generate-certificate \
+     --mnemonic-file cold-wallet.enc \
+     --password "..." \
+     --index 0 \
+     --locktime-date "2026-01-01" \
+     --cert-pubkey <hot_pubkey_from_step_1> \
+     --cert-expiry-blocks 104832
+   ```
+   This creates a certificate signature without exposing the cold wallet's private key.
+
+4. **Import certificate** (on hot wallet/maker machine):
+   ```bash
+   jm-wallet import-certificate <bond_address> \
+     --cert-pubkey <hot_pubkey_from_step_1> \
+     --cert-privkey <hot_privkey_from_step_1> \
+     --cert-signature <signature_from_step_3> \
+     --cert-expiry 52
+   ```
+
+5. **Run maker** with the hot wallet - it will automatically use the certificate.
+
+### Security Benefits
+
+- **Cold storage**: Bond UTXO private key never touches the online machine
+- **Time-limited**: Certificate expires after ~2 years (configurable)
+- **Revocable**: If hot wallet is compromised, only the certificate is at risk, not the bond funds
+- **Renewable**: Generate a new certificate when the old one expires
+
+See [DOCS.md § Cold Wallet Setup](../DOCS.md#cold-wallet-setup) for detailed documentation.
 
 ## Features
 

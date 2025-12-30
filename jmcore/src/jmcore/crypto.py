@@ -475,3 +475,35 @@ def verify_fidelity_bond_proof(
 
     except Exception as e:
         return False, None, f"Failed to verify bond proof: {e}"
+
+
+def bitcoin_message_hash(message: bytes) -> bytes:
+    """
+    Hash a message using Bitcoin's message signing format.
+
+    Format: SHA256(SHA256("\\x18Bitcoin Signed Message:\\n" + varint(len) + message))
+
+    This is the standard Bitcoin message signing format used in Bitcoin Core
+    and other wallets for message signing.
+
+    Args:
+        message: Raw message bytes (NOT pre-hashed)
+
+    Returns:
+        32-byte message hash
+    """
+    prefix = b"\x18Bitcoin Signed Message:\n"
+    msg_len = len(message)
+
+    # Encode length as Bitcoin varint
+    if msg_len < 253:
+        varint = bytes([msg_len])
+    elif msg_len < 0x10000:
+        varint = b"\xfd" + msg_len.to_bytes(2, "little")
+    elif msg_len < 0x100000000:
+        varint = b"\xfe" + msg_len.to_bytes(4, "little")
+    else:
+        varint = b"\xff" + msg_len.to_bytes(8, "little")
+
+    full_msg = prefix + varint + message
+    return hashlib.sha256(hashlib.sha256(full_msg).digest()).digest()
