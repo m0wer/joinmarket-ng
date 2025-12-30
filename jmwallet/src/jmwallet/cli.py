@@ -10,7 +10,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Literal
 
 import typer
 from loguru import logger
@@ -1009,12 +1009,12 @@ def history(
     """View CoinJoin transaction history."""
     from jmwallet.history import get_history_stats, read_history
 
-    role_filter = None
+    role_filter: Literal["maker", "taker"] | None = None
     if role:
         if role.lower() not in ("maker", "taker"):
             logger.error("Role must be 'maker' or 'taker'")
             raise typer.Exit(1)
-        role_filter = role.lower()  # type: ignore
+        role_filter = role.lower()  # type: ignore[assignment]
 
     if stats:
         stats_data = get_history_stats(data_dir)
@@ -1060,7 +1060,7 @@ def history(
                     "role": entry.role,
                     "txid": entry.txid,
                     "cj_amount": entry.cj_amount,
-                    "peer_count": entry.peer_count,
+                    "peer_count": entry.peer_count if entry.peer_count is not None else "",
                     "net_fee": entry.net_fee,
                     "success": entry.success,
                 }
@@ -1077,10 +1077,11 @@ def history(
             status = "" if entry.success else " [FAILED]"
             txid_full = entry.txid if entry.txid else "N/A"
             fee_str = f"{entry.net_fee:+,}" if entry.net_fee != 0 else "0"
+            peer_str = str(entry.peer_count) if entry.peer_count is not None else "?"
 
             print(
                 f"{entry.timestamp[:19]:<20} {entry.role:<7} {entry.cj_amount:>12,} "
-                f"{entry.peer_count:>6} {fee_str:>12} {txid_full:<64}{status}"
+                f"{peer_str:>6} {fee_str:>12} {txid_full:<64}{status}"
             )
 
         print("=" * 140)

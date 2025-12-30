@@ -25,7 +25,7 @@ from jmwallet.history import (
 
 
 @pytest.fixture
-def temp_data_dir() -> Generator[Path]:
+def temp_data_dir() -> Generator[Path, None, None]:
     """Create a temporary data directory for tests."""
     with tempfile.TemporaryDirectory() as tmpdir:
         yield Path(tmpdir)
@@ -227,7 +227,7 @@ class TestHelperFunctions:
         assert entry.txfee_contribution == 50
         assert entry.net_fee == 200  # 250 - 50
         assert entry.counterparty_nicks == "J5testuser123456"
-        assert entry.peer_count == 1
+        assert entry.peer_count is None  # Makers don't know peer count
         assert "abc123:0" in entry.utxos_used
         assert entry.network == "regtest"
 

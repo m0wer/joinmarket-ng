@@ -4,7 +4,7 @@ Transaction history tracking for CoinJoin operations.
 Stores a simple CSV log of all CoinJoin transactions with key metadata:
 - Role (maker/taker)
 - Fees (paid/received)
-- Peer count
+- Peer count (only known by takers; None for makers)
 - Transaction details
 """
 
@@ -159,7 +159,11 @@ def read_history(
                         confirmed_at=row.get("confirmed_at", ""),
                         txid=row.get("txid", ""),
                         cj_amount=int(row.get("cj_amount", 0) or 0),
-                        peer_count=int(row.get("peer_count", 0) or 0),
+                        peer_count=(
+                            int(row["peer_count"])
+                            if row.get("peer_count") and row["peer_count"] not in ("", "None")
+                            else None
+                        ),
                         counterparty_nicks=row.get("counterparty_nicks", ""),
                         fee_received=int(row.get("fee_received", 0) or 0),
                         txfee_contribution=int(row.get("txfee_contribution", 0) or 0),

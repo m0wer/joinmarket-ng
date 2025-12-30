@@ -136,7 +136,12 @@ def create_notification_message(entry: dict[str, str]) -> tuple[str, str, int]:
     success = entry.get("success", "True").lower() == "true"
     confirmations = int(entry.get("confirmations", 0) or 0)
     cj_amount = int(entry.get("cj_amount", 0) or 0)
-    peer_count = int(entry.get("peer_count", 0) or 0)
+    peer_count_str = entry.get("peer_count", "")
+    peer_count = (
+        int(peer_count_str)
+        if peer_count_str and peer_count_str not in ("", "None")
+        else None
+    )
     net_fee = int(entry.get("net_fee", 0) or 0)
 
     # Determine title and priority based on status
@@ -170,9 +175,13 @@ def create_notification_message(entry: dict[str, str]) -> tuple[str, str, int]:
     message_parts = [
         f"{role_emoji} Role: {role.capitalize()}",
         f"💰 Amount: {format_satoshis(cj_amount)}",
-        f"👥 Peers: {peer_count}",
-        f"💸 Net Fee: {format_fee(net_fee, is_cost=net_fee < 0)}",
     ]
+
+    # Only show peer count if known (takers know, makers don't)
+    if peer_count is not None:
+        message_parts.append(f"👥 Peers: {peer_count}")
+
+    message_parts.append(f"💸 Net Fee: {format_fee(net_fee, is_cost=net_fee < 0)}")
 
     # Add role-specific details
     if role == "maker":
