@@ -7,20 +7,25 @@ from __future__ import annotations
 import tempfile
 from collections.abc import Generator
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from jmwallet.backends.base import Transaction
 from jmwallet.history import (
     TransactionHistoryEntry,
     append_history_entry,
     create_maker_history_entry,
     create_taker_history_entry,
+    detect_coinjoin_peer_count,
     get_history_stats,
     get_pending_transactions,
     get_used_addresses,
     read_history,
     update_pending_transaction_txid,
     update_transaction_confirmation,
+    update_transaction_confirmation_with_detection,
+    update_transaction_peer_count,
 )
 
 
@@ -618,3 +623,220 @@ class TestUsedAddressTracking:
         assert len(used) == 2  # 1 CJ address + 1 change address
         assert "bc1qcoinjoin123456" in used
         assert "bc1qchange789012345" in used
+
+
+class TestPeerCountDetection:
+    """Tests for automatic peer count detection from transaction outputs."""
+
+    @pytest.mark.asyncio
+    async def test_detect_coinjoin_peer_count(self) -> None:
+        """Test detecting peer count from equal-amount outputs."""
+        import struct
+
+        # Create a minimal valid SegWit transaction with 4 equal outputs of 30,000 sats
+        # Format: version(4) + marker(1) + flag(1) + inputs + outputs + witness + locktime(4)
+
+        def encode_varint(n: int) -> bytes:
+            if n < 0xFD:
+                return bytes([n])
+            elif n <= 0xFFFF:
+                return b"\xfd" + struct.pack("<H", n)
+            elif n <= 0xFFFFFFFF:
+                return b"\xfe" + struct.pack("<I", n)
+            else:
+                return b"\xff" + struct.pack("<Q", n)
+
+        # Version
+        tx_bytes = struct.pack("<I", 2)
+
+        # Marker and flag for SegWit
+        tx_bytes += b"\x00\x01"
+
+        # Input count (1)
+        tx_bytes += encode_varint(1)
+
+        # Input: txid (32 bytes)
+        tx_bytes += b"\xaa" * 32
+
+        # Input: vout (4 bytes)
+        tx_bytes += struct.pack("<I", 0)
+
+        # Input: scriptSig length + scriptSig (empty for segwit)
+        tx_bytes += encode_varint(0)
+
+        # Input: sequence
+        tx_bytes += struct.pack("<I", 0xFFFFFFFE)
+
+        # Output count (5: 4 equal + 1 change)
+        tx_bytes += encode_varint(5)
+
+        # 4 equal CoinJoin outputs of 30,000 sats
+        for i in range(4):
+            tx_bytes += struct.pack("<Q", 30000)  # value
+            script = b"\x00\x14" + bytes([i] * 20)  # P2WPKH script
+            tx_bytes += encode_varint(len(script))
+            tx_bytes += script
+
+        # 1 change output of 50,000 sats
+        tx_bytes += struct.pack("<Q", 50000)
+        script = b"\x00\x14" + b"\x99" * 20
+        tx_bytes += encode_varint(len(script))
+        tx_bytes += script
+
+        # Witness data for the input
+        tx_bytes += encode_varint(2)  # 2 witness items
+        tx_bytes += encode_varint(64) + b"\x01" * 64  # signature
+        tx_bytes += encode_varint(33) + b"\x02" * 33  # pubkey
+
+        # Locktime
+        tx_bytes += struct.pack("<I", 0)
+
+        tx_hex = tx_bytes.hex()
+
+        # Create mock backend
+        mock_backend = MagicMock()
+        mock_backend.get_transaction = AsyncMock(
+            return_value=Transaction(
+                txid="test_txid_123",
+                raw=tx_hex,
+                confirmations=1,
+                block_height=100,
+            )
+        )
+
+        # Detect peer count for 30,000 sat outputs
+        peer_count = await detect_coinjoin_peer_count(mock_backend, "test_txid_123", 30000)
+
+        # Should detect 4 equal outputs
+        assert peer_count == 4
+
+    @pytest.mark.asyncio
+    async def test_detect_coinjoin_peer_count_no_match(self) -> None:
+        """Test peer count detection when no outputs match."""
+        mock_backend = MagicMock()
+
+        # Transaction with different output amounts
+        tx_raw = (
+            "020000000001010000000000000000000000000000000000000000000000000000000000000000ffff"
+            "ffff0100f2052a01000000160014abcd1234000000000000000000000000000000000000000000"
+        )
+        mock_backend.get_transaction = AsyncMock(
+            return_value=Transaction(
+                txid="test_txid_456",
+                raw=tx_raw,
+                confirmations=1,
+            )
+        )
+
+        # Try to detect peer count for amount that doesn't exist
+        peer_count = await detect_coinjoin_peer_count(mock_backend, "test_txid_456", 50000)
+
+        assert peer_count is None
+
+    @pytest.mark.asyncio
+    async def test_detect_coinjoin_peer_count_fetch_fails(self) -> None:
+        """Test peer count detection when transaction fetch fails."""
+        mock_backend = MagicMock()
+        mock_backend.get_transaction = AsyncMock(return_value=None)
+
+        peer_count = await detect_coinjoin_peer_count(mock_backend, "nonexistent", 30000)
+
+        assert peer_count is None
+
+    def test_update_transaction_peer_count(self, temp_data_dir: Path) -> None:
+        """Test updating peer count for a maker transaction."""
+        # Create maker entry without peer count
+        entry = create_maker_history_entry(
+            taker_nick="J5taker",
+            cj_amount=30000,
+            fee_received=100,
+            txfee_contribution=50,
+            cj_address="bc1qtest...",
+            change_address="bc1qchange...",
+            our_utxos=[("abc123", 0)],
+            txid="test_tx_12345678",
+        )
+        append_history_entry(entry, temp_data_dir)
+
+        # Verify peer count is None
+        entries = read_history(temp_data_dir)
+        assert entries[0].peer_count is None
+
+        # Update peer count
+        result = update_transaction_peer_count("test_tx_12345678", 5, temp_data_dir)
+        assert result is True
+
+        # Verify peer count was updated
+        entries = read_history(temp_data_dir)
+        assert entries[0].peer_count == 5
+
+    def test_update_transaction_peer_count_only_updates_none(self, temp_data_dir: Path) -> None:
+        """Test that peer count update only affects entries with None peer count."""
+        # Create taker entry with existing peer count
+        entry = create_taker_history_entry(
+            maker_nicks=["J5maker1", "J5maker2", "J5maker3"],
+            cj_amount=30000,
+            total_maker_fees=500,
+            mining_fee=100,
+            destination="bc1qdest...",
+            source_mixdepth=0,
+            selected_utxos=[("utxo1", 0)],
+            txid="taker_tx_123",
+        )
+        append_history_entry(entry, temp_data_dir)
+
+        # Try to update peer count (should not update taker entries)
+        result = update_transaction_peer_count("taker_tx_123", 10, temp_data_dir)
+        assert result is False
+
+        # Verify peer count unchanged
+        entries = read_history(temp_data_dir)
+        assert entries[0].peer_count == 3  # Original count from 3 makers
+
+    @pytest.mark.asyncio
+    async def test_update_confirmation_with_detection(self, temp_data_dir: Path) -> None:
+        """Test automatic peer count detection during confirmation update."""
+        # Create maker entry
+        entry = create_maker_history_entry(
+            taker_nick="J5taker",
+            cj_amount=30000,
+            fee_received=100,
+            txfee_contribution=50,
+            cj_address="bc1qtest...",
+            change_address="bc1qchange...",
+            our_utxos=[("abc123", 0)],
+            txid="test_tx_detection",
+        )
+        append_history_entry(entry, temp_data_dir)
+
+        # Create mock backend
+        mock_backend = MagicMock()
+        tx_raw = "020000000001..."  # Simplified transaction
+        mock_backend.get_transaction = AsyncMock(
+            return_value=Transaction(
+                txid="test_tx_detection",
+                raw=tx_raw,
+                confirmations=1,
+            )
+        )
+
+        # Mock the peer count detection to return 4
+        from unittest.mock import patch
+
+        with patch(
+            "jmwallet.history.detect_coinjoin_peer_count",
+            return_value=4,
+        ):
+            # Update with detection
+            result = await update_transaction_confirmation_with_detection(
+                "test_tx_detection",
+                1,
+                backend=mock_backend,
+                data_dir=temp_data_dir,
+            )
+            assert result is True
+
+        # Verify peer count was detected and saved
+        entries = read_history(temp_data_dir)
+        assert entries[0].success is True
+        assert entries[0].peer_count == 4

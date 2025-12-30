@@ -14,10 +14,13 @@ import csv
 from dataclasses import dataclass, fields
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from jmcore.paths import get_default_data_dir
 from loguru import logger
+
+if TYPE_CHECKING:
+    from jmwallet.backends.base import BlockchainBackend
 
 
 @dataclass
@@ -325,6 +328,9 @@ def update_transaction_confirmation(
     This function rewrites the entire CSV file with the updated entry.
     If confirmations > 0, marks the transaction as successful.
 
+    Note: This is the synchronous version. For makers who want automatic
+    peer count detection, use update_transaction_confirmation_with_detection().
+
     Args:
         txid: Transaction ID to update
         confirmations: Current number of confirmations
@@ -352,6 +358,88 @@ def update_transaction_confirmation(
                 logger.info(
                     f"Transaction {txid[:16]}... confirmed with {confirmations} confirmations"
                 )
+            elif confirmations > 0:
+                # Already marked as successful, just update confirmation count
+                logger.debug(f"Updated confirmations for {txid[:16]}...: {confirmations}")
+            updated = True
+            break
+
+    if not updated:
+        return False
+
+    # Rewrite the entire history file
+    try:
+        fieldnames = _get_fieldnames()
+        with open(history_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for entry in entries:
+                row = {f.name: getattr(entry, f.name) for f in fields(entry)}
+                writer.writerow(row)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to update history: {e}")
+        return False
+
+
+async def update_transaction_confirmation_with_detection(
+    txid: str,
+    confirmations: int,
+    backend: BlockchainBackend | Any | None = None,
+    data_dir: Path | None = None,
+) -> bool:
+    """
+    Update transaction confirmation and detect peer count for makers.
+
+    This async version can detect the CoinJoin peer count by analyzing the
+    transaction outputs when it confirms. This is useful for makers who don't
+    know the peer count during the CoinJoin.
+
+    Args:
+        txid: Transaction ID to update
+        confirmations: Current number of confirmations
+        backend: Blockchain backend for fetching transaction (optional, for peer detection)
+        data_dir: Optional data directory
+
+    Returns:
+        True if transaction was found and updated, False otherwise
+    """
+    history_path = _get_history_path(data_dir)
+    if not history_path.exists():
+        return False
+
+    entries = read_history(data_dir)
+    updated = False
+
+    for entry in entries:
+        if entry.txid == txid:
+            entry.confirmations = confirmations
+            if confirmations > 0 and not entry.success:
+                # Mark as successful on first confirmation
+                entry.success = True
+                entry.failure_reason = ""
+                entry.confirmed_at = datetime.now().isoformat()
+                entry.completed_at = entry.confirmed_at
+                logger.info(
+                    f"Transaction {txid[:16]}... confirmed with {confirmations} confirmations"
+                )
+
+                # Detect peer count for makers
+                if (
+                    entry.role == "maker"
+                    and entry.peer_count is None
+                    and backend is not None
+                    and entry.cj_amount > 0
+                ):
+                    detected_count = await detect_coinjoin_peer_count(
+                        backend, txid, entry.cj_amount
+                    )
+                    if detected_count is not None:
+                        entry.peer_count = detected_count
+                        logger.info(
+                            f"Detected {detected_count} participants in CoinJoin {txid[:16]}..."
+                        )
+
             elif confirmations > 0:
                 # Already marked as successful, just update confirmation count
                 logger.debug(f"Updated confirmations for {txid[:16]}...: {confirmations}")
@@ -522,3 +610,106 @@ def get_used_addresses(data_dir: Path | None = None) -> set[str]:
             used_addresses.add(entry.change_address)
 
     return used_addresses
+
+
+async def detect_coinjoin_peer_count(
+    backend: BlockchainBackend | Any,
+    txid: str,
+    cj_amount: int,
+) -> int | None:
+    """
+    Detect the number of CoinJoin participants by counting equal-amount outputs.
+
+    When makers participate in a CoinJoin, they don't know the total number of
+    participants. However, once the transaction confirms, we can analyze it to
+    count outputs with the CoinJoin amount.
+
+    Args:
+        backend: Blockchain backend to fetch transaction data
+        txid: Transaction ID to analyze
+        cj_amount: The CoinJoin amount in satoshis
+
+    Returns:
+        Number of equal-amount outputs (peer count), or None if detection fails
+    """
+    try:
+        from jmcore.bitcoin import parse_transaction
+
+        # Fetch the transaction
+        tx = await backend.get_transaction(txid)
+        if not tx:
+            logger.warning(f"Could not fetch transaction {txid} for peer count detection")
+            return None
+
+        # Parse the raw transaction to get outputs
+        parsed_tx = parse_transaction(tx.raw)
+
+        # Count outputs with the CoinJoin amount
+        equal_amount_count = sum(1 for output in parsed_tx.outputs if output["value"] == cj_amount)
+
+        if equal_amount_count == 0:
+            logger.warning(
+                f"No outputs matching CoinJoin amount {cj_amount} sats in tx {txid[:16]}..."
+            )
+            return None
+
+        logger.debug(
+            f"Detected {equal_amount_count} equal-amount outputs "
+            f"({cj_amount:,} sats each) in tx {txid[:16]}..."
+        )
+        return equal_amount_count
+
+    except Exception as e:
+        logger.warning(f"Failed to detect peer count for tx {txid[:16]}...: {e}")
+        return None
+
+
+def update_transaction_peer_count(
+    txid: str,
+    peer_count: int,
+    data_dir: Path | None = None,
+) -> bool:
+    """
+    Update a transaction's peer count in the history file.
+
+    This is used for makers to update the peer count after detecting it
+    from the confirmed transaction's equal-amount outputs.
+
+    Args:
+        txid: Transaction ID to update
+        peer_count: Detected peer count
+        data_dir: Optional data directory
+
+    Returns:
+        True if transaction was found and updated, False otherwise
+    """
+    history_path = _get_history_path(data_dir)
+    if not history_path.exists():
+        return False
+
+    entries = read_history(data_dir)
+    updated = False
+
+    for entry in entries:
+        if entry.txid == txid and entry.peer_count is None:
+            entry.peer_count = peer_count
+            logger.info(f"Updated peer count for tx {txid[:16]}... to {peer_count}")
+            updated = True
+            break
+
+    if not updated:
+        return False
+
+    # Rewrite the entire history file
+    try:
+        fieldnames = _get_fieldnames()
+        with open(history_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for entry in entries:
+                row = {f.name: getattr(entry, f.name) for f in fields(entry)}
+                writer.writerow(row)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to update history: {e}")
+        return False
