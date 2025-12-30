@@ -79,9 +79,10 @@ class MultiDirectoryClient:
         self._response_queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
 
     async def connect_all(self) -> int:
-        """Connect to all directory servers, return count of successful connections."""
-        connected = 0
-        for server in self.directory_servers:
+        """Connect to all directory servers simultaneously, return count of successful connections."""
+
+        async def connect_to_server(server: str) -> tuple[str, DirectoryClient | None]:
+            """Connect to a single directory server."""
             try:
                 parts = server.split(":")
                 host = parts[0]
@@ -97,12 +98,27 @@ class MultiDirectoryClient:
                     neutrino_compat=self.neutrino_compat,
                 )
                 await client.connect()
-                self.clients[server] = client
-                connected += 1
                 logger.info(f"Connected to directory server: {server}")
+                return server, client
             except Exception as e:
                 logger.warning(f"Failed to connect to {server}: {e}")
-        return connected
+                return server, None
+
+        # Connect to all servers simultaneously
+        connection_tasks = [connect_to_server(server) for server in self.directory_servers]
+        results = await asyncio.gather(*connection_tasks, return_exceptions=True)
+
+        # Process results
+        connected = 0
+        for result in results:
+            if isinstance(result, BaseException):
+                logger.warning(f"Directory connection raised exception: {result}")
+                continue
+            server, client = result
+            if client is not None:
+                self.clients[server] = client
+                connected += 1
+
         return connected
 
     async def close_all(self) -> None:
