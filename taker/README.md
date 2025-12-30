@@ -218,16 +218,17 @@ services:
       - ./tor/conf/torrc:/etc/tor/torrc:ro
 
   neutrino:
-    image: ghcr.io/m0wer/neutrino-api
+    image: ghcr.io/m0wer/neutrino-api:0.5.0
     environment:
       NETWORK: mainnet
+      TOR_PROXY: tor:9050
     volumes:
       - neutrino-data:/data/neutrino
+    depends_on:
+      - tor
 
   taker:
-    build:
-      context: ..
-      dockerfile: taker/Dockerfile
+    image: ghcr.io/m0wer/joinmarket-ng/taker:latest
     environment:
       MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/taker.mnemonic
       BACKEND_TYPE: neutrino
@@ -254,18 +255,27 @@ volumes:
 docker-compose up
 ```
 
-Note: Takers only need SOCKS proxy (port 9050) - they don't serve a hidden service, so no control port needed.
-
-### With Neutrino (Simple)
+### With Neutrino (No Tor)
 
 If you already have Tor running elsewhere:
 
 ```yaml
 services:
+  tor:
+    image: ghcr.io/m0wer/docker-tor:latest
+
+  neutrino:
+    image: ghcr.io/m0wer/neutrino-api:0.5.0
+    environment:
+      NETWORK: mainnet
+      TOR_PROXY: tor:9050
+    volumes:
+      - neutrino-data:/data/neutrino
+    depends_on:
+      - tor
+
   taker:
-    build:
-      context: ..
-      dockerfile: taker/Dockerfile
+    image: ghcr.io/m0wer/joinmarket-ng/taker:latest
     environment:
       MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/taker.mnemonic
       BACKEND_TYPE: neutrino
@@ -280,23 +290,13 @@ services:
       - neutrino
       - tor
 
-  neutrino:
-    image: ghcr.io/m0wer/neutrino-api
-    environment:
-      NETWORK: mainnet
-    volumes:
-      - neutrino-data:/data/neutrino
-
-  tor:
-    image: dperson/torproxy
-
 volumes:
   neutrino-data:
 ```
 
 ### With Bitcoin Core and Tor
 
-**1. Create torrc configuration (if not already created):**
+**1. Create torrc configuration:**
 
 ```bash
 mkdir -p tor/conf
@@ -322,9 +322,7 @@ services:
       - bitcoin-data:/bitcoin/.bitcoin
 
   taker:
-    build:
-      context: ..
-      dockerfile: taker/Dockerfile
+    image: ghcr.io/m0wer/joinmarket-ng/taker:latest
     environment:
       MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/taker.mnemonic
       BACKEND_TYPE: full_node
