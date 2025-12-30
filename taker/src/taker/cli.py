@@ -185,6 +185,7 @@ def coinjoin(
             "--bondless-allowance", help="Fraction of time to choose makers randomly (0.0-1.0)"
         ),
     ] = 0.125,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompt")] = False,
     log_level: Annotated[str, typer.Option("--log-level", "-l", help="Log level")] = "INFO",
 ) -> None:
     """Execute a single CoinJoin transaction."""
@@ -249,7 +250,7 @@ def coinjoin(
         bondless_makers_allowance=bondless_makers_allowance,
     )
 
-    asyncio.run(_run_coinjoin(config, amount, destination, mixdepth, counterparties))
+    asyncio.run(_run_coinjoin(config, amount, destination, mixdepth, counterparties, yes))
 
 
 async def _run_coinjoin(
@@ -258,6 +259,7 @@ async def _run_coinjoin(
     destination: str,
     mixdepth: int,
     counterparties: int,
+    skip_confirmation: bool,
 ) -> None:
     """Run CoinJoin transaction."""
     # Use bitcoin_network for address generation
@@ -291,8 +293,31 @@ async def _run_coinjoin(
         mixdepth_count=config.mixdepth_count,
     )
 
+    # Create confirmation callback
+    def confirmation_callback(
+        maker_details: list[dict],
+        cj_amount: int,
+        total_fee: int,
+        destination: str,
+    ) -> bool:
+        """Callback for user confirmation after maker selection."""
+        from jmcore.confirmation import confirm_transaction, format_maker_summary
+
+        additional_info = format_maker_summary(maker_details)
+        additional_info["CoinJoin Amount"] = cj_amount
+        additional_info["Source Mixdepth"] = mixdepth
+
+        return confirm_transaction(
+            operation="coinjoin",
+            amount=cj_amount,
+            destination=destination,
+            fee=total_fee,
+            additional_info=additional_info,
+            skip_confirmation=skip_confirmation,
+        )
+
     # Create taker
-    taker = Taker(wallet, backend, config)
+    taker = Taker(wallet, backend, config, confirmation_callback=confirmation_callback)
 
     try:
         await taker.start()

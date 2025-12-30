@@ -697,6 +697,7 @@ def send(
     broadcast: Annotated[
         bool, typer.Option("--broadcast", help="Broadcast the transaction")
     ] = True,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompt")] = False,
     log_level: Annotated[str, typer.Option("--log-level", "-l")] = "INFO",
 ) -> None:
     """Send a simple transaction from wallet to an address."""
@@ -720,6 +721,7 @@ def send(
             rpc_user,
             rpc_password,
             broadcast,
+            yes,
         )
     )
 
@@ -735,6 +737,7 @@ async def _send_transaction(
     rpc_user: str,
     rpc_password: str,
     broadcast: bool,
+    skip_confirmation: bool,
 ) -> None:
     """Send transaction implementation."""
     from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
@@ -809,6 +812,29 @@ async def _send_transaction(
         logger.info(f"Fee: {estimated_fee:,} sats ({fee_rate} sat/vB)")
         if change_amount > 0:
             logger.info(f"Change: {change_amount:,} sats")
+
+        # Prompt for confirmation before building transaction
+        from jmcore.confirmation import confirm_transaction
+
+        try:
+            confirmed = confirm_transaction(
+                operation="send",
+                amount=send_amount,
+                destination=destination,
+                fee=estimated_fee,
+                additional_info={
+                    "Source Mixdepth": mixdepth,
+                    "Change": f"{change_amount:,} sats" if change_amount > 0 else "None",
+                    "Fee Rate": f"{fee_rate} sat/vB",
+                },
+                skip_confirmation=skip_confirmation,
+            )
+            if not confirmed:
+                logger.info("Transaction cancelled by user")
+                return
+        except RuntimeError as e:
+            logger.error(str(e))
+            raise typer.Exit(1)
 
         # Build unsigned transaction
         from jmwallet.wallet.address import pubkey_to_p2wpkh_script
