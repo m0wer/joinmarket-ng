@@ -362,6 +362,15 @@ def info(
     neutrino_url: Annotated[
         str, typer.Option("--neutrino-url", envvar="NEUTRINO_URL")
     ] = "http://127.0.0.1:8334",
+    detailed: Annotated[
+        bool, typer.Option("--detailed", "-d", help="Show detailed address and UTXO info")
+    ] = False,
+    show_unused: Annotated[
+        int, typer.Option("--show-unused", help="Number of unused addresses to show per branch")
+    ] = 3,
+    locktimes: Annotated[
+        list[int] | None, typer.Option("--locktime", "-L", help="Locktime(s) to scan for bonds")
+    ] = None,
     log_level: Annotated[str, typer.Option("--log-level", "-l")] = "INFO",
 ) -> None:
     """Display wallet information and balances by mixdepth."""
@@ -375,7 +384,16 @@ def info(
 
     asyncio.run(
         _show_wallet_info(
-            resolved_mnemonic, network, backend_type, rpc_url, rpc_user, rpc_password, neutrino_url
+            resolved_mnemonic,
+            network,
+            backend_type,
+            rpc_url,
+            rpc_user,
+            rpc_password,
+            neutrino_url,
+            detailed,
+            show_unused,
+            locktimes or [],
         )
     )
 
@@ -388,6 +406,9 @@ async def _show_wallet_info(
     rpc_user: str,
     rpc_password: str,
     neutrino_url: str,
+    detailed: bool,
+    show_unused: int,
+    locktimes: list[int],
 ) -> None:
     """Show wallet info implementation."""
     from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
@@ -416,17 +437,156 @@ async def _show_wallet_info(
     try:
         await wallet.sync_all()
 
+        # Sync fidelity bonds if locktimes provided
+        if locktimes:
+            await wallet.sync_fidelity_bonds(locktimes)
+
         total_balance = await wallet.get_total_balance()
         print(f"\nTotal Balance: {total_balance:,} sats ({total_balance / 1e8:.8f} BTC)")
-        print("\nBalance by mixdepth:")
 
-        for md in range(5):
-            balance = await wallet.get_balance(md)
-            addr = wallet.get_receive_address(md, 0)
-            print(f"  Mixdepth {md}: {balance:>15,} sats  |  {addr}")
+        if not detailed:
+            # Simple view
+            print("\nBalance by mixdepth:")
+            for md in range(5):
+                balance = await wallet.get_balance(md)
+                addr = wallet.get_receive_address(md, 0)
+                print(f"  Mixdepth {md}: {balance:>15,} sats  |  {addr}")
+        else:
+            # Detailed view
+            print("\n" + "=" * 120)
+            for md in range(5):
+                balance = await wallet.get_balance(md)
+                print(f"\nMIXDEPTH {md}  |  Balance: {balance:,} sats ({balance / 1e8:.8f} BTC)")
+                print("-" * 120)
+
+                utxos = await wallet.get_utxos(md)
+
+                # Group addresses by type and status
+                from jmwallet.wallet.models import UTXOInfo
+
+                used_addresses: dict[str, list[UTXOInfo]] = {}
+                for utxo in utxos:
+                    if utxo.address not in used_addresses:
+                        used_addresses[utxo.address] = []
+                    used_addresses[utxo.address].append(utxo)
+
+                # Helper to count used addresses by branch
+                def count_used_by_branch(branch: int) -> int:
+                    return len(
+                        [
+                            a
+                            for a in used_addresses
+                            if wallet.address_cache.get(a, (0, 1 - branch, 0))[1] == branch
+                        ]
+                    )  # noqa: E501
+
+                # Show external addresses (receive)
+                print("\n  External (Receive) Addresses:")
+                shown_receive = 0
+                index = 0
+                target_count = count_used_by_branch(0) + show_unused
+                while shown_receive < target_count:
+                    addr = wallet.get_receive_address(md, index)
+                    if addr in used_addresses:
+                        # Address has UTXOs
+                        for utxo in used_addresses[addr]:
+                            label = _get_utxo_label(utxo)
+                            txid_short = utxo.txid[:16]
+                            print(
+                                f"    [{index:3d}] {addr}  "
+                                f"{utxo.value:>15,} sats  {txid_short}...  {label}"
+                            )
+                        shown_receive += 1
+                    elif shown_receive >= count_used_by_branch(0):
+                        # Show unused address
+                        print(f"    [{index:3d}] {addr}  {'(unused)':>15}")
+                        shown_receive += 1
+                    index += 1
+                    if index > 1000:  # Safety limit
+                        break
+
+                # Show internal addresses (change)
+                print("\n  Internal (Change) Addresses:")
+                shown_change = 0
+                index = 0
+                target_count = count_used_by_branch(1) + show_unused
+                while shown_change < target_count:
+                    addr = wallet.get_change_address(md, index)
+                    if addr in used_addresses:
+                        # Address has UTXOs
+                        for utxo in used_addresses[addr]:
+                            label = _get_utxo_label(utxo)
+                            txid_short = utxo.txid[:16]
+                            print(
+                                f"    [{index:3d}] {addr}  "
+                                f"{utxo.value:>15,} sats  {txid_short}...  {label}"
+                            )
+                        shown_change += 1
+                    elif shown_change >= count_used_by_branch(1):
+                        # Show unused address
+                        print(f"    [{index:3d}] {addr}  {'(unused)':>15}")
+                        shown_change += 1
+                    index += 1
+                    if index > 1000:  # Safety limit
+                        break
+
+                print()
+
+            # Show fidelity bonds if any
+            if locktimes:
+                print("=" * 120)
+                print("\nFIDELITY BONDS")
+                print("-" * 120)
+                bond_utxos = [u for u in await wallet.get_utxos(0) if u.is_timelocked]
+                if bond_utxos:
+                    for utxo in bond_utxos:
+                        from datetime import datetime
+
+                        locktime_dt = (
+                            datetime.fromtimestamp(utxo.locktime) if utxo.locktime else None
+                        )
+                        expired = (
+                            datetime.now().timestamp() > (utxo.locktime or 0)
+                            if utxo.locktime
+                            else False
+                        )
+                        status = "EXPIRED" if expired else "ACTIVE"
+                        print(f"  [{status}] {utxo.address}")
+                        print(f"    UTXO:        {utxo.txid}:{utxo.vout}")
+                        print(f"    Value:       {utxo.value:,} sats ({utxo.value / 1e8:.8f} BTC)")
+                        if locktime_dt:
+                            locktime_str = locktime_dt.strftime("%Y-%m-%d %H:%M:%S")
+                            print(f"    Locktime:    {utxo.locktime} ({locktime_str})")
+                        print(f"    Confirms:    {utxo.confirmations}")
+                        print()
+                else:
+                    print("  No fidelity bonds found")
+                    print()
+
+            print("=" * 120)
 
     finally:
         await wallet.close()
+
+
+def _get_utxo_label(utxo) -> str:
+    """Get a descriptive label for a UTXO."""
+    labels = []
+
+    if utxo.is_timelocked:
+        labels.append("fidelity-bond")
+
+    if utxo.confirmations == 0:
+        labels.append("unconfirmed")
+    elif utxo.confirmations < 6:
+        labels.append(f"{utxo.confirmations}conf")
+
+    # Could add more labels here based on history/context:
+    # - "coinjoin-out" if from a coinjoin
+    # - "change" if detected as change
+    # - "blacklisted" if failed coinjoin
+
+    return ", ".join(labels) if labels else "confirmed"
 
 
 @app.command()
