@@ -7,6 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from jmcore.bitcoin import btc_to_sats, format_amount
 from jmcore.btc_script import mk_freeze_script
 from loguru import logger
 
@@ -473,7 +474,7 @@ class WalletService:
             utxo_info = UTXOInfo(
                 txid=utxo_data["txid"],
                 vout=utxo_data["vout"],
-                value=int(utxo_data["amount"] * 100_000_000),
+                value=btc_to_sats(utxo_data["amount"]),
                 address=address,
                 confirmations=confirmations,
                 scriptpubkey=utxo_data.get("scriptPubKey", ""),
@@ -489,8 +490,7 @@ class WalletService:
         total_utxos = sum(len(u) for u in result.values())
         total_value = sum(sum(u.value for u in utxos) for utxos in result.values())
         logger.info(
-            f"Descriptor sync complete: {total_utxos} UTXOs, "
-            f"{total_value / 100_000_000:.8f} BTC total"
+            f"Descriptor sync complete: {total_utxos} UTXOs, {format_amount(total_value)} total"
         )
 
         return result

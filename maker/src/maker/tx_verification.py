@@ -16,10 +16,14 @@ Reference: joinmarket-clientserver/src/jmclient/maker.py:verify_unsigned_tx()
 
 from __future__ import annotations
 
-from decimal import Decimal
 from typing import Any
 
-from jmcore.bitcoin import decode_varint, get_hrp, scriptpubkey_to_address
+from jmcore.bitcoin import (
+    calculate_relative_fee,
+    decode_varint,
+    get_hrp,
+    scriptpubkey_to_address,
+)
 from jmcore.models import NetworkType, OfferType
 from jmwallet.wallet.models import UTXOInfo
 from loguru import logger
@@ -50,7 +54,8 @@ def calculate_cj_fee(offer_type: OfferType, cjfee: str | int, amount: int) -> in
     if offer_type in (OfferType.SW0_ABSOLUTE, OfferType.SWA_ABSOLUTE):
         return int(cjfee)
     else:
-        return int(Decimal(str(cjfee)) * Decimal(amount))
+        # cjfee is guaranteed to be str for relative fee types
+        return calculate_relative_fee(amount, str(cjfee))
 
 
 def verify_unsigned_transaction(

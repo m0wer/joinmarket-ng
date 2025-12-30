@@ -308,6 +308,67 @@ class TestChooseOrders:
         assert len(orders) == 1
 
 
+class TestChooseSweepOrders:
+    """Tests for choose_sweep_orders."""
+
+    def test_choose_sweep_orders(self, max_cj_fee: MaxCjFee) -> None:
+        """Test sweep order selection and amount calculation."""
+        from taker.orderbook import choose_sweep_orders
+
+        # Create specific offers for this test
+        offers = [
+            Offer(
+                counterparty="maker1",
+                oid=0,
+                ordertype=OfferType.SW0_RELATIVE,
+                minsize=10_000,
+                maxsize=200_000_000,  # Large enough
+                txfee=1000,
+                cjfee="0.001",  # 0.1%
+                fidelity_bond_value=100_000,
+            ),
+            Offer(
+                counterparty="maker2",
+                oid=0,
+                ordertype=OfferType.SW0_RELATIVE,
+                minsize=10_000,
+                maxsize=200_000_000,  # Large enough
+                txfee=500,
+                cjfee="0.0005",  # 0.05%
+                fidelity_bond_value=50_000,
+            ),
+        ]
+
+        # Total input 1 BTC, txfee 10k sats
+        # Makers: maker1 (0.1%), maker2 (0.05%)
+        # Approx fees: 0.15% of ~1 BTC ~ 150k sats
+        # expected cj_amount around 100M - 10k - 150k = 99.84M
+        orders, cj_amount, total_fee = choose_sweep_orders(
+            offers=offers,
+            total_input_value=100_000_000,
+            my_txfee=10_000,
+            n=2,
+            max_cj_fee=max_cj_fee,
+        )
+        assert len(orders) == 2
+        assert cj_amount > 0
+        assert total_fee > 0
+        # Should be exactly equal or off by very small amount due to integer rounding
+        # With integer arithmetic, we might leave 1-2 sats behind (miner donation)
+        diff = 100_000_000 - (cj_amount + total_fee + 10_000)
+        assert diff >= 0
+        assert diff < 5
+
+        # Verify cj_amount is calculated correctly with integer arithmetic
+        # sum_rel_fees = 0.001 + 0.0005 = 0.0015
+        # available = 100_000_000 - 10_000 = 99_990_000
+        # expected = 99_990_000 / 1.0015 = 99,840,239 (rounded down)
+        # Using integer arithmetic:
+        # num=99990000, den=10000, sum_num=15
+        # (99990000 * 10000) // (10000 + 15) = 999900000000 // 10015 = 99840239
+        assert cj_amount == 99_840_239
+
+
 class TestOrderbookManager:
     """Tests for OrderbookManager."""
 

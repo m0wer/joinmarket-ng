@@ -240,9 +240,10 @@ class Offer(BaseModel):
         if self.is_absolute_fee():
             return int(self.cjfee)
         else:
-            from decimal import Decimal
+            from jmcore.bitcoin import calculate_relative_fee
 
-            return int(Decimal(self.cjfee) * Decimal(amount))
+            # cjfee is guaranteed to be str for relative fee types by validation
+            return calculate_relative_fee(amount, str(self.cjfee))
 
 
 class FidelityBond(BaseModel):

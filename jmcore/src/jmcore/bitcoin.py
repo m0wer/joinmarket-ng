@@ -23,6 +23,8 @@ from typing import Any
 import base58
 import bech32 as bech32_lib
 
+from jmcore.constants import SATS_PER_BTC
+
 
 class NetworkType(str, Enum):
     """Bitcoin network types."""
@@ -55,6 +57,161 @@ P2SH_VERSION = {
     NetworkType.SIGNET: 0xC4,
     NetworkType.REGTEST: 0xC4,
 }
+
+
+# =============================================================================
+# Amount Utilities
+# =============================================================================
+
+
+def btc_to_sats(btc: float) -> int:
+    """
+    Convert BTC to satoshis. Only use for external input parsing.
+
+    Args:
+        btc: Amount in BTC
+
+    Returns:
+        Amount in satoshis
+    """
+    return int(btc * SATS_PER_BTC)
+
+
+def sats_to_btc(sats: int) -> float:
+    """
+    Convert satoshis to BTC. Only use for display/output.
+
+    Args:
+        sats: Amount in satoshis
+
+    Returns:
+        Amount in BTC
+    """
+    return sats / SATS_PER_BTC
+
+
+def format_amount(sats: int) -> str:
+    """
+    Format satoshi amount for display (e.g., '1,000,000 sats (0.01000000 BTC)').
+
+    Args:
+        sats: Amount in satoshis
+
+    Returns:
+        Formatted string
+    """
+    return f"{sats:,} sats ({sats_to_btc(sats):.8f} BTC)"
+
+
+def validate_satoshi_amount(sats: int) -> None:
+    """
+    Validate that amount is a non-negative integer.
+
+    Args:
+        sats: Amount to validate
+
+    Raises:
+        TypeError: If amount is not an integer
+        ValueError: If amount is negative
+    """
+    if not isinstance(sats, int):
+        raise TypeError(f"Amount must be an integer (satoshis), got {type(sats)}")
+    if sats < 0:
+        raise ValueError(f"Amount cannot be negative, got {sats}")
+
+
+def calculate_relative_fee(amount_sats: int, fee_rate: str) -> int:
+    """
+    Calculate relative fee in satoshis from a fee rate string.
+
+    Args:
+        amount_sats: Amount in satoshis
+        fee_rate: Fee rate as decimal string (e.g., "0.001" = 0.1%)
+
+    Returns:
+        Fee in satoshis (rounded down)
+
+    Examples:
+        >>> calculate_relative_fee(100_000_000, "0.001")
+        100000  # 0.1% of 1 BTC
+        >>> calculate_relative_fee(50_000_000, "0.002")
+        100000  # 0.2% of 0.5 BTC
+    """
+    validate_satoshi_amount(amount_sats)
+
+    # Parse fee rate as numerator/denominator (avoids float/Decimal)
+    if "." not in fee_rate:
+        try:
+            # Handle integer strings like "0" or "1"
+            val = int(fee_rate)
+            return int(amount_sats * val)
+        except ValueError as e:
+            raise ValueError(f"Fee rate must be decimal string or integer, got {fee_rate}") from e
+
+    parts = fee_rate.split(".")
+    if len(parts) != 2:
+        raise ValueError(f"Invalid fee rate format: {fee_rate}")
+
+    numerator = int(parts[0] + parts[1])  # "0.001" -> 1
+    denominator = 10 ** len(parts[1])  # 3 decimals -> 1000
+
+    # Integer division (rounds down)
+    return (amount_sats * numerator) // denominator
+
+
+def calculate_sweep_amount(available_sats: int, relative_fees: list[str]) -> int:
+    """
+    Calculate CoinJoin amount for a sweep (no change output).
+
+    The taker must pay maker fees from the swept amount:
+    available = cj_amount + fees
+    fees = sum(fee_rate * cj_amount for each maker)
+
+    Solving for cj_amount:
+    available = cj_amount * (1 + sum(fee_rates))
+    cj_amount = available / (1 + sum(fee_rates))
+
+    Args:
+        available_sats: Total available balance in satoshis
+        relative_fees: List of relative fee strings (e.g., ["0.001", "0.002"])
+
+    Returns:
+        CoinJoin amount in satoshis (maximum amount after paying all fees)
+    """
+    validate_satoshi_amount(available_sats)
+
+    if not relative_fees:
+        return available_sats
+
+    # Parse all fee rates as fractions with common denominator
+    # Example: ["0.001", "0.0015"] -> numerators=[1, 15], denominator=10000
+    try:
+        max_decimals = 0
+        for fee in relative_fees:
+            if "." in fee:
+                max_decimals = max(max_decimals, len(fee.split(".")[1]))
+    except IndexError as e:
+        raise ValueError(f"Invalid fee format in {relative_fees}") from e
+
+    denominator = 10**max_decimals
+
+    sum_numerators = 0
+    for fee_rate in relative_fees:
+        if "." in fee_rate:
+            parts = fee_rate.split(".")
+            # Normalize to common denominator
+            # "0.001" with max_decimals=4 -> 10 (because 0.001 = 10/10000)
+            numerator = int(parts[0] + parts[1]) * (10 ** (max_decimals - len(parts[1])))
+            sum_numerators += numerator
+        else:
+            # Handle integer fee rates (unlikely for relative fees but good for robustness)
+            numerator = int(fee_rate) * denominator
+            sum_numerators += numerator
+
+    # cj_amount = available / (1 + sum_rel_fees)
+    #           = available / ((denominator + sum_numerators) / denominator)
+    #           = (available * denominator) / (denominator + sum_numerators)
+    return (available_sats * denominator) // (denominator + sum_numerators)
 
 
 # =============================================================================

@@ -422,9 +422,9 @@ class CoinJoinSession:
             if self.offer.ordertype in (OfferType.SW0_ABSOLUTE, OfferType.SWA_ABSOLUTE):
                 real_cjfee = int(self.offer.cjfee)
             else:
-                from decimal import Decimal
+                from jmcore.bitcoin import calculate_relative_fee
 
-                real_cjfee = int(Decimal(str(self.offer.cjfee)) * Decimal(self.amount))
+                real_cjfee = calculate_relative_fee(self.amount, str(self.offer.cjfee))
 
             total_amount = self.amount + self.offer.txfee
             required_amount = total_amount + 10000 - real_cjfee

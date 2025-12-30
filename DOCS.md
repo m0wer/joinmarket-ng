@@ -679,6 +679,19 @@ Comprehensive tests verify dust threshold enforcement:
 
 ---
 
+## Bitcoin Amount Handling
+
+All bitcoin amounts are represented internally as **integer satoshis** to prevent floating-point errors.
+
+- **Storage/Calc**: `int` satoshis (e.g., `50_000_000`).
+- **External Inputs**: Convert to `int` immediately.
+- **Display**: Convert to BTC string only for UI.
+- **Constants**: Use `SATS_PER_BTC = 100_000_000`.
+
+**Do not use `float` or `Decimal` for financial calculations.**
+
+---
+
 ## PoDLE (Proof of Discrete Log Equivalence)
 
 PoDLE prevents Sybil attacks by requiring takers to commit to UTXO ownership before makers reveal their UTXOs.

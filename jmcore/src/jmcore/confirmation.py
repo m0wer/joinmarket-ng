@@ -65,7 +65,9 @@ def confirm_transaction(
     if amount == 0:
         print("Amount:       SWEEP (all available funds)")
     else:
-        print(f"Amount:       {amount:,} sats ({amount / 1e8:.8f} BTC)")
+        from jmcore.bitcoin import format_amount
+
+        print(f"Amount:       {format_amount(amount)}")
 
     # Destination
     if destination:
@@ -76,14 +78,18 @@ def confirm_transaction(
 
     # Fee
     if fee is not None:
-        print(f"Fee:          {fee:,} sats ({fee / 1e8:.8f} BTC)")
+        from jmcore.bitcoin import format_amount
+
+        print(f"Fee:          {format_amount(fee)}")
 
     # Additional info
     if additional_info:
         for key, value in additional_info.items():
             # Format based on type
             if isinstance(value, int) and key.lower().endswith(("fee", "amount", "value")):
-                print(f"{key}:  {value:,} sats ({value / 1e8:.8f} BTC)".ljust(80))
+                from jmcore.bitcoin import format_amount
+
+                print(f"{key}:  {format_amount(value)}".ljust(80))
             elif isinstance(value, list):
                 print(f"{key}:  {len(value)} item(s)")
                 for i, item in enumerate(value, 1):

@@ -155,11 +155,32 @@ class TestScheduleEntry:
         """Test fractional amount (sweep percentage)."""
         entry = ScheduleEntry(
             mixdepth=1,
-            amount=0.5,
+            amount_fraction=0.5,
             counterparty_count=4,
             destination="bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
         )
-        assert entry.amount == 0.5
+        assert entry.amount_fraction == 0.5
+        assert entry.amount is None
+
+    def test_amount_mutual_exclusivity(self) -> None:
+        """Test that amount and amount_fraction are mutually exclusive."""
+        # Both None
+        with pytest.raises(ValidationError):
+            ScheduleEntry(
+                mixdepth=1,
+                counterparty_count=4,
+                destination="INTERNAL",
+            )
+
+        # Both set
+        with pytest.raises(ValidationError):
+            ScheduleEntry(
+                mixdepth=1,
+                amount=100000,
+                amount_fraction=0.5,
+                counterparty_count=4,
+                destination="INTERNAL",
+            )
 
     def test_mixdepth_bounds(self) -> None:
         """Test mixdepth must be 0-9."""
@@ -208,7 +229,7 @@ class TestSchedule:
             ScheduleEntry(mixdepth=1, amount=500_000, counterparty_count=4, destination="INTERNAL"),
             ScheduleEntry(
                 mixdepth=2,
-                amount=0.5,
+                amount_fraction=0.5,
                 counterparty_count=5,
                 destination="bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
             ),

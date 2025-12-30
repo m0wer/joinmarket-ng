@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from jmcore.bitcoin import calculate_sweep_amount
 from jmcore.commitment_blacklist import set_blacklist_path
 from jmcore.crypto import NickIdentity
 from jmcore.directory_client import DirectoryClient
@@ -1207,22 +1208,21 @@ class Taker:
                 # cj_amount = total_input - maker_fees - tx_fee
                 # For relative fees, solve:
                 #   cj_amount = (total_in - tx_fee - sum(abs_fees)) / (1 + sum(rel_fees))
-                from decimal import Decimal
 
                 from jmcore.models import OfferType
 
                 sum_abs_fees = 0
-                sum_rel_fees = Decimal("0")
+                rel_fees = []
 
                 for session in self.maker_sessions.values():
                     offer = session.offer
                     if offer.ordertype in (OfferType.SW0_ABSOLUTE, OfferType.SWA_ABSOLUTE):
                         sum_abs_fees += int(offer.cjfee)
                     else:
-                        sum_rel_fees += Decimal(str(offer.cjfee))
+                        rel_fees.append(str(offer.cjfee))
 
                 available = preselected_total - tx_fee - sum_abs_fees
-                self.cj_amount = int(Decimal(available) / (1 + sum_rel_fees))
+                self.cj_amount = calculate_sweep_amount(available, rel_fees)
 
                 # Recalculate final maker fees with updated cj_amount
                 total_maker_fee = sum(
@@ -1808,12 +1808,13 @@ class Taker:
             )
 
             # Calculate actual amount
-            if isinstance(entry.amount, float) and 0 < entry.amount < 1:
+            if entry.amount_fraction is not None:
                 # Fraction of balance
                 balance = await self.wallet.get_balance(entry.mixdepth)
-                amount = int(balance * entry.amount)
+                amount = int(balance * entry.amount_fraction)
             else:
-                amount = int(entry.amount)
+                assert entry.amount is not None
+                amount = entry.amount
 
             # Execute CoinJoin
             txid = await self.do_coinjoin(

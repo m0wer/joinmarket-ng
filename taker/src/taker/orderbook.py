@@ -12,9 +12,12 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable
-from decimal import Decimal
 from typing import Any
 
+from jmcore.bitcoin import (
+    calculate_relative_fee,
+    calculate_sweep_amount,
+)
 from jmcore.models import Offer, OfferType
 from jmcore.protocol import get_nick_version
 from loguru import logger
@@ -36,7 +39,7 @@ def calculate_cj_fee(offer: Offer, cj_amount: int) -> int:
     if offer.ordertype in (OfferType.SW0_ABSOLUTE, OfferType.SWA_ABSOLUTE):
         return int(offer.cjfee)
     else:
-        return int(Decimal(str(offer.cjfee)) * Decimal(cj_amount))
+        return calculate_relative_fee(cj_amount, str(offer.cjfee))
 
 
 def is_fee_within_limits(offer: Offer, cj_amount: int, max_cj_fee: MaxCjFee) -> bool:
@@ -61,7 +64,11 @@ def is_fee_within_limits(offer: Offer, cj_amount: int, max_cj_fee: MaxCjFee) -> 
         return int(offer.cjfee) <= max_cj_fee.abs_fee
     else:
         # For relative offers, check against relative limit directly
-        return Decimal(str(offer.cjfee)) <= Decimal(max_cj_fee.rel_fee)
+        # Compare by calculating fee on a large reference amount
+        ref_amount = 100_000_000_000  # 1000 BTC
+        fee_val = calculate_relative_fee(ref_amount, str(offer.cjfee))
+        limit_val = calculate_relative_fee(ref_amount, max_cj_fee.rel_fee)
+        return fee_val <= limit_val
 
 
 def filter_offers(
@@ -449,10 +456,9 @@ def choose_sweep_orders(
 
     # For sweep, we need to find offers that work for the available amount
     # First estimate: cj_amount = total_input - my_txfee - estimated_fees
-    estimated_rel_fee_sum = Decimal("0.001") * n  # Assume ~0.1% per maker
-    estimated_cj_amount = int(
-        (Decimal(total_input_value) - Decimal(my_txfee)) / (1 + estimated_rel_fee_sum)
-    )
+    # Assume ~0.1% per maker for estimation
+    estimated_rel_fees = ["0.001"] * n
+    estimated_cj_amount = calculate_sweep_amount(total_input_value - my_txfee, estimated_rel_fees)
 
     # Filter with estimated amount
     eligible = filter_offers(
@@ -477,18 +483,17 @@ def choose_sweep_orders(
     selected = choose_fn(deduped, n)
 
     # Now solve for exact cj_amount
-    # For relative fees: cj_amount = (total_in - my_txfee - sum(abs_fees)) / (1 + sum(rel_fees))
     sum_abs_fees = 0
-    sum_rel_fees = Decimal("0")
+    rel_fees = []
 
     for offer in selected:
         if offer.ordertype in (OfferType.SW0_ABSOLUTE, OfferType.SWA_ABSOLUTE):
             sum_abs_fees += int(offer.cjfee)
         else:
-            sum_rel_fees += Decimal(str(offer.cjfee))
+            rel_fees.append(str(offer.cjfee))
 
     available = total_input_value - my_txfee - sum_abs_fees
-    cj_amount = int(Decimal(available) / (1 + sum_rel_fees))
+    cj_amount = calculate_sweep_amount(available, rel_fees)
 
     # Verify this works for all selected offers
     for offer in selected:

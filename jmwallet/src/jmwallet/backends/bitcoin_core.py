@@ -12,6 +12,8 @@ from collections.abc import Sequence
 from typing import Any
 
 import httpx
+from jmcore.bitcoin import btc_to_sats
+from jmcore.constants import SATS_PER_BTC
 from loguru import logger
 
 from jmwallet.backends.base import UTXO, BlockchainBackend, Transaction
@@ -248,7 +250,7 @@ class BitcoinCoreBackend(BlockchainBackend):
                     utxo = UTXO(
                         txid=utxo_data["txid"],
                         vout=utxo_data["vout"],
-                        value=int(utxo_data["amount"] * 100_000_000),
+                        value=btc_to_sats(utxo_data["amount"]),
                         address=address,
                         confirmations=confirmations,
                         scriptpubkey=utxo_data.get("scriptPubKey", ""),
@@ -363,7 +365,7 @@ class BitcoinCoreBackend(BlockchainBackend):
 
             if "feerate" in result:
                 btc_per_kb = result["feerate"]
-                sat_per_vbyte = int((btc_per_kb * 100_000_000) / 1000)
+                sat_per_vbyte = int((btc_per_kb * SATS_PER_BTC) / 1000)
                 logger.debug(f"Estimated fee for {target_blocks} blocks: {sat_per_vbyte} sat/vB")
                 return sat_per_vbyte
             else:
@@ -431,7 +433,7 @@ class BitcoinCoreBackend(BlockchainBackend):
                         # Check if the vout exists and hasn't been spent
                         if vout < len(tx_data["vout"]):
                             vout_data = tx_data["vout"][vout]
-                            value = int(vout_data.get("value", 0) * 100_000_000)
+                            value = btc_to_sats(vout_data.get("value", 0))
 
                             # Extract address from scriptPubKey
                             script_pub_key = vout_data.get("scriptPubKey", {})
@@ -463,7 +465,7 @@ class BitcoinCoreBackend(BlockchainBackend):
             tip_height = await self.get_block_height()
 
             confirmations = result.get("confirmations", 0)
-            value = int(result.get("value", 0) * 100_000_000)  # BTC to sats
+            value = btc_to_sats(result.get("value", 0))  # BTC to sats
 
             # Extract address from scriptPubKey
             script_pub_key = result.get("scriptPubKey", {})

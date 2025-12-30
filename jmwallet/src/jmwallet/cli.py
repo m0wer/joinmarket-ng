@@ -416,8 +416,10 @@ async def _show_wallet_info(
     try:
         await wallet.sync_all()
 
+        from jmcore.bitcoin import format_amount
+
         total_balance = await wallet.get_total_balance()
-        print(f"\nTotal Balance: {total_balance:,} sats ({total_balance / 1e8:.8f} BTC)")
+        print(f"\nTotal Balance: {format_amount(total_balance)}")
         print("\nBalance by mixdepth:")
 
         for md in range(5):
@@ -526,7 +528,9 @@ async def _list_fidelity_bonds(
             status = "EXPIRED" if expired else "ACTIVE"
             print(f"Bond #{i}: [{status}]")
             print(f"  UTXO:        {bond.txid}:{bond.vout}")
-            print(f"  Value:       {bond.value:,} sats ({bond.value / 1e8:.8f} BTC)")
+            from jmcore.bitcoin import format_amount
+
+            print(f"  Value:       {format_amount(bond.value)}")
             print(f"  Locktime:    {bond.locktime} ({locktime_dt.strftime('%Y-%m-%d %H:%M:%S')})")
             print(f"  Confirms:    {bond.confirmation_time}")
             print(f"  Bond Value:  {bond.bond_value:,}")
@@ -1452,7 +1456,9 @@ async def _sync_bonds_async(
                 confirmations=utxo.confirmations,
             )
             updated += 1
-            btc_value = utxo.value / 100_000_000
+            from jmcore.bitcoin import sats_to_btc
+
+            btc_value = sats_to_btc(utxo.value)
             print(f"  {bond.address[:20]}... FUNDED ({btc_value:.8f} BTC)")
         else:
             if bond.is_funded:

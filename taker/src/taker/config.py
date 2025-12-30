@@ -121,12 +121,31 @@ class ScheduleEntry(BaseModel):
     """A single entry in a CoinJoin schedule."""
 
     mixdepth: int = Field(..., ge=0, le=9)
-    amount: int | float = Field(..., description="Amount in sats (int) or fraction (float 0-1)")
+    amount: int | None = Field(
+        default=None,
+        ge=0,
+        description="Amount in satoshis (mutually exclusive with amount_fraction)",
+    )
+    amount_fraction: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of balance (0.0-1.0, mutually exclusive with amount)",
+    )
     counterparty_count: int = Field(..., ge=1, le=20)
     destination: str = Field(..., description="Destination address or 'INTERNAL'")
     wait_time: float = Field(default=0.0, ge=0.0, description="Wait time after completion")
     rounding: int = Field(default=16, ge=1, description="Significant figures for rounding")
     completed: bool = False
+
+    @model_validator(mode="after")
+    def validate_amount_fields(self) -> ScheduleEntry:
+        """Ensure exactly one of amount or amount_fraction is set."""
+        if self.amount is None and self.amount_fraction is None:
+            raise ValueError("Must specify either 'amount' or 'amount_fraction'")
+        if self.amount is not None and self.amount_fraction is not None:
+            raise ValueError("Cannot specify both 'amount' and 'amount_fraction'")
+        return self
 
 
 class Schedule(BaseModel):

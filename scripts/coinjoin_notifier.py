@@ -110,9 +110,12 @@ def send_gotify_notification(title: str, message: str, priority: int = 5) -> boo
         return False
 
 
+SATS_PER_BTC = 100_000_000
+
+
 def format_satoshis(sats: int) -> str:
     """Format satoshis as BTC with appropriate precision."""
-    btc = sats / 100_000_000
+    btc = sats / SATS_PER_BTC
     return f"{btc:.8f} BTC ({sats:,} sats)"
 
 
