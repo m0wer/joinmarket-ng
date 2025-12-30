@@ -76,6 +76,29 @@ class MakerConfig(WalletConfig):
         default=0, ge=0, description="Transaction fee contribution in satoshis"
     )
 
+    # Offer randomization (privacy enhancement)
+    # Randomize min/max size to avoid fingerprinting static offers
+    randomize_offer_size: bool = Field(
+        default=False, description="Randomize minsize/maxsize by +/- percentage"
+    )
+    size_randomization_percent: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=0.5,
+        description="Max % variation for size randomization (default 20%)",
+    )
+
+    # Randomize fees to avoid fingerprinting
+    randomize_offer_fee: bool = Field(
+        default=False, description="Randomize CJ fee by +/- percentage"
+    )
+    fee_randomization_percent: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=0.3,
+        description="Max % variation for fee randomization (default 10%)",
+    )
+
     # Minimum confirmations for UTXOs
     min_confirmations: int = Field(default=1, ge=0, description="Minimum confirmations for UTXOs")
 
