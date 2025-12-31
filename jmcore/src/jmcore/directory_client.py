@@ -855,15 +855,32 @@ class DirectoryClient:
                             # Accept PUBLIC broadcasts or messages addressed to us
                             if to_nick == "PUBLIC" or to_nick == self.nick:
                                 # If we don't have features for this peer, refresh peerlist
-                                if from_nick not in self.peer_features:
+                                # and request orderbook to get their fidelity bond
+                                is_new_peer = from_nick not in self.peer_features
+                                if is_new_peer:
                                     try:
                                         await self.get_peerlist_with_features()
                                         logger.debug(
                                             f"Refreshed peerlist (new peer: {from_nick}), "
                                             f"now tracking {len(self.peer_features)} peers"
                                         )
+                                        # Send !orderbook to request fidelity bond from new peer
+                                        # Only do this if we're in request_orderbook mode (orderbook watcher)
+                                        if request_orderbook:
+                                            pubmsg = {
+                                                "type": MessageType.PUBMSG.value,
+                                                "line": f"{self.nick}!PUBLIC!!orderbook",
+                                            }
+                                            await self.connection.send(
+                                                json.dumps(pubmsg).encode("utf-8")
+                                            )
+                                            logger.info(
+                                                f"Sent !orderbook request for new peer {from_nick}"
+                                            )
                                     except Exception as e:
-                                        logger.debug(f"Failed to refresh peerlist: {e}")
+                                        logger.debug(
+                                            f"Failed to refresh peerlist or request orderbook: {e}"
+                                        )
 
                                 # Parse offer announcements
                                 for offer_type_prefix in [
