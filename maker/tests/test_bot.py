@@ -242,7 +242,7 @@ class TestBotInitialization:
             network=NetworkType.REGTEST,
             onion_host="test1234567890abcdef.onion",
             onion_serving_host="127.0.0.1",
-            onion_serving_port=27183,
+            onion_serving_port=5222,
             socks_host="127.0.0.1",
             socks_port=9050,
         )
@@ -256,7 +256,7 @@ class TestBotInitialization:
         # Hidden service listener is created during start(), not init
         assert bot.hidden_service_listener is None
         assert config.onion_host == "test1234567890abcdef.onion"
-        assert config.onion_serving_port == 27183
+        assert config.onion_serving_port == 5222
 
 
 class TestHiddenServiceListener:

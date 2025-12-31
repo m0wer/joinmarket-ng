@@ -52,7 +52,7 @@ class MakerConfig(WalletConfig):
         default="127.0.0.1", description="Local address Tor forwards to"
     )
     onion_serving_port: int = Field(
-        default=27183, ge=0, le=65535, description="Default JoinMarket port (0 = auto-assign)"
+        default=5222, ge=0, le=65535, description="Default JoinMarket port (0 = auto-assign)"
     )
 
     # Tor control port configuration for dynamic hidden service creation

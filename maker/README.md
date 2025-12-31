@@ -190,7 +190,23 @@ jm-maker start \
 
 ## Docker Deployment
 
-Docker includes pre-configured Tor with control port enabled. No manual Tor setup needed.
+Docker includes Tor container. For ephemeral .onion creation, Tor needs control port accessible.
+
+**Create `torrc` for Tor container:**
+
+```torc
+# Minimal Tor configuration for JoinMarket maker
+
+# SOCKS proxy listening on all interfaces
+SocksPort 0.0.0.0:9050
+
+# Control port for ephemeral hidden services (bind to 0.0.0.0 for Docker)
+ControlPort 0.0.0.0:9051
+CookieAuthentication 1
+CookieAuthFile /var/lib/tor/control_auth_cookie
+```
+
+Save as `./torrc` and mount it in the Tor container.
 
 ### Production: Neutrino + Tor (Recommended)
 
@@ -200,6 +216,7 @@ services:
     image: ghcr.io/m0wer/docker-tor:latest
     restart: unless-stopped
     volumes:
+      - ./torrc:/etc/tor/torrc:ro
       - tor-data:/var/lib/tor
 
   neutrino:
@@ -246,6 +263,7 @@ services:
     image: ghcr.io/m0wer/docker-tor:latest
     restart: unless-stopped
     volumes:
+      - ./torrc:/etc/tor/torrc:ro
       - tor-data:/var/lib/tor
 
   bitcoind:
@@ -369,7 +387,7 @@ Runs in `NOT-SERVING-ONION` mode (all traffic via directory).
 | `FIDELITY_BOND_LOCKTIMES` | Auto-discover | Comma-separated Unix timestamps for fidelity bond locktimes |
 | `MERGE_ALGORITHM` | `default` | UTXO selection: `default`, `gradual`, `greedy`, `random` |
 | `ONION_SERVING_HOST` | `127.0.0.1` | Host to bind for incoming .onion connections |
-| `ONION_SERVING_PORT` | `27183` | Port for incoming .onion connections |
+| `ONION_SERVING_PORT` | `5222` | Port for incoming .onion connections |
 | `JOINMARKET_DATA_DIR` | `~/.joinmarket-ng` | Data directory for history and blacklist |
 
 ## CLI Reference

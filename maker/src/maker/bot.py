@@ -122,9 +122,9 @@ class MakerBot:
                 logger.debug("Could not get Tor version (non-critical)")
 
             # Create ephemeral hidden service
-            # Maps external port 27183 to our local serving port
+            # Maps external port (advertised) to our local serving port
             logger.info(
-                f"Creating ephemeral hidden service on port 27183 -> "
+                f"Creating ephemeral hidden service on port {self.config.onion_serving_port} -> "
                 f"{self.config.onion_serving_host}:{self.config.onion_serving_port}..."
             )
 
@@ -132,7 +132,7 @@ class MakerBot:
                 await self._tor_control.create_ephemeral_hidden_service(
                     ports=[
                         (
-                            27183,
+                            self.config.onion_serving_port,
                             f"{self.config.onion_serving_host}:{self.config.onion_serving_port}",
                         )
                     ],
@@ -305,9 +305,13 @@ class MakerBot:
                     port = int(parts[1]) if len(parts) > 1 else 5222
 
                     # Determine location for handshake:
-                    # If we have an onion_host configured (static or ephemeral), advertise it
+                    # If we have an onion_host configured (static or ephemeral),
+                    # advertise it with port
                     # Otherwise, use NOT-SERVING-ONION
-                    location = onion_host or "NOT-SERVING-ONION"
+                    if onion_host:
+                        location = f"{onion_host}:{self.config.onion_serving_port}"
+                    else:
+                        location = "NOT-SERVING-ONION"
 
                     # Advertise neutrino_compat if our backend can provide extended UTXO metadata.
                     # This tells Neutrino takers that we can provide scriptpubkey and blockheight.
