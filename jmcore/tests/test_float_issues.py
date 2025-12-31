@@ -133,13 +133,3 @@ def test_large_numbers_precision() -> None:
     # Float check
     fee_float = max_supply_float * 0.00000001
     assert int(fee_float) == 21_000_000
-
-
-def test_verify_no_decimal_usage() -> None:
-    """
-    Verify that our critical functions don't use Decimal (by inspecting code is hard in test,
-    but we can verify they work without importing decimal).
-    """
-    # This test is implicit - if the other tests pass without errors,
-    # and we know we removed Decimal imports in previous steps, we are good.
-    pass

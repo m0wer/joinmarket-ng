@@ -74,20 +74,6 @@ def test_bond_proof_format_matches_reference():
     assert b"\x30" in cert_sig, "Cert signature should contain DER header"
 
 
-def test_bond_should_not_be_in_public_broadcast():
-    """Fidelity bonds should NOT be sent in public broadcasts.
-
-    According to the reference implementation:
-    - Public broadcasts (!orderbook initial): Only offer, NO bond
-    - Private responses (PRIVMSG to taker): Offer + !tbond <proof>
-
-    This test verifies our maker follows this protocol.
-    """
-    # This test documents the expected behavior - we need to fix the maker
-    # to only send bonds in private responses, not public broadcasts
-    pass
-
-
 @pytest.mark.asyncio
 async def test_bond_sent_only_in_privmsg_response():
     """Verify bonds are only sent in PRIVMSG responses to orderbook requests.

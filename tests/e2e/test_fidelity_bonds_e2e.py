@@ -32,7 +32,6 @@ async def test_orderbook_watcher_receives_bonds(wait_for_directory_server):
     4. Checks that bonds are correctly parsed
     """
     # Connect as orderbook watcher
-    # Note: Docker directory server uses "testnet" even though Bitcoin is on regtest
     watcher = DirectoryClient(
         host="127.0.0.1",
         port=5222,
@@ -79,7 +78,6 @@ async def test_new_peer_triggers_orderbook_request(wait_for_directory_server):
     a new peer via PUBLIC announcement.
     """
     # Connect as orderbook watcher
-    # Note: Docker directory server uses "testnet" even though Bitcoin is on regtest
     watcher = DirectoryClient(
         host="127.0.0.1",
         port=5222,
@@ -148,7 +146,6 @@ async def test_bond_appears_in_privmsg_not_public(wait_for_directory_server):
     This verifies the privacy-preserving design where bonds are only sent to
     specific requesters via PRIVMSG, not broadcast publicly.
     """
-    # Note: Docker directory server uses "testnet" even though Bitcoin is on regtest
     watcher = DirectoryClient(
         host="127.0.0.1",
         port=5222,

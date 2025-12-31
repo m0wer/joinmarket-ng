@@ -11,6 +11,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from jmcore.bitcoin import calculate_relative_fee
+
 
 class MessageParsingError(Exception):
     """Exception raised when message parsing fails due to security limits."""
@@ -240,8 +242,6 @@ class Offer(BaseModel):
         if self.is_absolute_fee():
             return int(self.cjfee)
         else:
-            from jmcore.bitcoin import calculate_relative_fee
-
             # cjfee is guaranteed to be str for relative fee types by validation
             return calculate_relative_fee(amount, str(self.cjfee))
 
