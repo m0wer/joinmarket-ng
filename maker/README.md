@@ -173,9 +173,9 @@ jm-maker start \
 
 ## Docker Deployment
 
-### With Neutrino and Tor (Ephemeral Hidden Service)
+### With Neutrino and Tor
 
-Recommended setup with ephemeral hidden service for privacy.
+Recommended setup for privacy.
 
 **1. Create torrc configuration:**
 
@@ -202,16 +202,17 @@ services:
       - tor-data:/var/lib/tor
 
   neutrino:
-    image: ghcr.io/m0wer/neutrino-api
+    image: ghcr.io/m0wer/neutrino-api:0.5.0
     environment:
       NETWORK: mainnet
+      TOR_PROXY: tor:9050
     volumes:
       - neutrino-data:/data/neutrino
+    depends_on:
+      - tor
 
   maker:
-    build:
-      context: ..
-      dockerfile: maker/Dockerfile
+    image: ghcr.io/m0wer/joinmarket-ng/maker:latest
     environment:
       MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/maker.mnemonic
       BACKEND_TYPE: neutrino
@@ -226,7 +227,7 @@ services:
       ONION_SERVING_PORT: 27183
     volumes:
       - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
-      - tor-data:/var/lib/tor:ro  # Read-only access to cookie
+      - tor-data:/var/lib/tor:ro
     depends_on:
       - neutrino
       - tor
@@ -242,22 +243,27 @@ volumes:
 docker-compose up -d
 ```
 
-The maker will:
-- Connect to directory servers through Tor SOCKS proxy (port 9050)
-- Generate a fresh `.onion` address via Tor control port (port 9051)
-- Advertise this ephemeral address to takers
-- Clean up the hidden service when stopped
+### With Neutrino (No Tor Control)
 
-### With Neutrino (Simple)
-
-If you already have Tor running elsewhere:
+If you already have Tor running and don't need ephemeral hidden service:
 
 ```yaml
 services:
+  tor:
+    image: ghcr.io/m0wer/docker-tor:latest
+
+  neutrino:
+    image: ghcr.io/m0wer/neutrino-api:0.5.0
+    environment:
+      NETWORK: mainnet
+      TOR_PROXY: tor:9050
+    volumes:
+      - neutrino-data:/data/neutrino
+    depends_on:
+      - tor
+
   maker:
-    build:
-      context: ..
-      dockerfile: maker/Dockerfile
+    image: ghcr.io/m0wer/joinmarket-ng/maker:latest
     environment:
       MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/maker.mnemonic
       BACKEND_TYPE: neutrino
@@ -268,23 +274,13 @@ services:
       - neutrino
       - tor
 
-  neutrino:
-    image: ghcr.io/m0wer/neutrino-api
-    environment:
-      NETWORK: mainnet
-    volumes:
-      - neutrino-data:/data/neutrino
-
-  tor:
-    image: dperson/torproxy
-
 volumes:
   neutrino-data:
 ```
 
 ### With Bitcoin Core and Tor
 
-**1. Create torrc configuration (if not already created):**
+**1. Create torrc configuration:**
 
 ```bash
 mkdir -p tor/conf
@@ -314,9 +310,7 @@ services:
       - bitcoin-data:/bitcoin/.bitcoin
 
   maker:
-    build:
-      context: ..
-      dockerfile: maker/Dockerfile
+    image: ghcr.io/m0wer/joinmarket-ng/maker:latest
     environment:
       MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/maker.mnemonic
       BACKEND_TYPE: full_node
