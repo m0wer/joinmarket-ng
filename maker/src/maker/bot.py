@@ -187,12 +187,28 @@ class MakerBot:
             logger.info("Syncing wallet...")
             await self.wallet.sync_all()
 
-            # Sync fidelity bonds if locktimes are configured
-            if self.config.fidelity_bond_locktimes:
-                logger.info(
-                    f"Syncing fidelity bonds for locktimes: {self.config.fidelity_bond_locktimes}"
+            # Sync fidelity bonds - auto-discover locktimes from registry if not specified
+            fidelity_locktimes = list(self.config.fidelity_bond_locktimes)  # Copy to avoid mutating
+
+            # Auto-discover locktimes from bond registry if none specified
+            if not fidelity_locktimes:
+                from jmcore.paths import get_default_data_dir
+                from jmwallet.wallet.bond_registry import get_all_locktimes
+
+                resolved_data_dir = (
+                    self.config.data_dir if self.config.data_dir else get_default_data_dir()
                 )
-                await self.wallet.sync_fidelity_bonds(self.config.fidelity_bond_locktimes)
+                registry_locktimes = get_all_locktimes(resolved_data_dir)
+                if registry_locktimes:
+                    fidelity_locktimes = registry_locktimes
+                    logger.info(
+                        f"Auto-discovered {len(registry_locktimes)} fidelity bond locktime(s) "
+                        "from registry"
+                    )
+
+            if fidelity_locktimes:
+                logger.info(f"Syncing fidelity bonds for locktimes: {fidelity_locktimes}")
+                await self.wallet.sync_fidelity_bonds(fidelity_locktimes)
 
             total_balance = await self.wallet.get_total_balance()
             logger.info(f"Wallet synced. Total balance: {total_balance:,} sats")

@@ -9,6 +9,8 @@ from jmwallet.wallet.bond_registry import (
     BondRegistry,
     FidelityBondInfo,
     create_bond_info,
+    get_active_locktimes,
+    get_all_locktimes,
     get_registry_path,
     load_registry,
     save_registry,
@@ -402,3 +404,131 @@ class TestCreateBondInfo:
         assert "2024" in bond.locktime_human or "2025" in bond.locktime_human  # Date format
         assert bond.created_at  # Should have a timestamp
         assert bond.txid is None  # Not funded yet
+
+
+class TestLocktimeFunctions:
+    """Tests for locktime discovery functions."""
+
+    def test_get_all_locktimes_empty(self, tmp_path: Path) -> None:
+        """Test get_all_locktimes with empty registry."""
+        locktimes = get_all_locktimes(tmp_path)
+        assert locktimes == []
+
+    def test_get_all_locktimes_returns_all(self, tmp_path: Path) -> None:
+        """Test get_all_locktimes returns all unique locktimes."""
+        now = int(time.time())
+        registry = BondRegistry()
+
+        # Add bonds with different locktimes (some funded, some not)
+        bond1 = FidelityBondInfo(
+            address="bc1qbond1",
+            locktime=now + 86400,
+            locktime_human="2025-01-01 00:00:00",
+            index=0,
+            path="m/84'/0'/0'/2/0",
+            pubkey="02" + "00" * 32,
+            witness_script_hex="00" * 50,
+            network="mainnet",
+            created_at="2025-01-01T00:00:00",
+            txid="tx1",
+            vout=0,
+            value=100000,
+        )
+        bond2 = FidelityBondInfo(
+            address="bc1qbond2",
+            locktime=now + 86400 * 2,
+            locktime_human="2025-01-02 00:00:00",
+            index=1,
+            path="m/84'/0'/0'/2/1",
+            pubkey="02" + "00" * 32,
+            witness_script_hex="00" * 50,
+            network="mainnet",
+            created_at="2025-01-01T00:00:00",
+        )  # Unfunded
+        bond3 = FidelityBondInfo(
+            address="bc1qbond3",
+            locktime=now + 86400,  # Same locktime as bond1
+            locktime_human="2025-01-01 00:00:00",
+            index=2,
+            path="m/84'/0'/0'/2/2",
+            pubkey="02" + "00" * 32,
+            witness_script_hex="00" * 50,
+            network="mainnet",
+            created_at="2025-01-01T00:00:00",
+        )
+
+        registry.add_bond(bond1)
+        registry.add_bond(bond2)
+        registry.add_bond(bond3)
+        save_registry(registry, tmp_path)
+
+        locktimes = get_all_locktimes(tmp_path)
+        # Should return 2 unique locktimes (bond1&3 share one, bond2 has different)
+        assert len(locktimes) == 2
+        assert now + 86400 in locktimes
+        assert now + 86400 * 2 in locktimes
+        # Should be sorted
+        assert locktimes == sorted(locktimes)
+
+    def test_get_active_locktimes_empty(self, tmp_path: Path) -> None:
+        """Test get_active_locktimes with empty registry."""
+        locktimes = get_active_locktimes(tmp_path)
+        assert locktimes == []
+
+    def test_get_active_locktimes_only_active(self, tmp_path: Path) -> None:
+        """Test get_active_locktimes returns only locktimes for active bonds."""
+        now = int(time.time())
+        registry = BondRegistry()
+
+        # Active bond (funded + not expired)
+        active = FidelityBondInfo(
+            address="bc1qactive",
+            locktime=now + 86400 * 365,
+            locktime_human="2026-01-01 00:00:00",
+            index=0,
+            path="m/84'/0'/0'/2/0",
+            pubkey="02" + "00" * 32,
+            witness_script_hex="00" * 50,
+            network="mainnet",
+            created_at="2025-01-01T00:00:00",
+            txid="tx1",
+            vout=0,
+            value=100000,
+        )
+        # Unfunded bond
+        unfunded = FidelityBondInfo(
+            address="bc1qunfunded",
+            locktime=now + 86400 * 200,
+            locktime_human="2025-07-01 00:00:00",
+            index=1,
+            path="m/84'/0'/0'/2/1",
+            pubkey="02" + "00" * 32,
+            witness_script_hex="00" * 50,
+            network="mainnet",
+            created_at="2025-01-01T00:00:00",
+        )
+        # Expired bond (funded but past locktime)
+        expired = FidelityBondInfo(
+            address="bc1qexpired",
+            locktime=now - 86400,  # Past
+            locktime_human="2020-01-01 00:00:00",
+            index=2,
+            path="m/84'/0'/0'/2/2",
+            pubkey="02" + "00" * 32,
+            witness_script_hex="00" * 50,
+            network="mainnet",
+            created_at="2025-01-01T00:00:00",
+            txid="tx2",
+            vout=0,
+            value=200000,
+        )
+
+        registry.add_bond(active)
+        registry.add_bond(unfunded)
+        registry.add_bond(expired)
+        save_registry(registry, tmp_path)
+
+        locktimes = get_active_locktimes(tmp_path)
+        # Should only return the locktime of the active bond
+        assert len(locktimes) == 1
+        assert now + 86400 * 365 in locktimes

@@ -149,16 +149,21 @@ jm-maker start \
 Increase offer visibility by locking bitcoin for a period. See wallet CLI:
 
 ```bash
-# Generate bond address
+# Generate bond address (saves to registry for auto-discovery)
 jm-wallet generate-bond-address \
   --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
   --locktime 1735689600
 
 # List existing bonds
 jm-wallet list-bonds --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic
+
+# View registry entries
+jm-wallet registry-list
 ```
 
-Specify bond locktimes when starting:
+**Auto-discovery**: Bonds created with `generate-bond-address` are saved to the bond registry (`~/.joinmarket-ng/fidelity_bonds.json`). The maker bot **automatically discovers** these bonds at startup - no need to specify locktimes manually.
+
+If you need to manually specify locktimes (e.g., for bonds created outside this tool):
 
 ```bash
 jm-maker start \

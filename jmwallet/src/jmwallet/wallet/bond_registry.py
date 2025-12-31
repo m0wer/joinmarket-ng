@@ -176,6 +176,46 @@ def save_registry(registry: BondRegistry, data_dir: Path) -> None:
         raise
 
 
+def get_active_locktimes(data_dir: Path) -> list[int]:
+    """
+    Get all locktimes from the bond registry that have funded, active bonds.
+
+    This is useful for the maker bot to automatically discover which locktimes
+    to scan for when syncing fidelity bonds, without requiring the user to
+    manually specify --fidelity-bond-locktime.
+
+    Args:
+        data_dir: Data directory path
+
+    Returns:
+        List of unique locktimes (Unix timestamps) for active bonds
+    """
+    registry = load_registry(data_dir)
+    active_bonds = registry.get_active_bonds()
+    # Get unique locktimes
+    locktimes = list({bond.locktime for bond in active_bonds})
+    return sorted(locktimes)
+
+
+def get_all_locktimes(data_dir: Path) -> list[int]:
+    """
+    Get all locktimes from the bond registry (funded or not).
+
+    This includes all bonds in the registry to allow scanning for UTXOs
+    that may have been funded since the last sync.
+
+    Args:
+        data_dir: Data directory path
+
+    Returns:
+        List of unique locktimes (Unix timestamps) for all bonds
+    """
+    registry = load_registry(data_dir)
+    # Get unique locktimes from ALL bonds (not just funded ones)
+    locktimes = list({bond.locktime for bond in registry.bonds})
+    return sorted(locktimes)
+
+
 def create_bond_info(
     address: str,
     locktime: int,
