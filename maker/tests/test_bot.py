@@ -83,7 +83,11 @@ class TestOfferAnnouncement:
         assert parts[5] == "0.0003"  # cjfee
 
     def test_format_offer_with_bond(self, maker_bot, sample_offer, test_private_key, test_pubkey):
-        """Test offer formatting with fidelity bond attached."""
+        """Test offer formatting with fidelity bond attached for PRIVMSG.
+
+        Bonds should ONLY be included when include_bond=True (for PRIVMSG responses).
+        Public broadcasts should never include bonds.
+        """
         # Set up fidelity bond
         maker_bot.fidelity_bond = FidelityBondInfo(
             txid="ab" * 32,
@@ -96,13 +100,16 @@ class TestOfferAnnouncement:
             private_key=test_private_key,
         )
 
-        msg = maker_bot._format_offer_announcement(sample_offer)
+        # Test 1: Public announcement should NOT include bond (default)
+        msg_public = maker_bot._format_offer_announcement(sample_offer)
+        assert "!tbond" not in msg_public, "Public announcements should not include bond"
 
-        # Should contain !tbond
-        assert "!tbond " in msg
+        # Test 2: PRIVMSG should include bond when explicitly requested
+        msg_privmsg = maker_bot._format_offer_announcement(sample_offer, include_bond=True)
+        assert "!tbond " in msg_privmsg, "PRIVMSG should include bond when include_bond=True"
 
-        # Parse the message
-        parts = msg.split("!tbond ")
+        # Parse the PRIVMSG message
+        parts = msg_privmsg.split("!tbond ")
         assert len(parts) == 2
 
         # Check offer part
