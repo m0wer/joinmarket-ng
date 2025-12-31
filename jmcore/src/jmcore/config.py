@@ -43,9 +43,15 @@ class TorControlConfig(BaseModel):
         ControlPort 127.0.0.1:9051
         CookieAuthentication 1
         CookieAuthFile /var/lib/tor/control_auth_cookie
+
+    Auto-detects configuration from environment variables:
+        TOR_CONTROL_HOST - Tor control host (default: 127.0.0.1)
+        TOR_CONTROL_PORT - Tor control port (default: 9051)
+        TOR_COOKIE_PATH - Cookie auth file path
+        TOR_PASSWORD - Tor control password (not recommended)
     """
 
-    enabled: bool = Field(default=False, description="Enable Tor control port integration")
+    enabled: bool = Field(default=True, description="Enable Tor control port integration")
     host: str = Field(default="127.0.0.1", description="Tor control port host")
     port: int = Field(default=9051, ge=1, le=65535, description="Tor control port")
     cookie_path: Path | None = Field(
@@ -58,6 +64,58 @@ class TorControlConfig(BaseModel):
     )
 
     model_config = {"frozen": False}
+
+
+def create_tor_control_config_from_env() -> TorControlConfig:
+    """
+    Create TorControlConfig from environment variables with smart defaults.
+
+    Environment variables:
+        TOR_CONTROL_HOST - Tor control host (default: 127.0.0.1 or tor if exists)
+        TOR_CONTROL_PORT - Tor control port (default: 9051)
+        TOR_COOKIE_PATH - Cookie auth file path
+        TOR_PASSWORD - Tor control password
+
+    Auto-detection:
+        - If TOR_COOKIE_PATH is set, use it
+        - Otherwise try common paths: /var/lib/tor/control_auth_cookie, /run/tor/control.authcookie
+    """
+    import os
+
+    # Try to detect if we're in a docker environment with a tor container
+    host = os.environ.get("TOR_CONTROL_HOST", "127.0.0.1")
+    # If TOR_SOCKS_HOST is set to "tor", likely docker - try that for control too
+    if not os.environ.get("TOR_CONTROL_HOST") and os.environ.get("TOR_SOCKS_HOST") == "tor":
+        host = "tor"
+
+    port = int(os.environ.get("TOR_CONTROL_PORT", "9051"))
+    password = os.environ.get("TOR_PASSWORD")
+
+    # Try to find cookie path
+    cookie_path_str = os.environ.get("TOR_COOKIE_PATH")
+    cookie_path: Path | None = None
+
+    if cookie_path_str:
+        cookie_path = Path(cookie_path_str)
+    else:
+        # Try common paths
+        common_paths = [
+            Path("/var/lib/tor/control_auth_cookie"),
+            Path("/run/tor/control.authcookie"),
+            Path("/var/run/tor/control.authcookie"),
+        ]
+        for path in common_paths:
+            if path.exists():
+                cookie_path = path
+                break
+
+    return TorControlConfig(
+        enabled=True,
+        host=host,
+        port=port,
+        cookie_path=cookie_path,
+        password=password,
+    )
 
 
 class BackendConfig(BaseModel):
@@ -183,12 +241,14 @@ class DirectoryServerConfig(BaseModel):
     )
 
     # Rate limiting
+    # Higher limits to accommodate makers responding to orderbook requests
+    # A single maker might send multiple offer messages + bond proofs rapidly
     message_rate_limit: int = Field(
-        default=100, ge=1, description="Messages per second (sustained)"
+        default=500, ge=1, description="Messages per second (sustained)"
     )
-    message_burst_limit: int = Field(default=200, ge=1, description="Maximum burst size")
+    message_burst_limit: int = Field(default=1000, ge=1, description="Maximum burst size")
     rate_limit_disconnect_threshold: int = Field(
-        default=50, ge=1, description="Disconnect after N violations"
+        default=200, ge=1, description="Disconnect after N violations"
     )
 
     # Broadcasting
@@ -221,6 +281,7 @@ class DirectoryServerConfig(BaseModel):
 __all__ = [
     "TorConfig",
     "TorControlConfig",
+    "create_tor_control_config_from_env",
     "BackendConfig",
     "WalletConfig",
     "DirectoryServerConfig",

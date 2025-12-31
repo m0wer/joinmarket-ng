@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from jmcore.config import TorControlConfig, create_tor_control_config_from_env
 from jmcore.models import NetworkType, OfferType, get_default_directory_nodes
 from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
 from jmwallet.backends.neutrino import NeutrinoBackend
@@ -198,6 +199,30 @@ def start(
     tor_socks_port: Annotated[
         int, typer.Option(envvar="TOR_SOCKS_PORT", help="Tor SOCKS proxy port")
     ] = 9050,
+    tor_control_host: Annotated[
+        str | None,
+        typer.Option(
+            envvar="TOR_CONTROL_HOST",
+            help="Tor control port host (default: auto-detect from TOR_SOCKS_HOST)",
+        ),
+    ] = None,
+    tor_control_port: Annotated[
+        int, typer.Option(envvar="TOR_CONTROL_PORT", help="Tor control port")
+    ] = 9051,
+    tor_cookie_path: Annotated[
+        Path | None,
+        typer.Option(
+            envvar="TOR_COOKIE_PATH",
+            help="Path to Tor cookie auth file (e.g., /var/lib/tor/control_auth_cookie)",
+        ),
+    ] = None,
+    disable_tor_control: Annotated[
+        bool,
+        typer.Option(
+            "--disable-tor-control",
+            help="Disable Tor control port integration (maker won't create ephemeral onion)",
+        ),
+    ] = False,
     fidelity_bond_locktimes: Annotated[
         list[int],
         typer.Option("--fidelity-bond-locktime", "-L", help="Fidelity bond locktimes to scan for"),
@@ -289,6 +314,29 @@ def start(
             "network": actual_bitcoin_network.value,
         }
 
+    # Configure Tor control port for ephemeral hidden service creation
+    # By default, enabled with auto-detection from environment
+    tor_control_cfg: TorControlConfig
+    if disable_tor_control:
+        # User explicitly disabled Tor control
+        tor_control_cfg = TorControlConfig(enabled=False)
+        logger.info("Tor control port integration disabled (will advertise NOT-SERVING-ONION)")
+    else:
+        # Auto-configure from environment with smart defaults
+        tor_control_cfg = create_tor_control_config_from_env()
+
+        # Override from CLI if provided
+        if tor_control_host:
+            object.__setattr__(tor_control_cfg, "host", tor_control_host)
+        if tor_cookie_path:
+            object.__setattr__(tor_control_cfg, "cookie_path", tor_cookie_path)
+
+        logger.info(
+            f"Tor control port integration enabled "
+            f"({tor_control_cfg.host}:{tor_control_cfg.port}, "
+            f"cookie_path={tor_control_cfg.cookie_path})"
+        )
+
     config = MakerConfig(
         mnemonic=resolved_mnemonic,
         network=network,
@@ -299,6 +347,7 @@ def start(
         directory_servers=resolved_directory_servers,
         socks_host=tor_socks_host,
         socks_port=tor_socks_port,
+        tor_control=tor_control_cfg,
         min_size=min_size,
         offer_type=parsed_offer_type,
         cj_fee_relative=actual_cj_fee_relative,

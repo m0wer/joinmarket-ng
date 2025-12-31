@@ -74,7 +74,7 @@ class TestTorControlConfig:
     def test_default_values(self) -> None:
         """Test default values are applied."""
         config = TorControlConfig()
-        assert config.enabled is False
+        assert config.enabled is True
         assert config.host == "127.0.0.1"
         assert config.port == 9051
         assert config.cookie_path is None
@@ -104,11 +104,11 @@ class TestMakerConfigTorControl:
     """Tests for MakerConfig tor_control integration."""
 
     def test_default_tor_control(self) -> None:
-        """Test that tor_control defaults to disabled."""
+        """Test that tor_control defaults to enabled."""
         config = MakerConfig(
             mnemonic=TEST_MNEMONIC,
         )
-        assert config.tor_control.enabled is False
+        assert config.tor_control.enabled is True
 
     def test_tor_control_enabled(self, tmp_path: Path) -> None:
         """Test enabling tor_control via nested config."""

@@ -95,6 +95,7 @@ class MakerBot:
             The .onion address if successful, None otherwise
         """
         if not self.config.tor_control.enabled:
+            logger.debug("Tor control port integration disabled")
             return None
 
         try:
@@ -143,12 +144,22 @@ class MakerBot:
             )
 
             logger.info(
-                f"Created ephemeral hidden service: {self._ephemeral_hidden_service.onion_address}"
+                f"✓ Created ephemeral hidden service: "
+                f"{self._ephemeral_hidden_service.onion_address}"
             )
             return self._ephemeral_hidden_service.onion_address
 
         except TorControlError as e:
-            logger.error(f"Failed to create ephemeral hidden service: {e}")
+            logger.warning(
+                f"Could not create ephemeral hidden service via Tor control port: {e}\n"
+                f"  Tor control configured: "
+                f"{self.config.tor_control.host}:{self.config.tor_control.port}\n"
+                f"  Cookie path: {self.config.tor_control.cookie_path}\n"
+                f"  → Maker will advertise 'NOT-SERVING-ONION' and rely on directory routing.\n"
+                f"  → For better privacy, ensure Tor is running with control port enabled:\n"
+                f"     ControlPort {self.config.tor_control.port}\n"
+                f"     CookieAuthentication 1"
+            )
             # Clean up partial connection
             if self._tor_control:
                 await self._tor_control.close()

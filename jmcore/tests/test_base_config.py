@@ -38,7 +38,7 @@ class TestTorConfig:
 class TestTorControlConfig:
     def test_default_values(self):
         config = TorControlConfig()
-        assert config.enabled is False
+        assert config.enabled is True
         assert config.host == "127.0.0.1"
         assert config.port == 9051
         assert config.cookie_path is None

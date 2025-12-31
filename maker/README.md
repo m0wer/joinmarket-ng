@@ -8,6 +8,21 @@ Earn fees by providing liquidity for CoinJoin transactions. Makers passively ear
 pip install -e ../jmcore ../jmwallet .
 ```
 
+## Prerequisites
+
+**Tor is REQUIRED for production use.** Makers need Tor for privacy and to advertise .onion addresses for direct peer connections.
+
+**Install Tor:**
+```bash
+# Linux
+sudo apt install tor
+
+# macOS
+brew install tor
+```
+
+The maker bot auto-detects Tor configuration. For manual setup, see [Environment Variables](#environment-variables).
+
 ## Quick Start
 
 ### 1. Create a Wallet
@@ -90,8 +105,10 @@ jm-maker start \
 The bot will:
 - Sync your wallet
 - Create offers based on available balance
-- Connect to directory servers via Tor
-- Wait for takers and earn fees automatically
+- Create an ephemeral Tor .onion address (if Tor control available)
+- Connect to directory servers and wait for takers
+
+> **⚠️ Production Warning:** Without Tor control access, maker falls back to `NOT-SERVING-ONION` mode (all traffic via directory). Check logs for Tor warnings.
 
 ## Configuration
 
@@ -173,60 +190,43 @@ jm-maker start \
 
 ## Docker Deployment
 
-### With Neutrino and Tor (Ephemeral Hidden Service)
+Docker includes pre-configured Tor with control port enabled. No manual Tor setup needed.
 
-Recommended setup with ephemeral hidden service for privacy.
-
-**1. Create torrc configuration:**
-
-```bash
-mkdir -p tor/conf
-cat > tor/conf/torrc << 'EOF'
-SocksPort 0.0.0.0:9050
-ControlPort 0.0.0.0:9051
-CookieAuthentication 1
-CookieAuthFile /var/lib/tor/control_auth_cookie
-DataDirectory /var/lib/tor
-Log notice stdout
-EOF
-```
-
-**2. Create docker-compose.yml:**
+### Production: Neutrino + Tor (Recommended)
 
 ```yaml
 services:
   tor:
     image: ghcr.io/m0wer/docker-tor:latest
+    restart: unless-stopped
     volumes:
-      - ./tor/conf/torrc:/etc/tor/torrc:ro
       - tor-data:/var/lib/tor
 
   neutrino:
     image: ghcr.io/m0wer/neutrino-api
+    restart: unless-stopped
     environment:
       NETWORK: mainnet
     volumes:
       - neutrino-data:/data/neutrino
+    depends_on:
+      - tor
 
   maker:
     build:
       context: ..
       dockerfile: maker/Dockerfile
+    restart: unless-stopped
     environment:
       MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/maker.mnemonic
       BACKEND_TYPE: neutrino
       NEUTRINO_URL: http://neutrino:8334
       TOR_SOCKS_HOST: tor
-      TOR_SOCKS_PORT: 9050
-      TOR_CONTROL_ENABLED: "true"
       TOR_CONTROL_HOST: tor
-      TOR_CONTROL_PORT: 9051
       TOR_COOKIE_PATH: /var/lib/tor/control_auth_cookie
-      ONION_SERVING_HOST: 0.0.0.0
-      ONION_SERVING_PORT: 27183
     volumes:
       - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
-      - tor-data:/var/lib/tor:ro  # Read-only access to cookie
+      - tor-data:/var/lib/tor:ro
     depends_on:
       - neutrino
       - tor
@@ -236,80 +236,28 @@ volumes:
   tor-data:
 ```
 
-**3. Start services:**
+Start: `docker-compose up -d`
 
-```bash
-docker-compose up -d
-```
-
-The maker will:
-- Connect to directory servers through Tor SOCKS proxy (port 9050)
-- Generate a fresh `.onion` address via Tor control port (port 9051)
-- Advertise this ephemeral address to takers
-- Clean up the hidden service when stopped
-
-### With Neutrino (Simple)
-
-If you already have Tor running elsewhere:
-
-```yaml
-services:
-  maker:
-    build:
-      context: ..
-      dockerfile: maker/Dockerfile
-    environment:
-      MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/maker.mnemonic
-      BACKEND_TYPE: neutrino
-      NEUTRINO_URL: http://neutrino:8334
-    volumes:
-      - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
-    depends_on:
-      - neutrino
-      - tor
-
-  neutrino:
-    image: ghcr.io/m0wer/neutrino-api
-    environment:
-      NETWORK: mainnet
-    volumes:
-      - neutrino-data:/data/neutrino
-
-  tor:
-    image: dperson/torproxy
-
-volumes:
-  neutrino-data:
-```
-
-### With Bitcoin Core and Tor
-
-**1. Create torrc configuration (if not already created):**
-
-```bash
-mkdir -p tor/conf
-cat > tor/conf/torrc << 'EOF'
-SocksPort 0.0.0.0:9050
-ControlPort 0.0.0.0:9051
-CookieAuthentication 1
-CookieAuthFile /var/lib/tor/control_auth_cookie
-DataDirectory /var/lib/tor
-Log notice stdout
-EOF
-```
-
-**2. Create docker-compose.yml:**
+### Production: Bitcoin Core + Tor
 
 ```yaml
 services:
   tor:
     image: ghcr.io/m0wer/docker-tor:latest
+    restart: unless-stopped
     volumes:
-      - ./tor/conf/torrc:/etc/tor/torrc:ro
       - tor-data:/var/lib/tor
 
   bitcoind:
     image: kylemanna/bitcoind
+    restart: unless-stopped
+    command:
+      - "-server=1"
+      - "-rpcuser=rpcuser"
+      - "-rpcpassword=rpcpassword"
+      - "-rpcallowip=0.0.0.0/0"
+      - "-rpcbind=0.0.0.0"
+      - "-txindex=1"
     volumes:
       - bitcoin-data:/bitcoin/.bitcoin
 
@@ -317,6 +265,7 @@ services:
     build:
       context: ..
       dockerfile: maker/Dockerfile
+    restart: unless-stopped
     environment:
       MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/maker.mnemonic
       BACKEND_TYPE: full_node
@@ -324,13 +273,8 @@ services:
       BITCOIN_RPC_USER: rpcuser
       BITCOIN_RPC_PASSWORD: rpcpassword
       TOR_SOCKS_HOST: tor
-      TOR_SOCKS_PORT: 9050
-      TOR_CONTROL_ENABLED: "true"
       TOR_CONTROL_HOST: tor
-      TOR_CONTROL_PORT: 9051
       TOR_COOKIE_PATH: /var/lib/tor/control_auth_cookie
-      ONION_SERVING_HOST: 0.0.0.0
-      ONION_SERVING_PORT: 27183
     volumes:
       - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
       - tor-data:/var/lib/tor:ro
@@ -343,40 +287,90 @@ volumes:
   tor-data:
 ```
 
-**3. Start services:**
+### Testing/Development (Without Tor)
 
-```bash
-docker-compose up -d
+**⚠️ NOT for production** - regtest/testnet only:
+
+```yaml
+services:
+  neutrino:
+    image: ghcr.io/m0wer/neutrino-api
+    environment:
+      NETWORK: regtest
+
+  maker:
+    build:
+      context: ..
+      dockerfile: maker/Dockerfile
+    environment:
+      MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/maker.mnemonic
+      BACKEND_TYPE: neutrino
+      NEUTRINO_URL: http://neutrino:8334
+      NETWORK: testnet
+      BITCOIN_NETWORK: regtest
+    depends_on:
+      - neutrino
 ```
+
+Runs in `NOT-SERVING-ONION` mode (all traffic via directory).
 
 ## Environment Variables
 
+### Required
+
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MNEMONIC_FILE` | - | Path to mnemonic file (recommended) |
+| `MNEMONIC_FILE` | - | Path to encrypted mnemonic file (recommended) |
 | `MNEMONIC` | - | Direct mnemonic phrase (not recommended for production) |
-| `BACKEND_TYPE` | `full_node` | Backend: `full_node` or `neutrino` |
-| `NETWORK` | `mainnet` | Protocol network for handshakes |
-| `BITCOIN_NETWORK` | `$NETWORK` | Bitcoin network for address generation |
-| `BITCOIN_RPC_URL` | `http://localhost:8332` | Bitcoin Core RPC URL |
-| `BITCOIN_RPC_USER` | - | Bitcoin Core RPC username |
-| `BITCOIN_RPC_PASSWORD` | - | Bitcoin Core RPC password |
-| `NEUTRINO_URL` | `http://localhost:8334` | Neutrino REST API URL |
-| `DIRECTORY_SERVERS` | (mainnet defaults) | Comma-separated list of directory servers |
-| `MIN_SIZE` | `100000` | Minimum CoinJoin size in sats |
-| `CJ_FEE_RELATIVE` | `0.001` | Relative fee (0.001 = 0.1%) - auto-selects relative offer type |
-| `CJ_FEE_ABSOLUTE` | - | Absolute fee in sats - auto-selects absolute offer type if set |
-| `TX_FEE_CONTRIBUTION` | `1000` | Transaction fee contribution in sats |
+
+### Tor Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `TOR_SOCKS_HOST` | `127.0.0.1` | Tor SOCKS proxy host |
 | `TOR_SOCKS_PORT` | `9050` | Tor SOCKS proxy port |
-| `TOR_CONTROL_ENABLED` | `false` | Enable ephemeral hidden service via Tor control port |
-| `TOR_CONTROL_HOST` | `127.0.0.1` | Tor control port host |
+| `TOR_CONTROL_HOST` | Auto-detect | Tor control host (auto-detects from `TOR_SOCKS_HOST` in Docker) |
 | `TOR_CONTROL_PORT` | `9051` | Tor control port |
-| `TOR_COOKIE_PATH` | `/var/lib/tor/control_auth_cookie` | Path to Tor control cookie |
-| `ONION_SERVING_HOST` | `127.0.0.1` | Host to bind for incoming onion connections |
-| `ONION_SERVING_PORT` | `27183` | Port for incoming onion connections |
-| `FIDELITY_BOND_LOCKTIMES` | - | Comma-separated Unix timestamps for bond locktimes |
-| `SENSITIVE_LOGGING` | - | Enable sensitive logging (set to `1` or `true`) |
+| `TOR_COOKIE_PATH` | Auto-detect | Path to Tor cookie auth file |
+
+### Backend Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BACKEND_TYPE` | `full_node` | Backend type: `full_node` or `neutrino` |
+| `BITCOIN_RPC_URL` | `http://localhost:8332` | Bitcoin Core RPC URL (full_node only) |
+| `BITCOIN_RPC_USER` | - | Bitcoin Core RPC username (full_node only) |
+| `BITCOIN_RPC_PASSWORD` | - | Bitcoin Core RPC password (full_node only) |
+| `NEUTRINO_URL` | `http://localhost:8334` | Neutrino REST API URL (neutrino only) |
+
+### Network Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NETWORK` | `mainnet` | Protocol network: `mainnet`, `testnet`, `signet`, `regtest` |
+| `BITCOIN_NETWORK` | `$NETWORK` | Bitcoin network for address generation (if different from protocol network) |
+| `DIRECTORY_SERVERS` | (network defaults) | Comma-separated list of directory servers (host:port) |
+
+### Fee Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MIN_SIZE` | `100000` | Minimum CoinJoin size in sats |
+| `CJ_FEE_RELATIVE` | `0.001` | Relative fee (0.001 = 0.1%) - auto-selects `sw0reloffer` type |
+| `CJ_FEE_ABSOLUTE` | - | Absolute fee in sats - auto-selects `sw0absoffer` type if set |
+| `TX_FEE_CONTRIBUTION` | `0` | Transaction fee contribution in sats |
+
+> **Important:** Only set ONE of `CJ_FEE_RELATIVE` or `CJ_FEE_ABSOLUTE`. The offer type is automatically selected based on which you provide.
+
+### Advanced Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FIDELITY_BOND_LOCKTIMES` | Auto-discover | Comma-separated Unix timestamps for fidelity bond locktimes |
+| `MERGE_ALGORITHM` | `default` | UTXO selection: `default`, `gradual`, `greedy`, `random` |
+| `ONION_SERVING_HOST` | `127.0.0.1` | Host to bind for incoming .onion connections |
+| `ONION_SERVING_PORT` | `27183` | Port for incoming .onion connections |
+| `JOINMARKET_DATA_DIR` | `~/.joinmarket-ng` | Data directory for history and blacklist |
 
 ## CLI Reference
 
@@ -397,9 +391,13 @@ jm-maker start --help
 |--------|---------|-------------|
 | `--mnemonic-file` | - | Path to encrypted wallet file |
 | `--backend-type` | full_node | Backend: full_node or neutrino |
-| `--cj-fee-relative` | 0.001 | Relative fee (0.001 = 0.1%) - auto-selects relative offers |
-| `--cj-fee-absolute` | - | Absolute fee in sats - auto-selects absolute offers |
+| `--cj-fee-relative` | 0.001 | Relative fee (0.001 = 0.1%) - auto-selects sw0reloffer |
+| `--cj-fee-absolute` | - | Absolute fee in sats - auto-selects sw0absoffer |
 | `--min-size` | 100000 | Minimum CoinJoin size in sats |
+| `--tor-control-host` | Auto-detect | Tor control port host |
+| `--tor-control-port` | 9051 | Tor control port |
+| `--tor-cookie-path` | Auto-detect | Path to Tor cookie auth file |
+| `--disable-tor-control` | - | Disable ephemeral hidden service creation (NOT recommended) |
 
 Use env vars for RPC credentials (see jmwallet README).
 
