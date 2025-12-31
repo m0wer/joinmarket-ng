@@ -816,3 +816,115 @@ def create_p2wpkh_script_code(pubkey: bytes | str) -> bytes:
     pubkey_hash = hash160(pubkey)
     # OP_DUP OP_HASH160 PUSH20 <pkh> OP_EQUALVERIFY OP_CHECKSIG
     return b"\x76\xa9\x14" + pubkey_hash + b"\x88\xac"
+
+
+# =============================================================================
+# Size Estimation
+# =============================================================================
+
+
+def get_address_type(address: str) -> str:
+    """
+    Determine address type from string.
+
+    Args:
+        address: Bitcoin address
+
+    Returns:
+        Address type: "p2wpkh", "p2wsh", "p2tr", "p2pkh", "p2sh"
+
+    Raises:
+        ValueError: If address is invalid or unknown type
+    """
+    # Bech32 (SegWit)
+    if address.startswith(("bc1", "tb1", "bcrt1")):
+        hrp_end = 4 if address.startswith("bcrt") else 2
+        hrp = address[:hrp_end]
+
+        decoded = bech32_lib.decode(hrp, address)
+        if decoded[0] is None or decoded[1] is None:
+            raise ValueError(f"Invalid bech32 address: {address}")
+
+        witver = decoded[0]
+        witprog = bytes(decoded[1])
+
+        if witver == 0:
+            if len(witprog) == 20:
+                return "p2wpkh"
+            elif len(witprog) == 32:
+                return "p2wsh"
+        elif witver == 1 and len(witprog) == 32:
+            return "p2tr"
+
+        raise ValueError(f"Unknown SegWit address type: version={witver}, len={len(witprog)}")
+
+    # Base58
+    try:
+        decoded = base58.b58decode_check(address)
+        version = decoded[0]
+        if version in (0x00, 0x6F):  # P2PKH
+            return "p2pkh"
+        elif version in (0x05, 0xC4):  # P2SH
+            return "p2sh"
+    except Exception:
+        pass
+
+    raise ValueError(f"Unknown address type: {address}")
+
+
+def estimate_vsize(input_types: list[str], output_types: list[str]) -> int:
+    """
+    Estimate transaction virtual size (vbytes).
+
+    Based on JoinMarket reference implementation logic.
+
+    Args:
+        input_types: List of input types (e.g. ["p2wpkh", "p2wsh"])
+        output_types: List of output types (e.g. ["p2wpkh", "p2wsh"])
+
+    Returns:
+        Estimated vsize in bytes
+    """
+    # Sizes in weight units (wu) = 4 * vbytes
+    # Base transaction overhead: version(4) + locktime(4) + input_count(1) + output_count(1)
+    # SegWit marker(1) + flag(1)
+    # Total base: 10 bytes -> 40 wu
+    # We assume varints for counts are 1 byte (up to 252 inputs/outputs)
+    base_weight = 40 + 2  # +2 for marker/flag weight (witness data)
+
+    # Input sizes (weight units)
+    # P2WPKH:
+    #   Non-witness: 32(txid) + 4(vout) + 1(script_len) + 4(seq) = 41 bytes -> 164 wu
+    #   Witness: 1(stack_len) + 1(sig_len) + 72(sig) + 1(pub_len) + 33(pub) = 108 wu
+    #   Total: 272 wu (68 vbytes)
+    # P2WSH (fidelity bond):
+    #   Non-witness: 41 bytes -> 164 wu
+    #   Witness: 1(stack_len) + 1(sig_len) + 72(sig) + 1(script_len) + 43(script) = 118 wu
+    #   Total: 282 wu (70.5 vbytes) - Ref impl uses slightly different calc, let's stick to calculated
+    input_weights = {
+        "p2wpkh": 41 * 4 + 108,
+        "p2wsh": 41 * 4 + 118,  # Using 72 byte sig + 43 byte script (fidelity bond)
+    }
+
+    # Output sizes (weight units)
+    # P2WPKH: 8(val) + 1(len) + 22(script) = 31 bytes -> 124 wu
+    # P2WSH:  8(val) + 1(len) + 34(script) = 43 bytes -> 172 wu
+    # P2TR:   8(val) + 1(len) + 34(script) = 43 bytes -> 172 wu
+    output_weights = {
+        "p2wpkh": 31 * 4,
+        "p2wsh": 43 * 4,
+        "p2tr": 43 * 4,
+        "p2pkh": 34 * 4,
+        "p2sh": 32 * 4,
+    }
+
+    weight = base_weight
+
+    for inp in input_types:
+        weight += input_weights.get(inp, 272)  # Default to P2WPKH if unknown
+
+    for out in output_types:
+        weight += output_weights.get(out, 124)  # Default to P2WPKH
+
+    # vsize = ceil(weight / 4)
+    return (weight + 3) // 4
