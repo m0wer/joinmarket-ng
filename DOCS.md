@@ -878,14 +878,37 @@ UTXO keypair (cold) → signs → certificate (hot) → signs → nick proofs (p
 
 Allows cold storage of bond privkey while hot wallet handles per-session proofs.
 
-### Context-Specific Verification
+### Protocol: Bond Announcement
 
-- **Public offers** (PUBMSG): Maker self-signs using own nick as taker
-- **Private offers** (PRIVMSG): Maker signs specifically for requesting taker
+**CRITICAL**: Fidelity bonds must ONLY be sent via PRIVMSG, never in public broadcasts.
 
-This matches reference implementation behavior for orderbook responses.
+#### Protocol Flow
 
-Implementation: `jmcore/src/jmcore/bond_calc.py`, `jmwallet/src/jmwallet/wallet/bond_registry.py`
+1. **Maker periodic broadcast (PUBLIC)**: Announces offers WITHOUT bond
+   ```
+   J5Maker1!PUBLIC!sw0reloffer 0 2500000 702599976000 500 0.0003
+   ```
+
+2. **Taker requests orderbook (PUBMSG)**:
+   ```
+   J5Taker1!PUBLIC!orderbook
+   ```
+
+3. **Maker responds to taker (PRIVMSG)**: Sends offers WITH bond proof signed for this taker
+   ```
+   J5Maker1!J5Taker1!sw0reloffer 0 2500000 702599976000 500 0.0003!tbond <252-byte-base64-proof>
+   ```
+
+#### Nick Signature Verification
+
+- **PRIVMSG bond**: Nick signature is `sign("J5Taker1|J5Maker1")` - proves maker is responding to THIS taker
+- ~~**PUBMSG bond**: Not used in protocol~~ (bonds never sent via PUBMSG)
+
+This prevents replay attacks and ensures each bond proof is taker-specific.
+
+**Reference**: `joinmarket-clientserver/src/jmdaemon/message_channel.py:announce_orders()`
+
+Implementation: `maker/src/maker/bot.py:_send_offers_to_taker()`, `jmcore/src/jmcore/bond_calc.py`
 
 ---
 

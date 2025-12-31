@@ -584,7 +584,7 @@ class DirectoryClient:
                     continue
 
                 from_nick = parts[0]
-                _to_nick = parts[1]
+                to_nick = parts[1]
                 rest = COMMAND_PREFIX.join(parts[2:])
 
                 if not rest.strip():
@@ -614,10 +614,12 @@ class DirectoryClient:
                                     bond_parts = flag_part[6:].split()
                                     if bond_parts:
                                         bond_proof_b64 = bond_parts[0]
-                                        # For PUBLIC announcements, maker uses their own nick
-                                        # as taker_nick when creating the proof
+                                        # For PRIVMSG, the maker signs with taker's actual nick
+                                        # For PUBMSG, both nicks are the maker's (self-signed)
+                                        is_privmsg = msg_type == MessageType.PRIVMSG.value
+                                        taker_nick_for_proof = to_nick if is_privmsg else from_nick
                                         bond_data = parse_fidelity_bond_proof(
-                                            bond_proof_b64, from_nick, from_nick
+                                            bond_proof_b64, from_nick, taker_nick_for_proof
                                         )
                                         if bond_data:
                                             logger.debug(

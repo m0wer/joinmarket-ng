@@ -647,9 +647,9 @@ class MakerBot:
         logger.info("Pending transaction monitor stopped")
 
     async def _announce_offers(self) -> None:
-        """Announce offers to all connected directory servers"""
+        """Announce offers to all connected directory servers (public broadcast, NO bonds)"""
         for offer in self.current_offers:
-            offer_msg = self._format_offer_announcement(offer)
+            offer_msg = self._format_offer_announcement(offer, include_bond=False)
 
             for client in self.directory_clients.values():
                 try:
@@ -658,15 +658,19 @@ class MakerBot:
                 except Exception as e:
                     logger.error(f"Failed to announce offer: {e}")
 
-    def _format_offer_announcement(self, offer: Offer) -> str:
-        """Format offer for announcement (just the offer content, without nick!PUBLIC! prefix).
+    def _format_offer_announcement(self, offer: Offer, include_bond: bool = False) -> str:
+        """Format offer for announcement.
 
-        Format: <ordertype> <oid> <minsize> <maxsize> <txfee> <cjfee>[!neutrino][!tbond <proof>]
+        Format: <ordertype> <oid> <minsize> <maxsize> <txfee> <cjfee>[!tbond <proof>]
 
-        If the backend requires neutrino-compatible extended UTXO format, !neutrino is appended.
-        If a fidelity bond is available, the bond proof is appended after !tbond.
-        The proof uses the maker's nick as the "taker_nick" for the ownership signature,
-        which gets verified when a taker actually requests the orderbook.
+        Args:
+            offer: The offer to format
+            include_bond: If True, append fidelity bond proof (for PRIVMSG only)
+
+        Note:
+            According to the JoinMarket protocol:
+            - Public broadcasts: NO fidelity bond proof
+            - Private responses to !orderbook: Include !tbond <proof>
         """
 
         order_type_str = offer.ordertype.value
@@ -678,21 +682,14 @@ class MakerBot:
             f"{offer.txfee} {offer.cjfee}"
         )
 
-        # NOTE: We intentionally do NOT advertise neutrino_compat in offers.
-        # Adding flags to offers would break compatibility with reference JoinMarket.
-        # Instead, neutrino_compat is advertised via the !pubkey response features field
-        # during the CoinJoin handshake. This is backwards compatible - legacy takers
-        # simply ignore the features field.
-
-        # Append fidelity bond proof if available
-        if self.fidelity_bond is not None:
-            # For public broadcast, we use our own nick as the taker_nick.
-            # The ownership signature proves we control the UTXO.
-            # Takers verify this when they parse the orderbook.
+        # Append fidelity bond proof ONLY for private responses
+        if include_bond and self.fidelity_bond is not None:
+            # For private response, we use the requesting taker's nick
+            # The ownership signature proves we control the UTXO
             bond_proof = create_fidelity_bond_proof(
                 bond=self.fidelity_bond,
                 maker_nick=self.nick,
-                taker_nick=self.nick,  # Self-signed for broadcast
+                taker_nick=self.nick,  # Will be updated when sending to specific taker
             )
             if bond_proof:
                 msg += f"!tbond {bond_proof}"
@@ -775,16 +772,76 @@ class MakerBot:
             # Strip leading "!" and get command
             command = rest.strip().lstrip("!")
 
-            # Respond to orderbook requests by re-announcing offers
+            # Respond to orderbook requests with PRIVMSG (including bond if available)
             if to_nick == "PUBLIC" and command == "orderbook":
-                logger.info(f"Received !orderbook request from {from_nick}, re-announcing offers")
-                await self._announce_offers()
+                logger.info(
+                    f"Received !orderbook request from {from_nick}, sending offers via PRIVMSG"
+                )
+                await self._send_offers_to_taker(from_nick)
             elif to_nick == "PUBLIC" and command.startswith("hp2"):
                 # hp2 via pubmsg = commitment broadcast for blacklisting
                 await self._handle_hp2_pubmsg(from_nick, command)
 
         except Exception as e:
             logger.error(f"Failed to handle pubmsg: {e}")
+
+    async def _send_offers_to_taker(self, taker_nick: str) -> None:
+        """Send offers to a specific taker via PRIVMSG, including fidelity bond if available.
+
+        This is called when we receive a !orderbook request from a taker.
+        According to the JoinMarket protocol, fidelity bonds must ONLY be sent
+        via PRIVMSG, never in public broadcasts.
+
+        For each offer:
+        1. Format the offer parameters
+        2. If we have a fidelity bond, create a proof signed for this specific taker
+        3. Append !tbond <proof> to the offer data
+        4. Send via PRIVMSG to the taker
+
+        Message format:
+            send_private_message(
+                taker_nick,
+                command="sw0reloffer",
+                data="0 2500000 ... !tbond <proof>"
+            )
+            Results in: from_nick!taker_nick!sw0reloffer 0 2500000 ... !tbond <proof> <sig>
+
+        Args:
+            taker_nick: The nick of the taker requesting the orderbook
+        """
+        try:
+            for offer in self.current_offers:
+                # Format offer data (parameters without the command)
+                order_type_str = offer.ordertype.value
+                data = f"{offer.oid} {offer.minsize} {offer.maxsize} {offer.txfee} {offer.cjfee}"
+
+                # Append fidelity bond proof if we have one
+                # CRITICAL: The bond proof must be signed with the taker's nick
+                if self.fidelity_bond is not None:
+                    bond_proof = create_fidelity_bond_proof(
+                        bond=self.fidelity_bond,
+                        maker_nick=self.nick,
+                        taker_nick=taker_nick,  # Sign for THIS specific taker
+                    )
+                    if bond_proof:
+                        data += f"!tbond {bond_proof}"
+                        logger.debug(
+                            f"Including fidelity bond proof in offer to {taker_nick} "
+                            f"(proof length: {len(bond_proof)})"
+                        )
+
+                # Send via all connected directory clients
+                for client in self.directory_clients.values():
+                    try:
+                        # Send as PRIVMSG
+                        # Format: taker_nick!maker_nick!<order_type> <data> <signature>
+                        await client.send_private_message(taker_nick, order_type_str, data)
+                        logger.debug(f"Sent {order_type_str} offer to {taker_nick}")
+                    except Exception as e:
+                        logger.error(f"Failed to send offer to {taker_nick} via directory: {e}")
+
+        except Exception as e:
+            logger.error(f"Failed to send offers to taker {taker_nick}: {e}")
 
     async def _handle_privmsg(self, line: str) -> None:
         """Handle private message (CoinJoin protocol)"""
