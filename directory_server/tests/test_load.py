@@ -5,6 +5,7 @@ Simulates real-world JoinMarket scenarios with multiple concurrent peers.
 """
 
 import asyncio
+import contextlib
 import gc
 import json
 import random
@@ -91,7 +92,7 @@ class MockPeerClient:
             raise ValueError(f"Expected DN_HANDSHAKE, got {response.message_type}")
 
     async def send_public_message(self, content: str) -> None:
-        if not self.connected:
+        if not self.connected or not self.writer:
             raise RuntimeError("Not connected")
 
         msg = f"{COMMAND_PREFIX}{self.nick} PUBLIC {content}"
@@ -101,7 +102,7 @@ class MockPeerClient:
         self.messages_sent += 1
 
     async def send_private_message(self, target_nick: str, content: str) -> None:
-        if not self.connected:
+        if not self.connected or not self.writer:
             raise RuntimeError("Not connected")
 
         msg = f"{COMMAND_PREFIX}{self.nick} {target_nick} {content}"
@@ -111,7 +112,7 @@ class MockPeerClient:
         self.messages_sent += 1
 
     async def receive_message(self, timeout: float = 1.0) -> MessageEnvelope | None:
-        if not self.connected:
+        if not self.connected or not self.reader:
             raise RuntimeError("Not connected")
 
         try:
@@ -125,8 +126,11 @@ class MockPeerClient:
 
     async def disconnect(self) -> None:
         if self.writer:
-            self.writer.close()
-            await self.writer.wait_closed()
+            try:
+                self.writer.close()
+                await self.writer.wait_closed()
+            except Exception:
+                pass  # Ignore errors during cleanup
         self.connected = False
 
 
@@ -176,6 +180,7 @@ async def test_server():
         network="testnet",
         max_peers=1000,
         log_level="WARNING",
+        health_check_port=0,  # Use dynamic port to avoid conflicts
     )
 
     server = DirectoryServer(settings)
@@ -184,12 +189,18 @@ async def test_server():
 
     await asyncio.sleep(0.5)
 
+    # Type guard for server.server which should be set after start()
+    assert server.server is not None, "Server should be running after start()"
     actual_port = server.server.sockets[0].getsockname()[1]
 
     yield "127.0.0.1", actual_port
 
+    # Clean up server
     await server.stop()
+    # Cancel the server task since serve_forever() won't return naturally
     server_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await server_task
 
 
 @pytest.mark.asyncio

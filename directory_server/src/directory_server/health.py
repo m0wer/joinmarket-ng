@@ -87,4 +87,5 @@ class HealthCheckServer:
     def stop(self) -> None:
         if self.httpd:
             self.httpd.shutdown()
+            self.httpd.server_close()  # Explicitly close the socket
             logger.info("Health check server stopped")

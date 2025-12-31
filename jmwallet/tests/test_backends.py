@@ -220,6 +220,7 @@ class TestNeutrinoBackend:
         assert "--connect=peer2:18333" in args
 
 
+@pytest.mark.docker
 @pytest.mark.neutrino
 @pytest.mark.asyncio
 async def test_neutrino_backend_integration():

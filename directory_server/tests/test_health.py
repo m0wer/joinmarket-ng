@@ -39,22 +39,28 @@ def test_health_endpoint_healthy(health_server, mock_server):
     mock_server._shutdown = False
 
     conn = HTTPConnection("127.0.0.1", 18080, timeout=5)
-    conn.request("GET", "/health")
-    response = conn.getresponse()
+    try:
+        conn.request("GET", "/health")
+        response = conn.getresponse()
 
-    assert response.status == 200
-    data = json.loads(response.read().decode())
-    assert data["status"] == "healthy"
+        assert response.status == 200
+        data = json.loads(response.read().decode())
+        assert data["status"] == "healthy"
+    finally:
+        conn.close()
 
 
 def test_health_endpoint_unhealthy(health_server, mock_server):
     mock_server.server = None
 
     conn = HTTPConnection("127.0.0.1", 18080, timeout=5)
-    conn.request("GET", "/health")
-    response = conn.getresponse()
+    try:
+        conn.request("GET", "/health")
+        response = conn.getresponse()
 
-    assert response.status == 503
+        assert response.status == 503
+    finally:
+        conn.close()
 
 
 def test_status_endpoint(health_server, mock_server):
@@ -62,22 +68,25 @@ def test_status_endpoint(health_server, mock_server):
     mock_server._shutdown = False
 
     conn = HTTPConnection("127.0.0.1", 18080, timeout=5)
-    conn.request("GET", "/status")
-    response = conn.getresponse()
+    try:
+        conn.request("GET", "/status")
+        response = conn.getresponse()
 
-    assert response.status == 200
-    data = json.loads(response.read().decode())
+        assert response.status == 200
+        data = json.loads(response.read().decode())
 
-    assert "network" in data
-    assert "uptime_seconds" in data
-    assert "server_status" in data
-    assert "connected_peers" in data
-    assert "passive_peers" in data
-    assert "active_peers" in data
-    assert "active_connections" in data
+        assert "network" in data
+        assert "uptime_seconds" in data
+        assert "server_status" in data
+        assert "connected_peers" in data
+        assert "passive_peers" in data
+        assert "active_peers" in data
+        assert "active_connections" in data
 
-    assert data["network"] == "mainnet"
-    assert data["server_status"] in ["running", "stopping"]
+        assert data["network"] == "mainnet"
+        assert data["server_status"] in ["running", "stopping"]
+    finally:
+        conn.close()
 
 
 def test_status_endpoint_includes_peer_stats(health_server, mock_server):
@@ -106,18 +115,21 @@ def test_status_endpoint_includes_peer_stats(health_server, mock_server):
     mock_server.peer_registry.register(active_peer)
 
     conn = HTTPConnection("127.0.0.1", 18080, timeout=5)
-    conn.request("GET", "/status")
-    response = conn.getresponse()
+    try:
+        conn.request("GET", "/status")
+        response = conn.getresponse()
 
-    assert response.status == 200
-    data = json.loads(response.read().decode())
+        assert response.status == 200
+        data = json.loads(response.read().decode())
 
-    assert data["stats"]["passive_peers"] == 1
-    assert data["stats"]["active_peers"] == 1
-    assert data["stats"]["connected_peers"] == 2
+        assert data["stats"]["passive_peers"] == 1
+        assert data["stats"]["active_peers"] == 1
+        assert data["stats"]["connected_peers"] == 2
 
-    assert "taker1" in data["passive_peers"]["nicks"]
-    assert "maker1" in data["active_peers"]["nicks"]
+        assert "taker1" in data["passive_peers"]["nicks"]
+        assert "maker1" in data["active_peers"]["nicks"]
+    finally:
+        conn.close()
 
 
 def test_health_endpoint_404_for_unknown_path():
@@ -127,10 +139,13 @@ def test_health_endpoint_404_for_unknown_path():
 
     try:
         conn = HTTPConnection("127.0.0.1", 18085, timeout=5)
-        conn.request("GET", "/unknown")
-        response = conn.getresponse()
+        try:
+            conn.request("GET", "/unknown")
+            response = conn.getresponse()
 
-        assert response.status == 404
+            assert response.status == 404
+        finally:
+            conn.close()
     finally:
         health.stop()
 

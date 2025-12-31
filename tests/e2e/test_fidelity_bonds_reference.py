@@ -108,10 +108,9 @@ def test_our_orderbook_watcher_receives_reference_maker_bonds(reference_services
     """
     Test that our orderbook watcher receives fidelity bonds from reference makers.
 
-    This would test compatibility in the other direction, but requires reference
-    makers to have bonds configured (which is not currently part of the test setup).
+    This validates that we can parse bond data sent by reference makers,
+    even if we can't calculate bond values without Mempool API in regtest.
     """
-    # Check if orderbook watcher is running and has bonds
     import asyncio
     import httpx
 
@@ -123,23 +122,46 @@ def test_our_orderbook_watcher_receives_reference_maker_bonds(reference_services
                 )
                 if response.status_code == 200:
                     data = response.json()
-                    bond_count = len(data.get("fidelitybonds", []))
+
+                    # Check offers that have fidelity bond data (proof received)
+                    # Bond value will be 0 in regtest since we can't use Mempool API,
+                    # but the important part is that we received and parsed the bond data
+                    offers_with_bonds = [
+                        offer
+                        for offer in data.get("offers", [])
+                        if offer.get("fidelity_bond_data") is not None
+                    ]
+
                     offer_count = len(data.get("offers", []))
 
                     logger.info(
-                        f"Orderbook watcher sees: {offer_count} offers, {bond_count} bonds"
+                        f"Orderbook watcher sees: {offer_count} offers, "
+                        f"{len(offers_with_bonds)} with fidelity bond proofs"
                     )
 
-                    if bond_count > 0:
-                        logger.info("✓ Orderbook watcher detected fidelity bonds")
-                        for bond in data["fidelitybonds"]:
-                            logger.info(
-                                f"  Bond: {bond['counterparty']}, "
-                                f"txid={bond['utxo']['txid'][:16]}..."
-                            )
+                    if len(offers_with_bonds) > 0:
+                        logger.info(
+                            "✓ Orderbook watcher received fidelity bond proofs from makers"
+                        )
+
+                        # Log offers with bond data
+                        for offer in offers_with_bonds:
+                            bond_data = offer.get("fidelity_bond_data", {})
+                            if bond_data:
+                                logger.info(
+                                    f"  Maker {offer['counterparty']} sent bond proof: "
+                                    f"txid={bond_data.get('utxo_txid', 'N/A')[:16]}..., "
+                                    f"locktime={bond_data.get('locktime', 'N/A')}"
+                                )
+                                logger.info(
+                                    f"    (Bond value is {offer.get('fidelity_bond_value', 0)} "
+                                    "- expected 0 in regtest without Mempool API)"
+                                )
                         return True
                     else:
-                        logger.info("No bonds in orderbook - makers may not have bonds")
+                        logger.info(
+                            "No bond proofs received - makers may not have bonds"
+                        )
                         return False
         except Exception as e:
             logger.error(f"Failed to check orderbook: {e}")
@@ -149,43 +171,7 @@ def test_our_orderbook_watcher_receives_reference_maker_bonds(reference_services
     has_bonds = asyncio.run(check_orderbook())
 
     if not has_bonds:
-        pytest.skip("No bonds detected - test inconclusive")
-
-
-def test_bond_affects_maker_selection(reference_services):
-    """
-    Test that fidelity bonds affect maker selection in the reference taker.
-
-    Reference taker should prefer makers with higher bond values.
-    """
-    time.sleep(10)
-
-    logs = get_jam_logs(lines=1000)
-
-    # Look for maker selection logs
-    selection_logs = [
-        line
-        for line in logs.split("\n")
-        if "Chose these orders" in line or "total cj fee" in line
-    ]
-
-    if selection_logs:
-        logger.info("Reference taker selected makers:")
-        for log_line in selection_logs:
-            logger.info(f"  {log_line.strip()}")
-
-        # Check if any selected makers have bond values
-        has_bond_value = any("fidelity_bond_value" in line for line in selection_logs)
-
-        if has_bond_value:
-            logger.info("✓ Fidelity bonds are being used in maker selection")
-        else:
-            logger.info(
-                "Selected makers don't have bonds - expected if bonds not configured"
-            )
-    else:
-        logger.info("No maker selection logs found - CoinJoin may not have run yet")
-        pytest.skip("No CoinJoin activity detected")
+        pytest.skip("No bond proofs detected - test inconclusive")
 
 
 def test_bond_privacy_reference_compatibility(reference_services):

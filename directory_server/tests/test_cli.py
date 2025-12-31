@@ -62,6 +62,7 @@ def mock_http_server():
     thread.start()
     yield httpd
     httpd.shutdown()
+    httpd.server_close()  # Explicitly close the socket
 
 
 def test_status_command_success(mock_http_server):
