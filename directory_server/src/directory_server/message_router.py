@@ -36,6 +36,8 @@ class MessageRouter:
         self.on_send_failed = on_send_failed
         # Track peers that failed during current operation to avoid repeated attempts
         self._failed_peers: set[str] = set()
+        # Track offers per peer (peer_key -> set of order IDs)
+        self._peer_offers: dict[str, set[str]] = {}
 
     async def route_message(self, envelope: MessageEnvelope, from_key: str) -> None:
         if envelope.message_type == MessageType.PUBMSG:
@@ -55,7 +57,7 @@ class MessageRouter:
             logger.warning("Invalid public message format")
             return
 
-        from_nick, to_nick, _ = parsed
+        from_nick, to_nick, rest = parsed
         if to_nick != "PUBLIC":
             logger.warning(f"Public message not addressed to PUBLIC: {to_nick}")
             return
@@ -64,6 +66,37 @@ class MessageRouter:
         if not from_peer:
             logger.warning(f"Unknown peer sending public message: {from_key}")
             return
+
+        # Track offers (absorder, absoffer, reloffer, relorder)
+        if rest:
+            message_parts = rest.split()
+            if (
+                message_parts
+                and message_parts[0]
+                in (
+                    "!absorder",
+                    "!absoffer",
+                    "!reloffer",
+                    "!relorder",
+                    "sw0absorder",
+                    "sw0absoffer",
+                    "sw0reloffer",
+                    "sw0relorder",
+                )
+                and len(message_parts) >= 2
+            ):
+                # Extract order ID (second field in offer messages)
+                try:
+                    order_id = message_parts[1]
+                    if from_key not in self._peer_offers:
+                        self._peer_offers[from_key] = set()
+                    self._peer_offers[from_key].add(order_id)
+                    logger.trace(
+                        f"Tracked offer {order_id} from {from_nick} "
+                        f"(total offers: {len(self._peer_offers[from_key])})"
+                    )
+                except (ValueError, IndexError):
+                    pass
 
         # Pre-serialize envelope once instead of per-peer
         envelope_bytes = envelope.to_bytes()
@@ -296,3 +329,29 @@ class MessageRouter:
         sent_count = await self._batched_broadcast_iter(target_generator(), envelope_bytes)
 
         logger.info(f"Broadcasted disconnect for {peer.nick} to {sent_count} peers")
+
+    def get_offer_stats(self) -> dict:
+        """Get statistics about tracked offers."""
+        total_offers = sum(len(offers) for offers in self._peer_offers.values())
+        peers_with_offers = len([k for k, v in self._peer_offers.items() if v])
+
+        # Find peers with more than 2 offers
+        peers_many_offers = []
+        for peer_key, offers in self._peer_offers.items():
+            if len(offers) > 2:
+                peer_info = self.peer_registry.get_by_key(peer_key)
+                nick = peer_info.nick if peer_info else peer_key
+                peers_many_offers.append((nick, len(offers)))
+
+        # Sort by offer count descending
+        peers_many_offers.sort(key=lambda x: x[1], reverse=True)
+
+        return {
+            "total_offers": total_offers,
+            "peers_with_offers": peers_with_offers,
+            "peers_many_offers": peers_many_offers[:10],  # Top 10
+        }
+
+    def remove_peer_offers(self, peer_key: str) -> None:
+        """Remove offer tracking for a disconnected peer."""
+        self._peer_offers.pop(peer_key, None)

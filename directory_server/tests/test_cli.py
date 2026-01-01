@@ -43,6 +43,16 @@ class MockHTTPHandler(BaseHTTPRequestHandler):
                 "passive_peers": {"total": 3, "nicks": ["taker1", "taker2"]},
                 "active_peers": {"total": 7, "nicks": ["maker1", "maker2"]},
                 "active_connections": 10,
+                "rate_limiter": {
+                    "tracked_peers": 5,
+                    "total_violations": 10,
+                    "top_violators": [],
+                },
+                "offers": {
+                    "total_offers": 15,
+                    "peers_with_offers": 5,
+                    "peers_many_offers": [],
+                },
             }
             self.wfile.write(json.dumps(status_response).encode())
         elif self.path == "/health_unhealthy":

@@ -1,5 +1,5 @@
 """
-Tests for message router, focusing on failed send cleanup.
+Tests for message router, focusing on failed send cleanup and offer tracking.
 """
 
 import pytest
@@ -207,3 +207,153 @@ class TestMessageRouterPrivateMessageFailedSend:
 
         # The target peer should have been marked as failed
         assert to_peer.location_string in failed_peers
+
+
+class TestOfferTracking:
+    """Tests for offer tracking functionality."""
+
+    @pytest.mark.anyio
+    async def test_tracks_sw0absoffer(self, registry):
+        """Should track sw0absoffer messages."""
+        sent_messages = []
+
+        async def mock_send(peer_key: str, data: bytes) -> None:
+            sent_messages.append((peer_key, data))
+
+        router = MessageRouter(
+            peer_registry=registry,
+            send_callback=mock_send,
+        )
+
+        # Create maker peer
+        maker = PeerInfo(
+            nick="maker1",
+            onion_address="a" * 56 + ".onion",
+            port=5222,
+            network=NetworkType.MAINNET,
+            status=PeerStatus.HANDSHAKED,
+        )
+        registry.register(maker)
+
+        # Send offer message
+        payload = f"{maker.nick}!PUBLIC!sw0absoffer 0 30000 72590 0 1000"
+        envelope = MessageEnvelope(message_type=MessageType.PUBMSG, payload=payload)
+
+        await router._handle_public_message(envelope, maker.location_string)
+
+        # Check offer was tracked
+        stats = router.get_offer_stats()
+        assert stats["total_offers"] == 1
+        assert stats["peers_with_offers"] == 1
+
+    @pytest.mark.anyio
+    async def test_tracks_multiple_offers_per_peer(self, registry):
+        """Should track multiple offers from same peer."""
+        sent_messages = []
+
+        async def mock_send(peer_key: str, data: bytes) -> None:
+            sent_messages.append((peer_key, data))
+
+        router = MessageRouter(
+            peer_registry=registry,
+            send_callback=mock_send,
+        )
+
+        # Create maker peer
+        maker = PeerInfo(
+            nick="maker1",
+            onion_address="a" * 56 + ".onion",
+            port=5222,
+            network=NetworkType.MAINNET,
+            status=PeerStatus.HANDSHAKED,
+        )
+        registry.register(maker)
+
+        # Send multiple offer messages
+        for i in range(3):
+            payload = f"{maker.nick}!PUBLIC!sw0absoffer {i} 30000 72590 0 1000"
+            envelope = MessageEnvelope(message_type=MessageType.PUBMSG, payload=payload)
+            await router._handle_public_message(envelope, maker.location_string)
+
+        # Check offers were tracked
+        stats = router.get_offer_stats()
+        assert stats["total_offers"] == 3
+        assert stats["peers_with_offers"] == 1
+
+    @pytest.mark.anyio
+    async def test_peers_with_many_offers(self, registry):
+        """Should identify peers with more than 2 offers."""
+        sent_messages = []
+
+        async def mock_send(peer_key: str, data: bytes) -> None:
+            sent_messages.append((peer_key, data))
+
+        router = MessageRouter(
+            peer_registry=registry,
+            send_callback=mock_send,
+        )
+
+        # Create maker peers
+        for idx in range(2):
+            maker = PeerInfo(
+                nick=f"maker{idx}",
+                onion_address=chr(ord("a") + idx) * 56 + ".onion",
+                port=5222,
+                network=NetworkType.MAINNET,
+                status=PeerStatus.HANDSHAKED,
+            )
+            registry.register(maker)
+
+            # First maker has 5 offers, second has 2
+            num_offers = 5 if idx == 0 else 2
+            for i in range(num_offers):
+                payload = f"{maker.nick}!PUBLIC!sw0reloffer {i} 30000 72590 0 0.001"
+                envelope = MessageEnvelope(message_type=MessageType.PUBMSG, payload=payload)
+                await router._handle_public_message(envelope, maker.location_string)
+
+        # Check stats
+        stats = router.get_offer_stats()
+        assert stats["total_offers"] == 7
+        assert stats["peers_with_offers"] == 2
+        assert len(stats["peers_many_offers"]) == 1  # Only maker0 has >2 offers
+        assert stats["peers_many_offers"][0] == ("maker0", 5)
+
+    @pytest.mark.anyio
+    async def test_remove_peer_offers(self, registry):
+        """Should remove offers when peer disconnects."""
+        sent_messages = []
+
+        async def mock_send(peer_key: str, data: bytes) -> None:
+            sent_messages.append((peer_key, data))
+
+        router = MessageRouter(
+            peer_registry=registry,
+            send_callback=mock_send,
+        )
+
+        # Create maker peer
+        maker = PeerInfo(
+            nick="maker1",
+            onion_address="a" * 56 + ".onion",
+            port=5222,
+            network=NetworkType.MAINNET,
+            status=PeerStatus.HANDSHAKED,
+        )
+        registry.register(maker)
+
+        # Send offer message
+        payload = f"{maker.nick}!PUBLIC!sw0absoffer 0 30000 72590 0 1000"
+        envelope = MessageEnvelope(message_type=MessageType.PUBMSG, payload=payload)
+        await router._handle_public_message(envelope, maker.location_string)
+
+        # Verify offer is tracked
+        stats = router.get_offer_stats()
+        assert stats["total_offers"] == 1
+
+        # Remove peer offers
+        router.remove_peer_offers(maker.location_string)
+
+        # Verify offers were removed
+        stats = router.get_offer_stats()
+        assert stats["total_offers"] == 0
+        assert stats["peers_with_offers"] == 0

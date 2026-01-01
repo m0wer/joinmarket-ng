@@ -51,9 +51,52 @@ def format_status_output(stats: dict) -> str:
     lines.extend(
         [
             f"Active connections: {stats['active_connections']}",
-            "===============================",
         ]
     )
+
+    # Add offer stats if available
+    if "offers" in stats:
+        offer_stats = stats["offers"]
+        lines.extend(
+            [
+                "",
+                "Offers:",
+                f"  Total offers: {offer_stats['total_offers']}",
+                f"  Peers with offers: {offer_stats['peers_with_offers']}",
+            ]
+        )
+
+        # Show peers with more than 2 offers
+        if offer_stats.get("peers_many_offers"):
+            peers_many = offer_stats["peers_many_offers"]
+            if peers_many:
+                lines.append("  Peers with >2 offers:")
+                for nick, count in peers_many:
+                    lines.append(f"    {nick}: {count} offers")
+
+    # Add rate limiter stats if available
+    if "rate_limiter" in stats:
+        rl_stats = stats["rate_limiter"]
+        lines.extend(
+            [
+                "",
+                "Rate Limiting:",
+                f"  Tracked peers: {rl_stats['tracked_peers']}",
+                f"  Total violations: {rl_stats['total_violations']}",
+            ]
+        )
+
+        # Show top violators if any
+        if rl_stats.get("top_violators"):
+            top_violators = rl_stats["top_violators"][:5]  # Show top 5
+            if top_violators:
+                lines.append("  Top violators:")
+                for peer_key, count in top_violators:
+                    # Truncate long onion addresses for readability
+                    display_key = peer_key if len(peer_key) < 30 else f"{peer_key[:27]}..."
+                    lines.append(f"    {display_key}: {count} violations")
+
+    lines.append("===============================")
 
     return "\n".join(lines)
 

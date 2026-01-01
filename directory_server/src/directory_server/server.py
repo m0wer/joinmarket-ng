@@ -239,6 +239,9 @@ class DirectoryServer:
             # Clean up rate limiter state
             self.rate_limiter.remove_peer(peer_key)
 
+            # Clean up offer tracking
+            self.message_router.remove_peer_offers(peer_key)
+
         self.connections.remove(conn_id)
 
         try:
@@ -300,6 +303,8 @@ class DirectoryServer:
         passive_peers = self.peer_registry.get_passive_peers()
         active_peers = self.peer_registry.get_active_peers()
 
+        offer_stats = self.message_router.get_offer_stats()
+
         return {
             "network": self.network.value,
             "uptime_seconds": uptime,
@@ -307,6 +312,7 @@ class DirectoryServer:
             "max_peers": self.settings.max_peers,
             "stats": registry_stats,
             "rate_limiter": self.rate_limiter.get_stats(),
+            "offers": offer_stats,
             "connected_peers": {
                 "total": len(connected_peers),
                 "nicks": [p.nick for p in connected_peers],
