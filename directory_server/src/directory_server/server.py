@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from jmcore.models import MessageEnvelope, NetworkType, PeerStatus
 from jmcore.network import ConnectionPool, TCPConnection
 from jmcore.protocol import MessageType
+from jmcore.rate_limiter import RateLimiter
 from loguru import logger
 
 from directory_server.config import Settings
@@ -18,7 +19,6 @@ from directory_server.handshake_handler import HandshakeError, HandshakeHandler
 from directory_server.health import HealthCheckServer
 from directory_server.message_router import MessageRouter
 from directory_server.peer_registry import PeerRegistry
-from directory_server.rate_limiter import RateLimiter
 
 
 class DirectoryServer:

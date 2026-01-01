@@ -21,6 +21,7 @@ from jmcore.directory_client import DirectoryClient, DirectoryClientError
 from jmcore.models import Offer
 from jmcore.network import HiddenServiceListener, TCPConnection
 from jmcore.protocol import COMMAND_PREFIX, JM_VERSION
+from jmcore.rate_limiter import RateLimiter
 from jmcore.tor_control import (
     EphemeralHiddenService,
     TorControlClient,
@@ -153,6 +154,13 @@ class MakerBot:
         # Tor control for dynamic hidden service creation
         self._tor_control: TorControlClient | None = None
         self._ephemeral_hidden_service: EphemeralHiddenService | None = None
+
+        # Generic per-peer rate limiter (token bucket algorithm)
+        # Generous burst (100 msgs) but low sustained rate (10 msg/s)
+        self._message_rate_limiter = RateLimiter(
+            rate_limit=config.message_rate_limit,
+            burst_limit=config.message_burst_limit,
+        )
 
         # Rate limiter for orderbook requests to prevent spam attacks
         self._orderbook_rate_limiter = OrderbookRateLimiter(
@@ -832,6 +840,21 @@ class MakerBot:
 
             msg_type = message.get("type")
             line = message.get("line", "")
+
+            # Extract from_nick for rate limiting (format: from_nick!to_nick!msg)
+            parts = line.split(COMMAND_PREFIX)
+            if len(parts) >= 1:
+                from_nick = parts[0]
+
+                # Apply generic per-peer rate limiting
+                if not self._message_rate_limiter.check(from_nick):
+                    violations = self._message_rate_limiter.get_violation_count(from_nick)
+                    # Only log every 50th violation to prevent log flooding
+                    if violations % 50 == 0:
+                        logger.warning(
+                            f"Rate limit exceeded for {from_nick} ({violations} violations total)"
+                        )
+                    return  # Drop the message
 
             if msg_type == MessageType.PRIVMSG.value:
                 await self._handle_privmsg(line)

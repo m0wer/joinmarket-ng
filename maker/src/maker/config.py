@@ -115,6 +115,18 @@ class MakerConfig(WalletConfig):
         ),
     )
 
+    # Generic message rate limiting (protects against spam/DoS)
+    message_rate_limit: int = Field(
+        default=10,
+        ge=1,
+        description="Maximum messages per second per peer (sustained)",
+    )
+    message_burst_limit: int = Field(
+        default=100,
+        ge=1,
+        description="Maximum burst messages per peer (default: 100, allows ~10s at max rate)",
+    )
+
     # Rate limiting for orderbook requests (protects against spam attacks)
     orderbook_rate_limit: int = Field(
         default=1,

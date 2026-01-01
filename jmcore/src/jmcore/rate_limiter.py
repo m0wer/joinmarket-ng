@@ -2,6 +2,14 @@
 Per-peer rate limiting using token bucket algorithm.
 
 Prevents DoS attacks by limiting the message rate from each connected peer.
+This module provides a generic rate limiter that can be used across all
+JoinMarket components (directory server, makers, takers).
+
+Design:
+- Token bucket algorithm allows generous burst capacity with low sustained rate
+- Default: 10 msg/sec sustained, 100 msg burst (allows ~10s of max-rate traffic)
+- Per-peer tracking prevents one bad actor from affecting others
+- Automatic cleanup prevents memory leaks
 """
 
 from __future__ import annotations
@@ -57,19 +65,24 @@ class RateLimiter:
 
     Configuration:
     - rate_limit: messages per second (sustained rate)
-    - burst_limit: maximum burst size (default: 2x rate_limit)
+    - burst_limit: maximum burst size (default: 10x rate_limit)
+
+    Default settings (10 msg/sec sustained, 100 msg burst):
+    - Allows ~10 seconds of continuous max-rate traffic before throttling
+    - Prevents DoS from rapid spam while allowing legitimate burst patterns
+    - Example: taker requesting orderbook from multiple makers simultaneously
     """
 
-    def __init__(self, rate_limit: int, burst_limit: int | None = None):
+    def __init__(self, rate_limit: int = 10, burst_limit: int | None = None):
         """
         Initialize rate limiter.
 
         Args:
-            rate_limit: Maximum messages per second (sustained)
-            burst_limit: Maximum burst size (default: 2x rate_limit)
+            rate_limit: Maximum messages per second (sustained, default: 10)
+            burst_limit: Maximum burst size (default: 10x rate_limit = 100)
         """
         self.rate_limit = rate_limit
-        self.burst_limit = burst_limit or (rate_limit * 2)
+        self.burst_limit = burst_limit or (rate_limit * 10)
         self._buckets: dict[str, TokenBucket] = {}
         self._violation_counts: dict[str, int] = {}
 
@@ -100,6 +113,24 @@ class RateLimiter:
     def get_violation_count(self, peer_key: str) -> int:
         """Get the number of rate limit violations for a peer."""
         return self._violation_counts.get(peer_key, 0)
+
+    def cleanup_old_peers(self, max_idle_seconds: float = 3600.0) -> int:
+        """
+        Remove peers that haven't sent messages in max_idle_seconds.
+
+        Returns the number of peers removed.
+        """
+        now = time.monotonic()
+        stale_peers = [
+            peer_key
+            for peer_key, bucket in self._buckets.items()
+            if now - bucket.last_refill > max_idle_seconds
+        ]
+
+        for peer_key in stale_peers:
+            self.remove_peer(peer_key)
+
+        return len(stale_peers)
 
     def get_stats(self) -> dict:
         """Get rate limiter statistics."""

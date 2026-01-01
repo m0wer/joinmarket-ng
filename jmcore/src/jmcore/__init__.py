@@ -85,6 +85,7 @@ from jmcore.protocol import (
     parse_utxo_list,
     peer_supports_neutrino_compat,
 )
+from jmcore.rate_limiter import RateLimiter, TokenBucket
 from jmcore.tor_control import (
     EphemeralHiddenService,
     TorAuthenticationError,
@@ -150,6 +151,9 @@ __all__ = [
     "get_nick_version",
     "parse_utxo_list",
     "peer_supports_neutrino_compat",
+    # Rate limiting
+    "RateLimiter",
+    "TokenBucket",
     # Tor
     "EphemeralHiddenService",
     "TorAuthenticationError",
