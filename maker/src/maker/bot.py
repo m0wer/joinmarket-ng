@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any
 
 from jmcore.commitment_blacklist import add_commitment, check_commitment, set_blacklist_path
@@ -48,6 +49,72 @@ from maker.offers import OfferManager
 
 # Default hostid for onion network (matches reference implementation)
 DEFAULT_HOSTID = "onion-network"
+
+# Rate limiting defaults for orderbook requests
+# These protect against spam attacks that can flood logs and exhaust resources
+DEFAULT_ORDERBOOK_RATE_LIMIT = 1  # Max orderbook responses per peer per interval
+DEFAULT_ORDERBOOK_RATE_INTERVAL = 10.0  # Interval in seconds (10s = 6 req/min)
+
+
+class OrderbookRateLimiter:
+    """
+    Per-peer rate limiter for orderbook requests.
+
+    Prevents DoS attacks by limiting how often each peer can request the orderbook.
+    Uses a simple timestamp-based approach: each peer can only receive one response
+    per interval, regardless of how many requests they send.
+
+    This is crucial because:
+    1. !orderbook responses include fidelity bond proofs which are expensive to compute
+    2. Unlimited responses can flood log files
+    3. A bad actor can exhaust maker resources by spamming requests
+    """
+
+    def __init__(
+        self,
+        rate_limit: int = DEFAULT_ORDERBOOK_RATE_LIMIT,
+        interval: float = DEFAULT_ORDERBOOK_RATE_INTERVAL,
+    ):
+        """
+        Initialize the rate limiter.
+
+        Args:
+            rate_limit: Maximum number of responses per interval (currently unused,
+                       always 1 response per interval for simplicity)
+            interval: Time window in seconds
+        """
+        self.interval = interval
+        self._last_response: dict[str, float] = {}
+        self._violation_counts: dict[str, int] = {}
+
+    def check(self, peer_nick: str) -> bool:
+        """
+        Check if we should respond to an orderbook request from this peer.
+
+        Returns True if allowed, False if rate limited.
+        """
+        now = time.monotonic()
+        last = self._last_response.get(peer_nick, 0.0)
+
+        if now - last >= self.interval:
+            self._last_response[peer_nick] = now
+            return True
+
+        # Rate limited
+        self._violation_counts[peer_nick] = self._violation_counts.get(peer_nick, 0) + 1
+        return False
+
+    def get_violation_count(self, peer_nick: str) -> int:
+        """Get the number of rate limit violations for a peer."""
+        return self._violation_counts.get(peer_nick, 0)
+
+    def cleanup_old_entries(self, max_age: float = 3600.0) -> None:
+        """Remove entries older than max_age to prevent memory growth."""
+        now = time.monotonic()
+        stale_peers = [peer for peer, last in self._last_response.items() if now - last > max_age]
+        for peer in stale_peers:
+            del self._last_response[peer]
+            self._violation_counts.pop(peer, None)
 
 
 class MakerBot:
@@ -86,6 +153,12 @@ class MakerBot:
         # Tor control for dynamic hidden service creation
         self._tor_control: TorControlClient | None = None
         self._ephemeral_hidden_service: EphemeralHiddenService | None = None
+
+        # Rate limiter for orderbook requests to prevent spam attacks
+        self._orderbook_rate_limiter = OrderbookRateLimiter(
+            rate_limit=config.orderbook_rate_limit,
+            interval=config.orderbook_rate_interval,
+        )
 
     async def _setup_tor_hidden_service(self) -> str | None:
         """
@@ -426,7 +499,7 @@ class MakerBot:
         logger.info("Maker bot stopped")
 
     def _cleanup_timed_out_sessions(self) -> None:
-        """Remove timed-out sessions from active_sessions."""
+        """Remove timed-out sessions from active_sessions and clean up rate limiter."""
         timed_out = [
             nick for nick, session in self.active_sessions.items() if session.is_timed_out()
         ]
@@ -438,6 +511,9 @@ class MakerBot:
                 f"Cleaning up timed-out session with {nick} (state: {session.state}, age: {age}s)"
             )
             del self.active_sessions[nick]
+
+        # Periodically cleanup old rate limiter entries to prevent memory growth
+        self._orderbook_rate_limiter.cleanup_old_entries()
 
     async def _resync_wallet_and_update_offers(self) -> None:
         """Re-sync wallet and update offers if balance changed.
@@ -789,6 +865,17 @@ class MakerBot:
 
             # Respond to orderbook requests with PRIVMSG (including bond if available)
             if to_nick == "PUBLIC" and command == "orderbook":
+                # Apply rate limiting to prevent spam attacks
+                if not self._orderbook_rate_limiter.check(from_nick):
+                    violations = self._orderbook_rate_limiter.get_violation_count(from_nick)
+                    # Only log every 10 violations to prevent log flooding
+                    if violations <= 1 or violations % 10 == 0:
+                        logger.debug(
+                            f"Rate limiting orderbook request from {from_nick} "
+                            f"(violations: {violations})"
+                        )
+                    return
+
                 logger.info(
                     f"Received !orderbook request from {from_nick}, sending offers via PRIVMSG"
                 )

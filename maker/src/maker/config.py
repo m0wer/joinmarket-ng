@@ -115,6 +115,18 @@ class MakerConfig(WalletConfig):
         ),
     )
 
+    # Rate limiting for orderbook requests (protects against spam attacks)
+    orderbook_rate_limit: int = Field(
+        default=1,
+        ge=1,
+        description="Maximum orderbook responses per peer per interval",
+    )
+    orderbook_rate_interval: float = Field(
+        default=10.0,
+        ge=1.0,
+        description="Interval in seconds for orderbook rate limiting (default: 10s)",
+    )
+
     model_config = {"frozen": False}
 
     @model_validator(mode="after")

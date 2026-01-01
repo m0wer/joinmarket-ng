@@ -19,6 +19,11 @@ services:
     networks:
       - joinmarket_orderbook_internal
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     depends_on:
       tor:
         condition: service_healthy
@@ -42,6 +47,11 @@ services:
       - joinmarket_orderbook_internal
       - joinmarket_orderbook_external
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "bash", "-c", "timeout 2 bash -c '</dev/tcp/127.0.0.1/9050' 2>/dev/null"]
       interval: 30s
