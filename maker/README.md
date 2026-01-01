@@ -12,16 +12,9 @@ pip install -e ../jmcore ../jmwallet .
 
 **Tor is REQUIRED for production use.** Makers need Tor for privacy and to advertise .onion addresses for direct peer connections.
 
-**Install Tor:**
-```bash
-# Linux
-sudo apt install tor
+You should configure Tor to serve the SOCKS proxy and control port. You can use the example torrc file in the [Docker Deployment](#docker-deployment) section.
 
-# macOS
-brew install tor
-```
-
-The maker bot auto-detects Tor configuration. For manual setup, see [Environment Variables](#environment-variables).
+The maker bot tries to auto-detect Tor configuration. For manual setup, see [Environment Variables](#environment-variables).
 
 ## Quick Start
 
@@ -208,53 +201,6 @@ CookieAuthFile /var/lib/tor/control_auth_cookie
 
 Save as `./torrc` and mount it in the Tor container.
 
-### Production: Neutrino + Tor (Recommended)
-
-```yaml
-services:
-  tor:
-    image: ghcr.io/m0wer/docker-tor:latest
-    restart: unless-stopped
-    volumes:
-      - ./torrc:/etc/tor/torrc:ro
-      - tor-data:/var/lib/tor
-
-  neutrino:
-    image: ghcr.io/m0wer/neutrino-api
-    restart: unless-stopped
-    environment:
-      NETWORK: mainnet
-    volumes:
-      - neutrino-data:/data/neutrino
-    depends_on:
-      - tor
-
-  maker:
-    build:
-      context: ..
-      dockerfile: maker/Dockerfile
-    restart: unless-stopped
-    environment:
-      MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/maker.mnemonic
-      BACKEND_TYPE: neutrino
-      NEUTRINO_URL: http://neutrino:8334
-      TOR_SOCKS_HOST: tor
-      TOR_CONTROL_HOST: tor
-      TOR_COOKIE_PATH: /var/lib/tor/control_auth_cookie
-    volumes:
-      - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
-      - tor-data:/var/lib/tor:ro
-    depends_on:
-      - neutrino
-      - tor
-
-volumes:
-  neutrino-data:
-  tor-data:
-```
-
-Start: `docker-compose up -d`
-
 ### Production: Bitcoin Core + Tor
 
 ```yaml
@@ -305,32 +251,52 @@ volumes:
   tor-data:
 ```
 
-### Testing/Development (Without Tor)
-
-**⚠️ NOT for production** - regtest/testnet only:
+### Production: Neutrino + Tor
 
 ```yaml
 services:
+  tor:
+    image: ghcr.io/m0wer/docker-tor:latest
+    restart: unless-stopped
+    volumes:
+      - ./torrc:/etc/tor/torrc:ro
+      - tor-data:/var/lib/tor
+
   neutrino:
     image: ghcr.io/m0wer/neutrino-api
+    restart: unless-stopped
     environment:
-      NETWORK: regtest
+      NETWORK: mainnet
+    volumes:
+      - neutrino-data:/data/neutrino
+    depends_on:
+      - tor
 
   maker:
     build:
       context: ..
       dockerfile: maker/Dockerfile
+    restart: unless-stopped
     environment:
       MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/maker.mnemonic
       BACKEND_TYPE: neutrino
       NEUTRINO_URL: http://neutrino:8334
-      NETWORK: testnet
-      BITCOIN_NETWORK: regtest
+      TOR_SOCKS_HOST: tor
+      TOR_CONTROL_HOST: tor
+      TOR_COOKIE_PATH: /var/lib/tor/control_auth_cookie
+    volumes:
+      - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
+      - tor-data:/var/lib/tor:ro
     depends_on:
       - neutrino
+      - tor
+
+volumes:
+  neutrino-data:
+  tor-data:
 ```
 
-Runs in `NOT-SERVING-ONION` mode (all traffic via directory).
+Start: `docker-compose up -d`
 
 ## Environment Variables
 
