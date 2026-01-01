@@ -35,6 +35,11 @@ services:
     image: kylemanna/bitcoind:latest
     container_name: jm-bitcoin
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     healthcheck:
       interval: 10s
       timeout: 10s
@@ -72,6 +77,11 @@ services:
     image: kylemanna/bitcoind:latest
     container_name: jm-miner
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     entrypoint: ["/bin/sh", "/scripts/regtest-miner.sh"]
     environment:
       - RPC_HOST=jm-bitcoin
@@ -96,6 +106,11 @@ services:
       dockerfile: directory_server/Dockerfile
     container_name: jm-directory
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     environment:
       - NETWORK=testnet
       - LOG_LEVEL=DEBUG
@@ -121,6 +136,11 @@ services:
       dockerfile: orderbook_watcher/Dockerfile
     container_name: jm-orderbook-watcher
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     environment:
       - NETWORK=testnet
       - LOG_LEVEL=DEBUG
@@ -143,6 +163,11 @@ services:
       dockerfile: maker/Dockerfile
     container_name: jm-maker
     restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     environment:
       - MNEMONIC=${MAKER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
       - NETWORK=testnet
@@ -178,6 +203,11 @@ services:
       dockerfile: taker/Dockerfile
     container_name: jm-taker
     restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     environment:
       - MNEMONIC=${TAKER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
       - NETWORK=testnet
@@ -214,6 +244,11 @@ services:
     image: kylemanna/bitcoind:latest
     container_name: jm-wallet-funder
     restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     entrypoint: ["/bin/sh", "/scripts/fund-test-wallets.sh"]
     environment:
       - RPC_HOST=jm-bitcoin
@@ -241,6 +276,11 @@ services:
       dockerfile: maker/Dockerfile
     container_name: jm-maker1
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     environment:
       - MNEMONIC=avoid whisper mesh corn already blur sudden fine planet chicken hover sniff
       - NETWORK=testnet
@@ -280,6 +320,11 @@ services:
       dockerfile: maker/Dockerfile
     container_name: jm-maker2
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     environment:
       - MNEMONIC=minute faint grape plate stock mercy tent world space opera apple rocket
       - NETWORK=testnet
@@ -322,6 +367,11 @@ services:
     image: lncm/bitcoind:v28.0
     container_name: jm-bitcoin-jam
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     healthcheck:
       interval: 10s
       timeout: 10s
@@ -363,6 +413,11 @@ services:
     image: lncm/bitcoind:v28.0
     container_name: jm-miner-jam
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     entrypoint: ["/bin/sh", "/scripts/regtest-miner-jam.sh"]
     environment:
       - RPC_HOST=jm-bitcoin-jam
@@ -424,6 +479,11 @@ services:
     image: ghcr.io/m0wer/docker-tor:latest
     container_name: jm-tor
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       # Check both that the hostname file exists AND that Tor has bootstrapped
       # by verifying the control socket can report circuit establishment
@@ -494,6 +554,11 @@ services:
   jam:
     image: ghcr.io/joinmarket-webui/jam-standalone:v0.4.0-clientserver-v0.9.11
     container_name: jm-jam
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
     environment:
       - JOINMARKET_DATA_DIR=/root/.joinmarket-ng
       - JM_RPC_HOST=jm-bitcoin-jam
@@ -544,6 +609,11 @@ services:
     image: ghcr.io/joinmarket-webui/jam-standalone:v0.4.0-clientserver-v0.9.11
     container_name: jm-jam-maker1
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     environment:
       - JOINMARKET_DATA_DIR=/root/.joinmarket-ng
       - JM_RPC_HOST=jm-bitcoin-jam
@@ -589,6 +659,11 @@ services:
     image: ghcr.io/joinmarket-webui/jam-standalone:v0.4.0-clientserver-v0.9.11
     container_name: jm-jam-maker2
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     environment:
       - JOINMARKET_DATA_DIR=/root/.joinmarket-ng
       - JM_RPC_HOST=jm-bitcoin-jam
@@ -639,6 +714,11 @@ services:
     image: ghcr.io/m0wer/neutrino-api:0.4
     container_name: jm-neutrino
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     environment:
       - NETWORK=regtest
       - LISTEN_ADDR=0.0.0.0:8334
@@ -666,6 +746,11 @@ services:
       dockerfile: maker/Dockerfile
     container_name: jm-maker-neutrino
     restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     environment:
       - MNEMONIC=avoid whisper mesh corn already blur sudden fine planet chicken hover sniff
       - NETWORK=testnet
@@ -699,6 +784,11 @@ services:
       dockerfile: taker/Dockerfile
     container_name: jm-taker-neutrino
     restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     environment:
       - MNEMONIC=${TAKER_NEUTRINO_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
       - NETWORK=testnet
