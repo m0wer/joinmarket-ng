@@ -289,15 +289,17 @@ After broadcasting, takers verify the transaction was accepted:
 
 Both spent and unspent responses confirm broadcast success.
 
-### Message Format
+### Directory Server Transport Protocol
 
-All messages are JSON envelopes terminated with `\r\n`:
+All messages use JSON-line envelopes terminated with `\r\n`:
 
 ```json
 {"type": <message_type>, "line": "<payload>"}
 ```
 
-### Message Types
+This is the **transport layer** - it wraps the actual JoinMarket protocol messages.
+
+#### Message Types
 
 | Code | Name | Description |
 |------|------|-------------|
@@ -311,9 +313,15 @@ All messages are JSON envelopes terminated with `\r\n`:
 | 799 | PONG | Ping response |
 | 801 | DISCONNECT | Graceful disconnect |
 
-### JoinMarket Message Format
+### JoinMarket Protocol Messages (Inside Transport)
 
-Inside the `line` field, JoinMarket messages follow this format:
+Inside the `line` field of PRIVMSG/PUBMSG, JoinMarket messages follow this format:
+
+```
+!command [[field1] [field2] ...]
+```
+
+For private messages, the format includes routing information:
 
 ```
 {from_nick}!{to_nick}!{command} {arguments}
@@ -322,15 +330,28 @@ Inside the `line` field, JoinMarket messages follow this format:
 - `from_nick`: Sender's nickname (e.g., `J6AiXEVUkwBBZs8A`)
 - `to_nick`: Recipient or `PUBLIC` for broadcasts
 - `command`: Command with `!` prefix
-- `arguments`: Space-separated arguments
+- `arguments`: Fields separated by **single whitespace** (more than one space not allowed)
+
+#### Multi-part Messages
+
+- Unencrypted messages may contain multiple commands
+- Split on command prefix (`!`)
+- Currently used for `!reloffer` and `!absoffer` commands
+- **NOT allowed for encrypted messages** (single command only)
 
 ### Nick Format
 
 Nicks are derived from ephemeral keypairs:
 
 ```
-J + version + base58(sha256(pubkey)[:10]) + padding
+J + version + base58(sha256(pubkey)[:NICK_HASH_LEN])
 ```
+
+**Construction details**:
+- `NICK_HASH_LEN`: 14 bytes of sha256 hash
+- Right-padded with 'O' if `< NICK_MAX_ENCODED` (currently not needed)
+- Current format: 16 chars total (1 type + 1 version + 14 pubkey-hash)
+- Encoding: Base58 (not Base58Check - no checksum)
 
 Example: `J54JdT1AFotjmpmH` (16 chars total, v5 peer)
 
@@ -339,6 +360,20 @@ The nick format enables:
 2. Nick recovery across multiple message channels
 
 **Note**: Our implementation uses J5 nicks for compatibility with the reference implementation. All feature detection (like `neutrino_compat`) happens via handshake features, not nick version.
+
+#### Anti-Replay Protection
+
+All private messages include `<pubkey> <signature>` fields for authentication. The signed plaintext is:
+
+```
+message + hostid
+```
+
+Where:
+- `message`: The actual message content
+- `hostid`: Unique identifier for this MessageChannel (e.g., directory server address)
+
+This prevents replaying the same signature across different message channels, ensuring that a valid signature on one directory server cannot be reused on another.
 
 ---
 
@@ -509,17 +544,21 @@ All protocol commands use JSON-line format: `{"type": <code>, "line": "<payload>
 
 ### Protocol Commands
 
-| Command | Encrypted | Phase | Description |
-|---------|-----------|-------|-------------|
-| `!orderbook` | No | 1 | Request offers from makers |
-| `!sw0reloffer`, `!sw0absoffer` | No | 1 | Maker offer responses (via PRIVMSG) |
-| `!fill` | No | 2 | Taker fills offer with NaCl pubkey + PoDLE commitment |
-| `!pubkey` | No | 2 | Maker responds with NaCl pubkey |
-| `!auth` | Yes | 3 | Taker reveals PoDLE proof (encrypted) |
-| `!ioauth` | Yes | 3 | Maker sends UTXOs + addresses (encrypted) |
-| `!tx` | Yes | 4 | Taker sends unsigned transaction (encrypted) |
-| `!sig` | Yes | 4 | Maker signs inputs (encrypted, one per input) |
-| `!push` | No | 5 | Request maker to broadcast transaction |
+| Command | Encrypted | Plaintext OK | Phase | Description |
+|---------|-----------|--------------|-------|-------------|
+| `!orderbook` | No | ✓ | 1 | Request offers from makers |
+| `!reloffer`, `!absoffer` | No | ✓ | 1 | Maker offer responses (via PRIVMSG) |
+| `!fill` | No | ✓ | 2 | Taker fills offer with NaCl pubkey + PoDLE commitment |
+| `!pubkey` | No | ✓ | 2 | Maker responds with NaCl pubkey |
+| `!error` | No | ✓ | Any | Error notification |
+| `!push` | No | ✓ | 5 | Request maker to broadcast transaction |
+| `!tbond` | No | ✓ | 1 | Fidelity bond proof (with offers) |
+| `!auth` | **Yes** | ✗ | 3 | Taker reveals PoDLE proof (encrypted) |
+| `!ioauth` | **Yes** | ✗ | 3 | Maker sends UTXOs + addresses (encrypted) |
+| `!tx` | **Yes** | ✗ | 4 | Taker sends unsigned transaction (encrypted) |
+| `!sig` | **Yes** | ✗ | 4 | Maker signs inputs (encrypted, one per input) |
+
+**Note**: Rules enforced at message_channel layer. All encrypted messages are base64-encoded.
 
 ### Phase 1: Orderbook Discovery
 
@@ -531,11 +570,39 @@ Taker sends `!fill <oid> <amount> <taker_nacl_pk> <commitment>`. Maker responds 
 
 After key exchange, a NaCl `Box` is created for authenticated encryption.
 
+#### Message Encryption Sequence
+
+For encrypted messages, the sequence is:
+1. Plaintext message → Encryption (NaCl Box)
+2. Encrypted bytes → Base64 encoding
+3. Add `!command` prefix to Base64 string
+4. Send as private message
+
+Receiving is the reverse process:
+1. Extract Base64 payload (after `!command` prefix)
+2. Base64 decode → Encrypted bytes
+3. NaCl Box decryption → Plaintext message
+
 ### Phase 3: Authentication (Encrypted)
 
-Taker sends `!auth` with encrypted PoDLE revelation: `txid:vout|P|P2|sig|e` (pipe-separated). With `neutrino_compat`, UTXO format extends to `txid:vout:spk:height`.
+Taker sends `!auth` with encrypted PoDLE revelation. Fields are **pipe-separated** (`|`):
 
-Maker verifies PoDLE, then sends `!ioauth` with encrypted data: `utxos auth_pub cj_addr change_addr btc_sig` (space-separated).
+```
+!auth U|P|P2|s|e
+```
+
+Where:
+- `U`: UTXO in format `txid:vout` (or `txid:vout:spk:height` with `neutrino_compat`)
+- `P`: Public key
+- `P2`: Commitment point
+- `s`: Signature
+- `e`: Exponent
+
+Maker verifies PoDLE, then sends `!ioauth` with encrypted data. Fields are **space-separated**:
+
+```
+!ioauth utxo1 utxo2 ... auth_pub cj_addr change_addr btc_sig
+```
 
 The `btc_sig` proves UTXO ownership by signing the maker's NaCl pubkey with a Bitcoin key.
 
@@ -710,6 +777,16 @@ Without PoDLE, an attacker could request CoinJoins from many makers, collect the
 
 The proof shows that `P = k*G` and `P2 = k*J` use the same private key `k` without revealing `k`.
 
+#### Commitment Format
+
+First byte is commitment type:
+- `P`: PoDLE (default and currently only supported type)
+- Others reserved for future commitment types
+
+Full commitment format: `<type_byte><H(P2)>`
+
+Example: `P` + 32-byte hash = 33 bytes total
+
 ### NUMS Point Index System
 
 NUMS points provide reusability. Each UTXO can generate 10 different commitments (indices 0-9).
@@ -852,15 +929,39 @@ The wallet automatically:
 
 ### Bond Proof Structure
 
-252-byte proof containing two signatures + metadata:
+The fidelity bond proof is a 252-byte binary blob containing two signatures + metadata:
 
+#### Binary Blob Structure (252 bytes total)
+
+| Field | Size | Description |
+|-------|------|-------------|
+| nick_sig | 72 | DER signature (padded with 0xff) |
+| cert_sig | 72 | DER signature (padded with 0xff) |
+| cert_pubkey | 33 | Certificate public key |
+| cert_expiry | 2 | 2016-block period number (ASCII digits) |
+| utxo_pubkey | 33 | UTXO public key |
+| txid | 32 | Transaction ID |
+| vout | 4 | Output index (ASCII digits) |
+| timelock | 4 | Locktime value (ASCII digits) |
+
+**DER signature padding**: Padded at start with 0xff bytes to exactly 72 bytes. The header byte 0x30 makes stripping padding straightforward during verification.
+
+**Signature purposes**:
 - **Nick signature** (72 bytes): Proves maker controls certificate key (signs `taker_nick|maker_nick`)
 - **Certificate signature** (72 bytes): Self-signs certificate binding cert key to UTXO (signs `fidelity-bond-cert|cert_pub|expiry`)
 - **Certificate pubkey** (33 bytes): Hot wallet key
 - **UTXO pubkey** (33 bytes): Cold storage key (can equal cert_pub for self-signed)
-- **UTXO identifiers** (txid, vout, locktime): On-chain bond location
+- **UTXO identifiers** (txid, vout, timelock): On-chain bond location
 
-DER signatures are padded to 72 bytes with leading `0xff` bytes.
+#### Certificate Expiry Format
+
+The certificate expiry field (2 bytes) is stored as an ASCII string representing a 2016-block period number:
+
+- **Encoding**: 2-byte ASCII string (e.g., "55" = 0x3535)
+- **Represents**: 2016-block period number
+- **Calculation**: Invalid after block height = period × 2016
+- **Example**: cert_expiry=330 → invalid after block 665,280 (330 × 2016)
+- **Maximum**: 99 → block height 199,584 (2-digit ASCII limit)
 
 ### Verification
 
