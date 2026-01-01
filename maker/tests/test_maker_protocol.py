@@ -72,7 +72,7 @@ async def test_fidelity_bond_proof():
     bond.pubkey = bond.private_key.public_key.format(compressed=True)
 
     # Create proof
-    proof = create_fidelity_bond_proof(bond, maker_nick, taker_nick)
+    proof = create_fidelity_bond_proof(bond, maker_nick, taker_nick, current_block_height=930000)
 
     # Proof should be a base64-encoded string
     # The actual format is implementation-specific but should not be None

@@ -42,7 +42,7 @@ def test_bond_proof_format_matches_reference():
         bond=bond,
         maker_nick="J5TestMakerNick1",
         taker_nick="J5TestTakerNick1",
-        cert_expiry_blocks=104832,  # Default: 2016 * 52
+        current_block_height=930000,  # Current block height for cert expiry calculation
     )
 
     assert proof is not None, "Proof creation should succeed"
@@ -57,7 +57,11 @@ def test_bond_proof_format_matches_reference():
     nick_sig, cert_sig, cert_pub, cert_expiry, utxo_pub, txid_bytes, vout, locktime = unpacked
 
     # Verify cert_expiry encoding
-    assert cert_expiry == 104832 // 2016, "Cert expiry should be blocks / 2016"
+    # Formula: ((block_height + 2) // 2016) + 1
+    expected_cert_expiry = ((930000 + 2) // 2016) + 1
+    assert cert_expiry == expected_cert_expiry, (
+        f"Cert expiry should be {expected_cert_expiry}, got {cert_expiry}"
+    )
 
     # Verify pubkeys match
     assert cert_pub == pubkey, "Cert pubkey should match bond pubkey"

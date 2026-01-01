@@ -90,6 +90,7 @@ def test_bond_proof_structure():
         bond=bond,
         maker_nick=maker_nick,
         taker_nick=taker_nick,
+        current_block_height=930000,
     )
 
     assert proof_b64 is not None
@@ -137,6 +138,7 @@ def test_privmsg_format_with_bond():
         bond=bond,
         maker_nick=maker_nick,
         taker_nick=taker_nick,
+        current_block_height=930000,
     )
 
     assert proof_b64 is not None
@@ -228,6 +230,7 @@ def test_bond_proof_with_multiple_offers():
         bond=bond,
         maker_nick=maker_nick,
         taker_nick=taker_nick,
+        current_block_height=930000,
     )
 
     # Simulate sending two offers (as our maker does)
@@ -280,7 +283,7 @@ def test_bond_proof_with_various_locktimes(locktime: int, cert_expiry_blocks: in
         bond=bond,
         maker_nick="J52Maker",
         taker_nick="J5Taker",
-        cert_expiry_blocks=cert_expiry_blocks,
+        current_block_height=930000,
     )
 
     assert proof_b64 is not None
@@ -290,4 +293,6 @@ def test_bond_proof_with_various_locktimes(locktime: int, cert_expiry_blocks: in
     proof_data = base64.b64decode(proof_b64)
     unpacked = struct.unpack("<72s72s33sH33s32sII", proof_data)
     assert unpacked[7] == locktime  # Last field is locktime
-    assert unpacked[3] == cert_expiry_blocks // 2016  # cert_expiry
+    # cert_expiry is calculated from block height: ((930000 + 2) // 2016) + 1 = 462
+    expected_cert_expiry = ((930000 + 2) // 2016) + 1
+    assert unpacked[3] == expected_cert_expiry  # cert_expiry

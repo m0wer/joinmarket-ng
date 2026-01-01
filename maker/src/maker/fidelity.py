@@ -16,7 +16,15 @@ from loguru import logger
 # Path format: m/84'/coin'/0'/2/index:locktime
 FIDELITY_BOND_MIXDEPTH = 0
 FIDELITY_BOND_INTERNAL_BRANCH = 2
-CERT_EXPIRY_BLOCKS = 2016 * 52  # ~1 year in blocks
+
+# Certificate expiry parameters (matching reference implementation)
+RETARGET_INTERVAL = 2016  # Bitcoin difficulty retarget interval
+BLOCK_COUNT_SAFETY = 2  # Safety margin to reduce chances of proof expiring before verification
+CERT_MAX_VALIDITY_TIME = 1  # Validity time in retarget periods (1 = ~2 weeks)
+
+# DEPRECATED: For backwards compatibility with tests only
+# The actual expiry is calculated dynamically based on current block height
+CERT_EXPIRY_BLOCKS = 2016 * 52  # ~1 year in blocks (DEPRECATED)
 
 
 @dataclass
@@ -180,7 +188,7 @@ def create_fidelity_bond_proof(
     bond: FidelityBondInfo,
     maker_nick: str,
     taker_nick: str,
-    cert_expiry_blocks: int = CERT_EXPIRY_BLOCKS,
+    current_block_height: int,
 ) -> str | None:
     """
     Create a fidelity bond proof for broadcasting.
@@ -189,7 +197,7 @@ def create_fidelity_bond_proof(
     - 72 bytes: Nick signature (signs "taker_nick|maker_nick" with Bitcoin message format)
     - 72 bytes: Certificate signature (signs cert message with Bitcoin message format)
     - 33 bytes: Certificate public key (same as utxo_pub for self-signed)
-    - 2 bytes: Certificate expiry (blocks / 2016)
+    - 2 bytes: Certificate expiry (retarget period number when cert becomes invalid)
     - 33 bytes: UTXO public key
     - 32 bytes: TXID (little-endian)
     - 4 bytes: Vout (little-endian)
@@ -207,7 +215,7 @@ def create_fidelity_bond_proof(
         bond: FidelityBondInfo with UTXO details and private key
         maker_nick: Maker's JoinMarket nick
         taker_nick: Target taker's nick (for ownership proof)
-        cert_expiry_blocks: Certificate expiry in blocks
+        current_block_height: Current blockchain height (for calculating cert expiry)
 
     Returns:
         Base64-encoded proof string, or None if signing fails
@@ -221,8 +229,13 @@ def create_fidelity_bond_proof(
         cert_pub = bond.pubkey
         utxo_pub = bond.pubkey
 
-        # Expiry encoded as blocks / 2016 (difficulty period)
-        cert_expiry_encoded = cert_expiry_blocks // 2016
+        # Calculate certificate expiry as retarget period number
+        # Reference: yieldgenerator.py line 139
+        # cert_expiry =
+        # ((blocks + BLOCK_COUNT_SAFETY) // RETARGET_INTERVAL) + CERT_MAX_VALIDITY_TIME
+        cert_expiry_encoded = (
+            (current_block_height + BLOCK_COUNT_SAFETY) // RETARGET_INTERVAL
+        ) + CERT_MAX_VALIDITY_TIME
 
         # 1. Nick signature: proves the maker controls the certificate key
         # Signs "(taker_nick|maker_nick)" using Bitcoin message format

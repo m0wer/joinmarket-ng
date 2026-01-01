@@ -938,11 +938,11 @@ The fidelity bond proof is a 252-byte binary blob containing two signatures + me
 | nick_sig | 72 | DER signature (padded with 0xff) |
 | cert_sig | 72 | DER signature (padded with 0xff) |
 | cert_pubkey | 33 | Certificate public key |
-| cert_expiry | 2 | 2016-block period number (ASCII digits) |
+| cert_expiry | 2 | Retarget period number when cert becomes invalid (unsigned int, little-endian) |
 | utxo_pubkey | 33 | UTXO public key |
 | txid | 32 | Transaction ID |
-| vout | 4 | Output index (ASCII digits) |
-| timelock | 4 | Locktime value (ASCII digits) |
+| vout | 4 | Output index (little-endian) |
+| timelock | 4 | Locktime value (little-endian) |
 
 **DER signature padding**: Padded at start with 0xff bytes to exactly 72 bytes. The header byte 0x30 makes stripping padding straightforward during verification.
 
@@ -955,13 +955,18 @@ The fidelity bond proof is a 252-byte binary blob containing two signatures + me
 
 #### Certificate Expiry Format
 
-The certificate expiry field (2 bytes) is stored as an ASCII string representing a 2016-block period number:
+The certificate expiry field (2 bytes) is stored as a retarget period number that determines when the certificate becomes invalid:
 
-- **Encoding**: 2-byte ASCII string (e.g., "55" = 0x3535)
-- **Represents**: 2016-block period number
-- **Calculation**: Invalid after block height = period × 2016
-- **Example**: cert_expiry=330 → invalid after block 665,280 (330 × 2016)
-- **Maximum**: 99 → block height 199,584 (2-digit ASCII limit)
+- **Encoding**: 2-byte unsigned integer (little-endian)
+- **Represents**: Difficulty retarget period number (period = block_height / 2016)
+- **Calculation**: `cert_expiry = ((current_block + 2) // 2016) + 1`
+  - `current_block`: Current blockchain height when proof is created
+  - `+2`: Safety margin to reduce chances of proof expiring before verification
+  - `+1`: Validity time (1 retarget period ≈ 2 weeks)
+- **Validation**: Certificate is invalid if `current_block_height > cert_expiry × 2016`
+- **Example**: At block 930,471: cert_expiry = ((930471 + 2) / 2016) + 1 = 462
+  - Certificate becomes invalid after block 931,392 (462 × 2016)
+  - Time window: ~2 weeks from proof creation
 
 ### Verification
 

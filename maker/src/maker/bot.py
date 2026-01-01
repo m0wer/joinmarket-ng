@@ -286,6 +286,7 @@ class MakerBot:
         self.active_sessions: dict[str, CoinJoinSession] = {}
         self.current_offers: list[Offer] = []
         self.fidelity_bond: FidelityBondInfo | None = None
+        self.current_block_height: int = 0  # Cached block height for bond proof generation
 
         self.running = False
         self.listen_tasks: list[asyncio.Task[None]] = []
@@ -425,6 +426,10 @@ class MakerBot:
 
             logger.info("Syncing wallet...")
             await self.wallet.sync_all()
+
+            # Get current block height for bond proof generation
+            self.current_block_height = await self.backend.get_block_height()
+            logger.debug(f"Current block height: {self.current_block_height}")
 
             # Sync fidelity bonds - auto-discover locktimes from registry if not specified
             fidelity_locktimes = list(self.config.fidelity_bond_locktimes)  # Copy to avoid mutating
@@ -690,6 +695,10 @@ class MakerBot:
             old_max_balance = max(old_max_balance, balance)
 
         await self.wallet.sync_all()
+
+        # Update current block height
+        self.current_block_height = await self.backend.get_block_height()
+        logger.debug(f"Updated block height: {self.current_block_height}")
 
         # Update pending history immediately after sync (in case of restart)
         await self._update_pending_history()
@@ -990,6 +999,7 @@ class MakerBot:
                 bond=self.fidelity_bond,
                 maker_nick=self.nick,
                 taker_nick=self.nick,  # Will be updated when sending to specific taker
+                current_block_height=self.current_block_height,
             )
             if bond_proof:
                 msg += f"!tbond {bond_proof}"
@@ -1175,6 +1185,7 @@ class MakerBot:
                         bond=self.fidelity_bond,
                         maker_nick=self.nick,
                         taker_nick=taker_nick,  # Sign for THIS specific taker
+                        current_block_height=self.current_block_height,
                     )
                     if bond_proof:
                         data += f"!tbond {bond_proof}"

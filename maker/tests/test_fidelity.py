@@ -178,6 +178,7 @@ class TestCreateFidelityBondProof:
             bond=bond,
             maker_nick="maker123",
             taker_nick="taker456",
+            current_block_height=930000,
         )
 
         assert proof is not None
@@ -201,6 +202,7 @@ class TestCreateFidelityBondProof:
             bond=bond,
             maker_nick="maker_test",
             taker_nick="taker_test",
+            current_block_height=930000,
         )
 
         assert proof is not None
@@ -234,8 +236,9 @@ class TestCreateFidelityBondProof:
         assert vout == 5
         assert locktime == 900000
 
-        # Cert expiry should be blocks / 2016
-        expected_expiry = CERT_EXPIRY_BLOCKS // 2016
+        # Cert expiry should be calculated from block height
+        # Formula: ((block_height + 2) // 2016) + 1
+        expected_expiry = ((930000 + 2) // 2016) + 1
         assert cert_expiry == expected_expiry
 
     def test_missing_private_key_returns_none(self, test_pubkey):
@@ -254,6 +257,7 @@ class TestCreateFidelityBondProof:
             bond=bond,
             maker_nick="maker",
             taker_nick="taker",
+            current_block_height=930000,
         )
 
         assert proof is None
@@ -274,6 +278,7 @@ class TestCreateFidelityBondProof:
             bond=bond,
             maker_nick="maker",
             taker_nick="taker",
+            current_block_height=930000,
         )
 
         assert proof is None
@@ -294,6 +299,7 @@ class TestCreateFidelityBondProof:
             bond=bond,
             maker_nick="maker",
             taker_nick="taker",
+            current_block_height=930000,
         )
 
         assert proof is None
@@ -311,8 +317,8 @@ class TestCreateFidelityBondProof:
             private_key=test_private_key,
         )
 
-        proof1 = create_fidelity_bond_proof(bond, "maker", "taker1")
-        proof2 = create_fidelity_bond_proof(bond, "maker", "taker2")
+        proof1 = create_fidelity_bond_proof(bond, "maker", "taker1", current_block_height=930000)
+        proof2 = create_fidelity_bond_proof(bond, "maker", "taker2", current_block_height=930000)
 
         # Different proofs (ownership sig differs)
         assert proof1 is not None
@@ -352,6 +358,7 @@ class TestCreateFidelityBondProof:
             bond=bond,
             maker_nick=maker_nick,
             taker_nick=taker_nick,
+            current_block_height=930000,
         )
 
         assert proof is not None

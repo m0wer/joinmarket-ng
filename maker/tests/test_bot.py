@@ -397,6 +397,7 @@ class TestHandlePush:
 
         backend = MagicMock()
         backend.broadcast_transaction = AsyncMock(return_value="txid123abc")
+        backend.get_block_height = AsyncMock(return_value=930000)
         return backend
 
     @pytest.fixture
@@ -512,8 +513,11 @@ class TestWalletRescanAndOfferUpdate:
     @pytest.fixture
     def mock_backend(self):
         """Create a mock blockchain backend."""
+        from unittest.mock import AsyncMock
+
         backend = MagicMock()
         backend.can_provide_neutrino_metadata = MagicMock(return_value=True)
+        backend.get_block_height = AsyncMock(return_value=930000)
         return backend
 
     @pytest.fixture
