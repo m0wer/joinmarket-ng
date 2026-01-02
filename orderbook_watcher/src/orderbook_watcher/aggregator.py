@@ -485,6 +485,8 @@ class OrderbookAggregator:
                     cache_key = f"{bond.utxo_txid}:{bond.utxo_vout}"
                     self._bond_cache[cache_key] = bond
 
+            # Link fidelity bonds to offers
+            # First pass: Link bonds that are already attached to offers (via fidelity_bond_data)
             for offer in orderbook.offers:
                 if offer.fidelity_bond_data:
                     matching_bonds = [
@@ -495,6 +497,31 @@ class OrderbookAggregator:
                     ]
                     if matching_bonds and matching_bonds[0].bond_value is not None:
                         offer.fidelity_bond_value = matching_bonds[0].bond_value
+
+            # Second pass: Link standalone bonds to offers that don't have bond data yet
+            # This handles cases where the bond announcement arrived separately from the offer
+            # (e.g., reference implementation makers responding to !orderbook requests)
+            for offer in orderbook.offers:
+                if not offer.fidelity_bond_data:
+                    # Find any bonds from this counterparty
+                    matching_bonds = [
+                        b for b in orderbook.fidelity_bonds if b.counterparty == offer.counterparty
+                    ]
+                    if matching_bonds:
+                        # Use the bond with highest value (or first if values not calculated)
+                        bond = max(
+                            matching_bonds,
+                            key=lambda b: b.bond_value if b.bond_value is not None else 0,
+                        )
+                        # Attach bond data to offer
+                        if bond.fidelity_bond_data:
+                            offer.fidelity_bond_data = bond.fidelity_bond_data
+                            if bond.bond_value is not None:
+                                offer.fidelity_bond_value = bond.bond_value
+                        logger.debug(
+                            f"Linked standalone bond from {bond.counterparty} "
+                            f"(txid={bond.utxo_txid[:16]}...) to offer oid={offer.oid}"
+                        )
 
         return orderbook
 
