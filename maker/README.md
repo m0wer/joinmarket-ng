@@ -49,7 +49,31 @@ Send bitcoin to displayed addresses. For best results, spread funds across multi
 
 ### 4. Start Earning Fees
 
-#### Option A: Neutrino Backend (Recommended for Beginners)
+#### Option A: Bitcoin Core Full Node (Recommended)
+
+For maximum trustlessness, privacy, and compatibility with all takers. Create an environment file to avoid credentials in shell history:
+
+```bash
+cat > ~/.joinmarket-ng/bitcoin.env << EOF
+export BITCOIN_RPC_URL=http://127.0.0.1:8332
+export BITCOIN_RPC_USER=your_rpc_user
+export BITCOIN_RPC_PASSWORD=your_rpc_password
+EOF
+chmod 600 ~/.joinmarket-ng/bitcoin.env
+```
+
+Start maker bot:
+
+```bash
+source ~/.joinmarket-ng/bitcoin.env
+jm-maker start \
+  --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
+  --backend-type full_node
+```
+
+#### Option B: Neutrino Backend
+
+Lightweight alternative if you cannot run a full node. Note that Neutrino makers can only participate in CoinJoins with takers that support `neutrino_compat` mode.
 
 Start Neutrino server:
 
@@ -71,28 +95,6 @@ Start maker bot:
 jm-maker start \
   --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
   --backend-type neutrino
-```
-
-#### Option B: Bitcoin Core Full Node
-
-For maximum security. Create an environment file to avoid credentials in shell history:
-
-```bash
-cat > ~/.joinmarket-ng/bitcoin.env << EOF
-export BITCOIN_RPC_URL=http://127.0.0.1:8332
-export BITCOIN_RPC_USER=your_rpc_user
-export BITCOIN_RPC_PASSWORD=your_rpc_password
-EOF
-chmod 600 ~/.joinmarket-ng/bitcoin.env
-```
-
-Start maker bot:
-
-```bash
-source ~/.joinmarket-ng/bitcoin.env
-jm-maker start \
-  --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
-  --backend-type full_node
 ```
 
 The bot will:
@@ -241,120 +243,94 @@ Then use `--password` or `MNEMONIC_PASSWORD` env var when running commands.
 
 ## Docker Deployment
 
-Docker includes Tor container. For ephemeral .onion creation, Tor needs control port accessible.
+A production-ready `docker-compose.yml` is provided in this directory with:
 
-**Create `torrc` for Tor container:**
+- **Bitcoin Core backend** for maximum trustlessness and compatibility
+- **Tor** with control port for ephemeral .onion address creation
+- **Logging limits** to prevent disk exhaustion from log flooding
+- **Resource limits** for CPU and memory
+- **Health checks** for service dependencies
+
+> **Note**: Bitcoin Core is strongly recommended for makers. Neutrino-based makers can only
+> participate in CoinJoins with takers that support `neutrino_compat` mode, limiting your
+> potential earnings and network compatibility.
+
+### Quick Start
+
+1. **Create Tor configuration directory:**
+
+```bash
+mkdir -p tor/conf tor/run
+```
+
+2. **Create `tor/conf/torrc`:**
 
 ```torc
 # Minimal Tor configuration for JoinMarket maker
-
-# SOCKS proxy listening on all interfaces
 SocksPort 0.0.0.0:9050
-
-# Control port for ephemeral hidden services (bind to 0.0.0.0 for Docker)
 ControlPort 0.0.0.0:9051
 CookieAuthentication 1
 CookieAuthFile /var/lib/tor/control_auth_cookie
+DataDirectory /var/lib/tor
+Log notice stdout
 ```
 
-Save as `./torrc` and mount it in the Tor container.
+3. **Ensure your wallet is ready:**
 
-### Production: Bitcoin Core + Tor
+```bash
+mkdir -p ~/.joinmarket-ng/wallets
+# Create or copy your mnemonic file to ~/.joinmarket-ng/wallets/maker.mnemonic
+```
+
+4. **Update RPC credentials** in `docker-compose.yml` (change `rpcuser`/`rpcpassword`).
+
+5. **Start the maker:**
+
+```bash
+docker-compose up -d
+```
+
+> **Note**: Initial Bitcoin Core sync can take several hours to days depending on hardware.
+
+### Using Neutrino Instead of Bitcoin Core
+
+If you cannot run a full node, Neutrino is available as a lightweight alternative.
+Be aware this limits compatibility with takers.
+
+Replace the `bitcoind` service with `neutrino` and update maker environment:
 
 ```yaml
-services:
-  tor:
-    image: ghcr.io/m0wer/docker-tor:latest
-    restart: unless-stopped
-    volumes:
-      - ./torrc:/etc/tor/torrc:ro
-      - tor-data:/var/lib/tor
+environment:
+  - BACKEND_TYPE=neutrino
+  - NEUTRINO_URL=http://neutrino:8334
 
-  bitcoind:
-    image: kylemanna/bitcoind
-    restart: unless-stopped
-    command:
-      - "-server=1"
-      - "-rpcuser=rpcuser"
-      - "-rpcpassword=rpcpassword"
-      - "-rpcallowip=0.0.0.0/0"
-      - "-rpcbind=0.0.0.0"
-      - "-txindex=1"
-    volumes:
-      - bitcoin-data:/bitcoin/.bitcoin
-
-  maker:
-    build:
-      context: ..
-      dockerfile: maker/Dockerfile
-    restart: unless-stopped
-    environment:
-      MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/maker.mnemonic
-      BACKEND_TYPE: full_node
-      BITCOIN_RPC_URL: http://bitcoind:8332
-      BITCOIN_RPC_USER: rpcuser
-      BITCOIN_RPC_PASSWORD: rpcpassword
-      TOR_SOCKS_HOST: tor
-      TOR_CONTROL_HOST: tor
-      TOR_COOKIE_PATH: /var/lib/tor/control_auth_cookie
-    volumes:
-      - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
-      - tor-data:/var/lib/tor:ro
-    depends_on:
-      - bitcoind
-      - tor
-
-volumes:
-  bitcoin-data:
-  tor-data:
+# Replace bitcoind service with:
+neutrino:
+  image: ghcr.io/m0wer/neutrino-api
+  environment:
+    - NETWORK=mainnet
+  volumes:
+    - neutrino-data:/data/neutrino
 ```
 
-### Production: Neutrino + Tor
+### Customizing Fees
+
+Edit the environment section in `docker-compose.yml`:
 
 ```yaml
-services:
-  tor:
-    image: ghcr.io/m0wer/docker-tor:latest
-    restart: unless-stopped
-    volumes:
-      - ./torrc:/etc/tor/torrc:ro
-      - tor-data:/var/lib/tor
-
-  neutrino:
-    image: ghcr.io/m0wer/neutrino-api
-    restart: unless-stopped
-    environment:
-      NETWORK: mainnet
-    volumes:
-      - neutrino-data:/data/neutrino
-    depends_on:
-      - tor
-
-  maker:
-    build:
-      context: ..
-      dockerfile: maker/Dockerfile
-    restart: unless-stopped
-    environment:
-      MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/maker.mnemonic
-      BACKEND_TYPE: neutrino
-      NEUTRINO_URL: http://neutrino:8334
-      TOR_SOCKS_HOST: tor
-      TOR_CONTROL_HOST: tor
-      TOR_COOKIE_PATH: /var/lib/tor/control_auth_cookie
-    volumes:
-      - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
-      - tor-data:/var/lib/tor:ro
-    depends_on:
-      - neutrino
-      - tor
-
-volumes:
-  neutrino-data:
-  tor-data:
+environment:
+  # Relative fee (0.1% - default)
+  - CJ_FEE_RELATIVE=0.001
+  # OR absolute fee (uncomment one, not both)
+  # - CJ_FEE_ABSOLUTE=1000
+  - MIN_SIZE=100000
 ```
 
-Start: `docker-compose up -d`
+### Viewing Logs
+
+```bash
+docker-compose logs -f maker
+```
 
 ## Environment Variables
 

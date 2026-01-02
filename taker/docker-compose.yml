@@ -1,0 +1,107 @@
+services:
+  taker:
+    build:
+      context: ..
+      dockerfile: taker/Dockerfile
+    container_name: joinmarket_taker
+    environment:
+      - MNEMONIC_FILE=/home/jm/.joinmarket-ng/wallets/taker.mnemonic
+      - BACKEND_TYPE=full_node
+      - BITCOIN_RPC_URL=http://bitcoind:8332
+      - BITCOIN_RPC_USER=rpcuser
+      - BITCOIN_RPC_PASSWORD=rpcpassword
+      - NETWORK=mainnet
+      - TOR_SOCKS_HOST=tor
+      - TOR_SOCKS_PORT=9050
+      # CoinJoin configuration
+      - COINJOIN_AMOUNT=1000000
+      - MIN_MAKERS=4
+      - MAX_CJ_FEE_REL=0.001
+      - MAX_CJ_FEE_ABS=5000
+    volumes:
+      - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
+    networks:
+      - joinmarket_taker_internal
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    depends_on:
+      tor:
+        condition: service_healthy
+      bitcoind:
+        condition: service_started
+    # Override command for different operations:
+    # command: jm-taker coinjoin --amount 1000000
+    # command: jm-taker tumble /home/jm/.joinmarket-ng/schedule.json
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 512M
+
+  bitcoind:
+    image: kylemanna/bitcoind
+    container_name: joinmarket_taker_bitcoind
+    command:
+      - "-server=1"
+      - "-rpcuser=rpcuser"
+      - "-rpcpassword=rpcpassword"
+      - "-rpcallowip=0.0.0.0/0"
+      - "-rpcbind=0.0.0.0"
+      - "-txindex=1"
+    volumes:
+      - bitcoin-data:/bitcoin/.bitcoin
+    networks:
+      - joinmarket_taker_internal
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          cpus: 4
+          memory: 4G
+
+  tor:
+    image: ghcr.io/m0wer/docker-tor:latest
+    container_name: joinmarket_taker_tor
+    user: "1000:1000"
+    volumes:
+      - ./tor/conf:/etc/tor:ro
+      - ./tor/data:/var/lib/tor
+      - ./tor/run:/var/run/tor
+    networks:
+      - joinmarket_taker_internal
+      - joinmarket_taker_external
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "timeout 2 bash -c '</dev/tcp/127.0.0.1/9050' 2>/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 200M
+
+volumes:
+  bitcoin-data:
+
+networks:
+  joinmarket_taker_internal:
+    driver: bridge
+    internal: true
+  joinmarket_taker_external:
+    driver: bridge

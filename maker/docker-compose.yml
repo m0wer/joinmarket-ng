@@ -1,0 +1,109 @@
+services:
+  maker:
+    build:
+      context: ..
+      dockerfile: maker/Dockerfile
+    container_name: joinmarket_maker
+    environment:
+      - MNEMONIC_FILE=/home/jm/.joinmarket-ng/wallets/maker.mnemonic
+      - BACKEND_TYPE=full_node
+      - BITCOIN_RPC_URL=http://bitcoind:8332
+      - BITCOIN_RPC_USER=rpcuser
+      - BITCOIN_RPC_PASSWORD=rpcpassword
+      - NETWORK=mainnet
+      - TOR_SOCKS_HOST=tor
+      - TOR_SOCKS_PORT=9050
+      - TOR_CONTROL_HOST=tor
+      - TOR_CONTROL_PORT=9051
+      - TOR_COOKIE_PATH=/var/lib/tor/control_auth_cookie
+      # Fee configuration (uncomment one)
+      # - CJ_FEE_RELATIVE=0.001  # 0.1% relative fee (default)
+      # - CJ_FEE_ABSOLUTE=1000   # Fixed 1000 sats per coinjoin
+      - MIN_SIZE=100000
+    volumes:
+      - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
+      - tor-data:/var/lib/tor:ro
+    networks:
+      - joinmarket_maker_internal
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    depends_on:
+      tor:
+        condition: service_healthy
+      bitcoind:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 512M
+
+  bitcoind:
+    image: kylemanna/bitcoind
+    container_name: joinmarket_maker_bitcoind
+    command:
+      - "-server=1"
+      - "-rpcuser=rpcuser"
+      - "-rpcpassword=rpcpassword"
+      - "-rpcallowip=0.0.0.0/0"
+      - "-rpcbind=0.0.0.0"
+      - "-txindex=1"
+    volumes:
+      - bitcoin-data:/bitcoin/.bitcoin
+    networks:
+      - joinmarket_maker_internal
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          cpus: 4
+          memory: 4G
+
+  tor:
+    image: ghcr.io/m0wer/docker-tor:latest
+    container_name: joinmarket_maker_tor
+    user: "1000:1000"
+    volumes:
+      - ./tor/conf:/etc/tor:ro
+      - tor-data:/var/lib/tor
+      - ./tor/run:/var/run/tor
+    networks:
+      - joinmarket_maker_internal
+      - joinmarket_maker_external
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "timeout 2 bash -c '</dev/tcp/127.0.0.1/9050' 2>/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 200M
+
+volumes:
+  bitcoin-data:
+  tor-data:
+
+networks:
+  joinmarket_maker_internal:
+    driver: bridge
+    internal: true
+  joinmarket_maker_external:
+    driver: bridge

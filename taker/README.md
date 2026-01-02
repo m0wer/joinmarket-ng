@@ -36,7 +36,32 @@ Send bitcoin to one of the displayed addresses.
 
 ### 4. Execute a CoinJoin
 
-#### Option A: Neutrino Backend (Recommended for Beginners)
+#### Option A: Bitcoin Core Full Node (Recommended)
+
+For maximum trustlessness and privacy. Create an environment file to avoid credentials in shell history:
+
+```bash
+cat > ~/.joinmarket-ng/bitcoin.env << EOF
+export BITCOIN_RPC_URL=http://127.0.0.1:8332
+export BITCOIN_RPC_USER=your_rpc_user
+export BITCOIN_RPC_PASSWORD=your_rpc_password
+EOF
+chmod 600 ~/.joinmarket-ng/bitcoin.env
+```
+
+Execute CoinJoin:
+
+```bash
+source ~/.joinmarket-ng/bitcoin.env
+jm-taker coinjoin \
+  --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
+  --amount 1000000 \
+  --backend full_node
+```
+
+#### Option B: Neutrino Backend
+
+Lightweight alternative if you cannot run a full node.
 
 Start Neutrino server:
 
@@ -59,29 +84,6 @@ jm-taker coinjoin \
   --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
   --amount 1000000 \
   --backend neutrino
-```
-
-#### Option B: Bitcoin Core Full Node
-
-For maximum security. Create an environment file to avoid credentials in shell history:
-
-```bash
-cat > ~/.joinmarket-ng/bitcoin.env << EOF
-export BITCOIN_RPC_URL=http://127.0.0.1:8332
-export BITCOIN_RPC_USER=your_rpc_user
-export BITCOIN_RPC_PASSWORD=your_rpc_password
-EOF
-chmod 600 ~/.joinmarket-ng/bitcoin.env
-```
-
-Execute CoinJoin:
-
-```bash
-source ~/.joinmarket-ng/bitcoin.env
-jm-taker coinjoin \
-  --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
-  --amount 1000000 \
-  --backend full_node
 ```
 
 This mixes 1,000,000 sats (0.01 BTC) to the next mixdepth in your wallet.
@@ -193,165 +195,97 @@ jm-taker coinjoin \
 
 ## Docker Deployment
 
-### With Neutrino and Tor
+A production-ready `docker-compose.yml` is provided in this directory with:
 
-Recommended setup for privacy.
+- **Bitcoin Core backend** for maximum trustlessness and privacy
+- **Tor** for privacy (SOCKS proxy only - takers don't need control port)
+- **Logging limits** to prevent disk exhaustion from log flooding
+- **Resource limits** for CPU and memory
+- **Health checks** for service dependencies
 
-**1. Create torrc configuration:**
+### Quick Start
+
+1. **Create Tor configuration directory:**
 
 ```bash
-mkdir -p tor/conf
-cat > tor/conf/torrc << 'EOF'
+mkdir -p tor/conf tor/data tor/run
+```
+
+2. **Create `tor/conf/torrc`:**
+
+```torc
 SocksPort 0.0.0.0:9050
 DataDirectory /var/lib/tor
 Log notice stdout
+```
+
+3. **Ensure your wallet is ready:**
+
+```bash
+mkdir -p ~/.joinmarket-ng/wallets
+# Create or copy your mnemonic file to ~/.joinmarket-ng/wallets/taker.mnemonic
+```
+
+4. **Update RPC credentials** in `docker-compose.yml` (change `rpcuser`/`rpcpassword`).
+
+5. **Start Bitcoin Core and Tor:**
+
+```bash
+docker-compose up -d bitcoind tor
+```
+
+> **Note**: Initial Bitcoin Core sync can take several hours to days depending on hardware.
+
+6. **Run a CoinJoin:**
+
+```bash
+docker-compose run --rm taker jm-taker coinjoin --amount 1000000
+```
+
+### Running the Tumbler
+
+```bash
+# Create schedule file
+cat > ~/.joinmarket-ng/schedule.json << 'EOF'
+{
+  "entries": [
+    {"mixdepth": 0, "amount": 500000, "counterparty_count": 4, "destination": "INTERNAL", "wait_time": 300},
+    {"mixdepth": 1, "amount": 0, "counterparty_count": 5, "destination": "INTERNAL", "wait_time": 0}
+  ]
+}
 EOF
+
+# Run tumbler
+docker-compose run --rm taker jm-taker tumble /home/jm/.joinmarket-ng/schedule.json
 ```
 
-**2. Create docker-compose.yml:**
+### Using Neutrino Instead of Bitcoin Core
+
+If you cannot run a full node, Neutrino is available as a lightweight alternative.
+
+Replace the `bitcoind` service with `neutrino` and update taker environment:
 
 ```yaml
-services:
-  tor:
-    image: ghcr.io/m0wer/docker-tor:latest
-    volumes:
-      - ./tor/conf/torrc:/etc/tor/torrc:ro
+environment:
+  - BACKEND_TYPE=neutrino
+  - NEUTRINO_URL=http://neutrino:8334
 
-  neutrino:
-    image: ghcr.io/m0wer/neutrino-api
-    environment:
-      NETWORK: mainnet
-    volumes:
-      - neutrino-data:/data/neutrino
-
-  taker:
-    build:
-      context: ..
-      dockerfile: taker/Dockerfile
-    environment:
-      MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/taker.mnemonic
-      BACKEND_TYPE: neutrino
-      NEUTRINO_URL: http://neutrino:8334
-      TOR_SOCKS_HOST: tor
-      TOR_SOCKS_PORT: 9050
-    volumes:
-      - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
-    command: >
-      jm-taker coinjoin
-        --amount 1000000
-        --backend neutrino
-    depends_on:
-      - neutrino
-      - tor
-
-volumes:
-  neutrino-data:
+# Replace bitcoind service with:
+neutrino:
+  image: ghcr.io/m0wer/neutrino-api
+  environment:
+    - NETWORK=mainnet
+  volumes:
+    - neutrino-data:/data/neutrino
 ```
 
-**3. Start services:**
+### Viewing Logs
 
 ```bash
-docker-compose up
+docker-compose logs -f taker
 ```
 
-Note: Takers only need SOCKS proxy (port 9050) - they don't serve a hidden service, so no control port needed.
-
-### With Neutrino (Simple)
-
-If you already have Tor running elsewhere:
-
-```yaml
-services:
-  taker:
-    build:
-      context: ..
-      dockerfile: taker/Dockerfile
-    environment:
-      MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/taker.mnemonic
-      BACKEND_TYPE: neutrino
-      NEUTRINO_URL: http://neutrino:8334
-    volumes:
-      - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
-    command: >
-      jm-taker coinjoin
-        --amount 1000000
-        --backend neutrino
-    depends_on:
-      - neutrino
-      - tor
-
-  neutrino:
-    image: ghcr.io/m0wer/neutrino-api
-    environment:
-      NETWORK: mainnet
-    volumes:
-      - neutrino-data:/data/neutrino
-
-  tor:
-    image: dperson/torproxy
-
-volumes:
-  neutrino-data:
-```
-
-### With Bitcoin Core and Tor
-
-**1. Create torrc configuration (if not already created):**
-
-```bash
-mkdir -p tor/conf
-cat > tor/conf/torrc << 'EOF'
-SocksPort 0.0.0.0:9050
-DataDirectory /var/lib/tor
-Log notice stdout
-EOF
-```
-
-**2. Create docker-compose.yml:**
-
-```yaml
-services:
-  tor:
-    image: ghcr.io/m0wer/docker-tor:latest
-    volumes:
-      - ./tor/conf/torrc:/etc/tor/torrc:ro
-
-  bitcoind:
-    image: kylemanna/bitcoind
-    volumes:
-      - bitcoin-data:/bitcoin/.bitcoin
-
-  taker:
-    build:
-      context: ..
-      dockerfile: taker/Dockerfile
-    environment:
-      MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/taker.mnemonic
-      BACKEND_TYPE: full_node
-      BITCOIN_RPC_URL: http://bitcoind:8332
-      BITCOIN_RPC_USER: rpcuser
-      BITCOIN_RPC_PASSWORD: rpcpassword
-      TOR_SOCKS_HOST: tor
-      TOR_SOCKS_PORT: 9050
-    volumes:
-      - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
-    command: >
-      jm-taker coinjoin
-        --amount 1000000
-        --backend full_node
-    depends_on:
-      - bitcoind
-      - tor
-
-volumes:
-  bitcoin-data:
-```
-
-**3. Start services:**
-
-```bash
-docker-compose up
-```
+Note: Takers only need Tor SOCKS proxy (port 9050) - they don't serve a hidden service, so no control port is needed.
 
 ## Environment Variables
 
