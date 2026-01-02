@@ -6,6 +6,9 @@
 
 Modern, clean alternative implementation of [JoinMarket](https://github.com/JoinMarket-Org/joinmarket-clientserver/) components.
 
+Live orderbook: https://joinmarket-ng.sgn.space/
+Live docs:https://m0wer.github.io/joinmarket-ng/
+
 ## What is JoinMarket?
 
 **JoinMarket is a decentralized CoinJoin protocol for Bitcoin privacy.**

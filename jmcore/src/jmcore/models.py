@@ -44,7 +44,7 @@ def validate_json_nesting_depth(obj: Any, max_depth: int = 10, current_depth: in
 
 
 # Default directory servers for each network
-# Mainnet nodes verified as working (from https://joinmarketv2.sgn.space/orderbook.json)
+# Mainnet nodes verified as working (from https://joinmarket-ng.sgn.space/orderbook.json)
 DIRECTORY_NODES_MAINNET: list[str] = [
     "satoshi2vcg5e2ept7tjkzlkpomkobqmgtsjzegg6wipnoajadissead.onion:5222",
     "coinjointovy3eq5fjygdwpkbcdx63d7vd4g32mw7y553uj3kjjzkiqd.onion:5222",
