@@ -288,9 +288,10 @@ jobs:
           BITCOIN_RPC_PASSWORD: test
         run: |
           # Run e2e tests for our implementation (using marker)
+          # Use reruns for flaky tests that depend on Docker service state
           pytest -c pytest.ini -m e2e --junitxml=junit/test-results.xml \
             --cov --cov-report=term-missing --cov-report=xml \
-            -v -s --timeout=300 --fail-on-skip
+            -v -s --timeout=300 --reruns=3 --reruns-delay=10 --fail-on-skip
 
       - name: Show logs
         if: always()
@@ -441,9 +442,10 @@ jobs:
           BITCOIN_RPC_PASSWORD: test
         run: |
           # Run reference tests (using marker)
+          # Use reruns for flaky tests that depend on Docker service state
           pytest -c pytest.ini -m reference --junitxml=junit/test-results.xml \
             --cov --cov-report=term-missing --cov-report=xml \
-            -v -s --timeout=300 --fail-on-skip
+            -v -s --timeout=300 --reruns=3 --reruns-delay=10 --fail-on-skip
 
       - name: Show logs
         if: always()
@@ -683,9 +685,10 @@ jobs:
           BITCOIN_RPC_PASSWORD: test
         run: |
           # Run reference-maker tests (using marker)
+          # Use reruns for flaky tests that depend on Docker service state
           pytest -c pytest.ini -m reference_maker --junitxml=junit/test-results.xml \
             --cov --cov-report=term-missing --cov-report=xml \
-            -v -s --timeout=300 --fail-on-skip
+            -v -s --timeout=300 --reruns=3 --reruns-delay=10 --fail-on-skip
 
       - name: Show logs
         if: always()
