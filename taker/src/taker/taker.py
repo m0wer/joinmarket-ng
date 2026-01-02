@@ -370,6 +370,10 @@ class Taker:
         rescan_task = asyncio.create_task(self._periodic_rescan())
         self._background_tasks.append(rescan_task)
 
+        # Start periodic directory connection status logging task
+        conn_status_task = asyncio.create_task(self._periodic_directory_connection_status())
+        self._background_tasks.append(conn_status_task)
+
     async def stop(self) -> None:
         """Stop the taker and close connections."""
         logger.info("Stopping taker...")
@@ -493,6 +497,55 @@ class Taker:
                 logger.error(f"Error in periodic rescan: {e}")
 
         logger.info("Periodic rescan task stopped")
+
+    async def _periodic_directory_connection_status(self) -> None:
+        """Background task to periodically log directory connection status.
+
+        This runs every 10 minutes to provide visibility into orderbook
+        connectivity. Shows:
+        - Total directory servers configured
+        - Currently connected servers
+        - Disconnected servers (if any)
+        """
+        # First log after 5 minutes (give time for initial connection)
+        await asyncio.sleep(300)
+
+        while self.running:
+            try:
+                total_servers = len(self.directory_client.directory_servers)
+                connected_servers = list(self.directory_client.clients.keys())
+                connected_count = len(connected_servers)
+                disconnected_servers = [
+                    server
+                    for server in self.directory_client.directory_servers
+                    if server not in connected_servers
+                ]
+
+                if disconnected_servers:
+                    disconnected_str = ", ".join(disconnected_servers[:5])
+                    if len(disconnected_servers) > 5:
+                        disconnected_str += f", ... and {len(disconnected_servers) - 5} more"
+                    logger.warning(
+                        f"Directory connection status: {connected_count}/{total_servers} "
+                        f"connected. Disconnected: [{disconnected_str}]"
+                    )
+                else:
+                    logger.info(
+                        f"Directory connection status: {connected_count}/{total_servers} connected "
+                        f"[{', '.join(connected_servers)}]"
+                    )
+
+                # Log again in 10 minutes
+                await asyncio.sleep(600)
+
+            except asyncio.CancelledError:
+                logger.info("Directory connection status task cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in directory connection status task: {e}")
+                await asyncio.sleep(600)
+
+        logger.info("Directory connection status task stopped")
 
     async def do_coinjoin(
         self,

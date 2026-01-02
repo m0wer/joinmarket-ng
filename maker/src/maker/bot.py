@@ -31,9 +31,6 @@ from jmwallet.backends.base import BlockchainBackend
 from jmwallet.history import (
     append_history_entry,
     create_maker_history_entry,
-    get_pending_transactions,
-    update_pending_transaction_txid,
-    update_transaction_confirmation,
 )
 from jmwallet.wallet.service import WalletService
 from loguru import logger
@@ -666,6 +663,10 @@ class MakerBot:
             status_task = asyncio.create_task(self._periodic_rate_limit_status())
             self.listen_tasks.append(status_task)
 
+            # Start periodic directory connection status logging task
+            conn_status_task = asyncio.create_task(self._periodic_directory_connection_status())
+            self.listen_tasks.append(conn_status_task)
+
             # Wait for all listening tasks to complete
             await asyncio.gather(*self.listen_tasks, return_exceptions=True)
 
@@ -884,100 +885,55 @@ class MakerBot:
 
         logger.info("Rate limit status task stopped")
 
-    async def _deferred_wallet_resync(self) -> None:
-        """Re-sync wallet after CoinJoin completion in background.
+    async def _periodic_directory_connection_status(self) -> None:
+        """Background task to periodically log directory connection status.
 
-        This is deferred to a background task to avoid blocking message processing.
-        The transaction might not be broadcast yet (!push comes after !tx), so we
-        add a configurable delay to give the transaction time to propagate.
+        This runs every 10 minutes to provide visibility into orderbook
+        connectivity. Shows:
+        - Total directory servers configured
+        - Currently connected servers
+        - Disconnected servers (if any)
         """
-        try:
-            # Wait before rescanning to:
-            # 1. Allow !push message to be processed
-            # 2. Give transaction time to propagate in mempool
-            await asyncio.sleep(self.config.post_coinjoin_rescan_delay)
+        # First log after 5 minutes (give time for initial connection)
+        await asyncio.sleep(300)
 
-            logger.info("Re-syncing wallet after CoinJoin completion...")
-            await self._resync_wallet_and_update_offers()
-        except Exception as e:
-            logger.error(f"Failed to re-sync wallet after CoinJoin: {e}")
+        while self.running:
+            try:
+                total_servers = len(self.config.directory_servers)
+                connected_servers = list(self.directory_clients.keys())
+                connected_count = len(connected_servers)
+                disconnected_servers = [
+                    server
+                    for server in self.config.directory_servers
+                    if f"{server.split(':')[0]}:{server.split(':')[1] if ':' in server else '5222'}"
+                    not in connected_servers
+                ]
 
-    async def _update_pending_history(self) -> None:
-        """Check and update status of pending transactions in history."""
-        try:
-            pending = get_pending_transactions(data_dir=self.config.data_dir)
-            if not pending:
-                return
-
-            logger.debug(f"Checking {len(pending)} pending transaction(s)...")
-
-            for entry in pending:
-                # First, try to discover missing txids by looking up destination addresses
-                if not entry.txid and entry.destination_address:
-                    logger.debug(
-                        f"Looking for txid by destination address "
-                        f"{entry.destination_address[:20]}..."
+                if disconnected_servers:
+                    disconnected_str = ", ".join(disconnected_servers[:5])
+                    if len(disconnected_servers) > 5:
+                        disconnected_str += f", ... and {len(disconnected_servers) - 5} more"
+                    logger.warning(
+                        f"Directory connection status: {connected_count}/{total_servers} "
+                        f"connected. Disconnected: [{disconnected_str}]"
                     )
-                    utxo = self.wallet.find_utxo_by_address(entry.destination_address)
-                    if utxo:
-                        # Found the UTXO - update history with the txid
-                        logger.info(
-                            f"Discovered txid {utxo.txid[:16]}... for pending CoinJoin "
-                            f"at {entry.destination_address[:20]}..."
-                        )
-                        update_pending_transaction_txid(
-                            destination_address=entry.destination_address,
-                            txid=utxo.txid,
-                            data_dir=self.config.data_dir,
-                        )
-                        # Update the entry object so we can check confirmations below
-                        entry.txid = utxo.txid
+                else:
+                    logger.info(
+                        f"Directory connection status: {connected_count}/{total_servers} connected "
+                        f"[{', '.join(connected_servers)}]"
+                    )
 
-                # Now check confirmations for entries with txids
-                if not entry.txid:
-                    continue
+                # Log again in 10 minutes
+                await asyncio.sleep(600)
 
-                try:
-                    # Check if transaction exists and get confirmations
-                    tx_info = await self.backend.get_transaction(entry.txid)
+            except asyncio.CancelledError:
+                logger.info("Directory connection status task cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in directory connection status task: {e}")
+                await asyncio.sleep(600)
 
-                    if tx_info is None:
-                        # Transaction not found - might have been rejected/replaced
-                        # Check how long it's been pending
-                        from datetime import datetime
-
-                        timestamp = datetime.fromisoformat(entry.timestamp)
-                        age_hours = (datetime.now() - timestamp).total_seconds() / 3600
-
-                        if age_hours > 24:
-                            # Mark as failed if pending for more than 24 hours
-                            logger.warning(
-                                f"Transaction {entry.txid[:16]}... not found after "
-                                f"{age_hours:.1f} hours, may have been rejected"
-                            )
-                            # Could optionally mark as failed here
-                        continue
-
-                    confirmations = tx_info.confirmations
-
-                    if confirmations > 0:
-                        # Update history with confirmation
-                        update_transaction_confirmation(
-                            txid=entry.txid,
-                            confirmations=confirmations,
-                            data_dir=self.config.data_dir,
-                        )
-
-                        logger.info(
-                            f"CoinJoin {entry.txid[:16]}... confirmed! "
-                            f"({confirmations} confirmation{'s' if confirmations != 1 else ''})"
-                        )
-
-                except Exception as e:
-                    logger.debug(f"Error checking transaction {entry.txid[:16]}...: {e}")
-
-        except Exception as e:
-            logger.error(f"Error updating pending history: {e}")
+        logger.info("Directory connection status task stopped")
 
     async def _monitor_pending_transactions(self) -> None:
         """
@@ -1002,6 +958,65 @@ class MakerBot:
                 logger.error(f"Error in pending transaction monitor: {e}")
 
         logger.info("Pending transaction monitor stopped")
+
+    async def _update_pending_history(self) -> None:
+        """Check and update pending transaction confirmations in history."""
+        from jmwallet.history import get_pending_transactions, update_transaction_confirmation
+
+        pending = get_pending_transactions(data_dir=self.config.data_dir)
+        if not pending:
+            return
+
+        logger.debug(f"Checking {len(pending)} pending transaction(s)...")
+
+        for entry in pending:
+            if not entry.txid:
+                continue
+
+            try:
+                # Check if transaction exists and get confirmations
+                tx_info = await self.backend.get_transaction(entry.txid)
+
+                if tx_info is None:
+                    # Transaction not found - might have been rejected/replaced
+                    from datetime import datetime
+
+                    timestamp = datetime.fromisoformat(entry.timestamp)
+                    age_hours = (datetime.now() - timestamp).total_seconds() / 3600
+
+                    if age_hours > 24:
+                        logger.warning(
+                            f"Transaction {entry.txid[:16]}... not found after "
+                            f"{age_hours:.1f} hours, may have been rejected"
+                        )
+                    continue
+
+                confirmations = tx_info.confirmations
+
+                # Mark as successful once it gets first confirmation
+                if confirmations > 0 and entry.confirmations == 0:
+                    logger.info(
+                        f"Transaction {entry.txid[:16]}... confirmed "
+                        f"({confirmations} confirmation(s))"
+                    )
+                    update_transaction_confirmation(
+                        txid=entry.txid,
+                        confirmations=confirmations,
+                        data_dir=self.config.data_dir,
+                    )
+
+            except Exception as e:
+                logger.debug(f"Error checking transaction {entry.txid[:16]}...: {e}")
+
+    async def _deferred_wallet_resync(self) -> None:
+        """Resync wallet in background after a CoinJoin completes."""
+        try:
+            # Small delay to allow transaction to propagate
+            await asyncio.sleep(2)
+            logger.info("Performing deferred wallet resync after CoinJoin...")
+            await self._resync_wallet_and_update_offers()
+        except Exception as e:
+            logger.error(f"Error in deferred wallet resync: {e}")
 
     async def _announce_offers(self) -> None:
         """Announce offers to all connected directory servers (public broadcast, NO bonds)"""

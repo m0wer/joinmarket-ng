@@ -264,6 +264,62 @@ class OrderbookAggregator:
             except Exception as e:
                 logger.error(f"Error in background bond calculator: {e}")
 
+    async def _periodic_directory_connection_status(self) -> None:
+        """Background task to periodically log directory connection status.
+
+        This runs every 10 minutes to provide visibility into orderbook
+        connectivity. Shows:
+        - Total directory servers configured
+        - Currently connected servers with uptime percentage
+        - Disconnected servers (if any)
+        """
+        # First log after 5 minutes (give time for initial connection)
+        await asyncio.sleep(300)
+
+        while True:
+            try:
+                total_servers = len(self.directory_nodes)
+                connected_nodes = []
+                disconnected_nodes = []
+
+                for node_id, status in self.node_statuses.items():
+                    if status.connected:
+                        uptime_pct = status.get_uptime_percentage()
+                        connected_nodes.append(f"{node_id} ({uptime_pct:.1f}% uptime)")
+                    else:
+                        disconnected_nodes.append(node_id)
+
+                connected_count = len(connected_nodes)
+
+                if disconnected_nodes:
+                    disconnected_str = ", ".join(disconnected_nodes[:5])
+                    if len(disconnected_nodes) > 5:
+                        disconnected_str += f", ... and {len(disconnected_nodes) - 5} more"
+                    logger.warning(
+                        f"Directory connection status: {connected_count}/{total_servers} connected. "
+                        f"Disconnected: [{disconnected_str}]"
+                    )
+                else:
+                    connected_str = ", ".join(connected_nodes[:5])
+                    if len(connected_nodes) > 5:
+                        connected_str += f", ... and {len(connected_nodes) - 5} more"
+                    logger.info(
+                        f"Directory connection status: {connected_count}/{total_servers} connected "
+                        f"[{connected_str}]"
+                    )
+
+                # Log again in 10 minutes
+                await asyncio.sleep(600)
+
+            except asyncio.CancelledError:
+                logger.info("Directory connection status task cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in directory connection status task: {e}")
+                await asyncio.sleep(600)
+
+        logger.info("Directory connection status task stopped")
+
     async def _connect_to_node(self, onion_address: str, port: int) -> DirectoryClient | None:
         node_id = f"{onion_address}:{port}"
         status = self.node_statuses[node_id]
@@ -324,6 +380,10 @@ class OrderbookAggregator:
         logger.info("Starting continuous listening on all directory nodes")
 
         self._bond_calculation_task = asyncio.create_task(self._background_bond_calculator())
+
+        # Start periodic directory connection status logging task
+        status_task = asyncio.create_task(self._periodic_directory_connection_status())
+        self.listener_tasks.append(status_task)
 
         connection_tasks = [
             self._connect_to_node(onion_address, port)
