@@ -564,6 +564,27 @@ All protocol commands use JSON-line format: `{"type": <code>, "line": "<payload>
 
 Taker broadcasts `!orderbook` via PUBMSG. Makers respond with offers via PRIVMSG (not PUBMSG).
 
+### Maker Selection Algorithm
+
+After collecting offers, the taker selects makers through three phases:
+
+**Phase 1 - Filtering**: Remove offers that don't meet criteria (amount range, fee limits, offer type, ignored makers).
+
+**Phase 2 - Deduplication**: **If a maker advertises multiple offers under the same nick, only the cheapest offer is kept.** This ensures makers cannot game selection by flooding the orderbook.
+
+**Phase 3 - Selection**: Choose `n` makers from the deduplicated list using one of these algorithms:
+
+| Algorithm | Behavior |
+|-----------|----------|
+| `fidelity_bond_weighted` (default) | Weighted by fidelity bond value (12.5% random fallback) |
+| `cheapest` | Lowest fee first |
+| `weighted` | Exponentially weighted by inverse fee |
+| `random` | Uniform random selection |
+
+**Key Point**: Selection probability is proportional to the **maker identity (nick)**, not the number of offers. A maker with 5 offers has the **same selection probability** as a maker with 1 offer (assuming both pass filters). The deduplication phase ensures fairness.
+
+Implementation: `taker/src/taker/orderbook.py` (`filter_offers`, `dedupe_offers_by_maker`, `choose_orders`)
+
 ### Phase 2: Fill Request
 
 Taker sends `!fill <oid> <amount> <taker_nacl_pk> <commitment>`. Maker responds with `!pubkey <maker_nacl_pk> <signing_pk> <sig>`.

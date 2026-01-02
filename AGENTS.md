@@ -45,6 +45,13 @@ Tests use pytest markers to organize by Docker profile:
 Monorepo with `src/` layout. Root `pytest.ini` handles global tests.
 Components: `jmcore` (Lib), `directory_server`, `jmwallet`, `maker`, `taker`, `orderbook_watcher`.
 
+## Documentation
+
+- Single file DOCS.md for architecture, protocols, and design decisions.
+  - Focus on high-level concepts over implementation details.
+  - Don't use more than 3 levels of headings.
+- Component-specific READMEs for setup and usage.
+
 ## References
 
 https://github.com/JoinMarket-Org/joinmarket-clientserver/ -> reference implementation (legacy)
