@@ -191,6 +191,13 @@ class DirectoryClient:
         self.orderbook_retry_interval = 300.0
         self.zero_offer_retry_interval = 600.0
 
+        # Peerlist support tracking
+        # If the directory doesn't support getpeerlist (e.g., reference implementation),
+        # we track this to avoid spamming unsupported requests
+        self._peerlist_supported: bool | None = None  # None = unknown, True/False = known
+        self._last_peerlist_request_time: float = 0.0
+        self._peerlist_min_interval: float = 60.0  # Minimum seconds between peerlist requests
+
     async def connect(self) -> None:
         """Connect to the directory server and perform handshake."""
         try:
@@ -310,11 +317,33 @@ class DirectoryClient:
         """
         Fetch the current list of connected peers.
 
+        Note: Reference implementation directories do NOT support GETPEERLIST.
+        This method shares peerlist support tracking with get_peerlist_with_features().
+
         Returns:
-            List of active peer nicks
+            List of active peer nicks. Returns empty list if directory doesn't
+            support GETPEERLIST.
         """
         if not self.connection:
             raise DirectoryClientError("Not connected")
+
+        # Skip if we already know this directory doesn't support GETPEERLIST
+        if self._peerlist_supported is False:
+            logger.debug("Skipping GETPEERLIST - directory doesn't support it")
+            return []
+
+        # Rate-limit peerlist requests to avoid spamming
+        import time
+
+        current_time = time.time()
+        if current_time - self._last_peerlist_request_time < self._peerlist_min_interval:
+            logger.debug(
+                f"Skipping GETPEERLIST - rate limited "
+                f"(last request {current_time - self._last_peerlist_request_time:.1f}s ago)"
+            )
+            return []
+
+        self._last_peerlist_request_time = current_time
 
         getpeerlist_msg = {"type": MessageType.GETPEERLIST.value, "line": ""}
         logger.debug("Sending GETPEERLIST request")
@@ -326,7 +355,13 @@ class DirectoryClient:
         while True:
             elapsed = asyncio.get_event_loop().time() - start_time
             if elapsed > self.timeout:
-                raise DirectoryClientError("Timed out waiting for PEERLIST response")
+                # Timeout without PEERLIST response - directory likely doesn't support it
+                logger.info(
+                    f"Timed out waiting for PEERLIST from {self.host}:{self.port} - "
+                    "directory likely doesn't support GETPEERLIST (reference implementation)"
+                )
+                self._peerlist_supported = False
+                return []
 
             try:
                 response_data = await asyncio.wait_for(
@@ -342,15 +377,25 @@ class DirectoryClient:
                 logger.debug(
                     f"Skipping unexpected message type {msg_type} while waiting for PEERLIST"
                 )
-            except TimeoutError as e:
-                raise DirectoryClientError("Timed out waiting for PEERLIST response") from e
+            except TimeoutError:
+                # Timeout without PEERLIST response - directory likely doesn't support it
+                logger.info(
+                    f"Timed out waiting for PEERLIST from {self.host}:{self.port} - "
+                    "directory likely doesn't support GETPEERLIST (reference implementation)"
+                )
+                self._peerlist_supported = False
+                return []
             except Exception as e:
                 logger.warning(f"Error receiving/parsing message while waiting for PEERLIST: {e}")
                 if asyncio.get_event_loop().time() - start_time > self.timeout:
-                    raise DirectoryClientError(f"Failed to get PEERLIST: {e}") from e
+                    self._peerlist_supported = False
+                    return []
 
         peerlist_str = response["line"]
         logger.debug(f"Peerlist string: {peerlist_str}")
+
+        # Mark peerlist as supported since we got a valid response
+        self._peerlist_supported = True
 
         if not peerlist_str:
             return []
@@ -384,12 +429,35 @@ class DirectoryClient:
         Uses the standard GETPEERLIST message. If the directory supports
         peerlist_features, the response will include F: suffix with features.
 
+        Note: Reference implementation directories do NOT support GETPEERLIST.
+        This method tracks whether the directory supports it and skips requests
+        to unsupported directories to avoid spamming warnings in their logs.
+
         Returns:
             List of (nick, location, features) tuples for active peers.
             Features will be empty for directories that don't support peerlist_features.
+            Returns empty list if directory doesn't support GETPEERLIST.
         """
         if not self.connection:
             raise DirectoryClientError("Not connected")
+
+        # Skip if we already know this directory doesn't support GETPEERLIST
+        if self._peerlist_supported is False:
+            logger.debug("Skipping GETPEERLIST - directory doesn't support it")
+            return []
+
+        # Rate-limit peerlist requests to avoid spamming
+        import time
+
+        current_time = time.time()
+        if current_time - self._last_peerlist_request_time < self._peerlist_min_interval:
+            logger.debug(
+                f"Skipping GETPEERLIST - rate limited "
+                f"(last request {current_time - self._last_peerlist_request_time:.1f}s ago)"
+            )
+            return []
+
+        self._last_peerlist_request_time = current_time
 
         getpeerlist_msg = {"type": MessageType.GETPEERLIST.value, "line": ""}
         logger.debug("Sending GETPEERLIST request")
@@ -401,7 +469,13 @@ class DirectoryClient:
         while True:
             elapsed = asyncio.get_event_loop().time() - start_time
             if elapsed > self.timeout:
-                raise DirectoryClientError("Timed out waiting for PEERLIST response")
+                # Timeout without PEERLIST response - directory likely doesn't support it
+                logger.info(
+                    f"Timed out waiting for PEERLIST from {self.host}:{self.port} - "
+                    "directory likely doesn't support GETPEERLIST (reference implementation)"
+                )
+                self._peerlist_supported = False
+                return []
 
             try:
                 response_data = await asyncio.wait_for(
@@ -417,15 +491,25 @@ class DirectoryClient:
                 logger.debug(
                     f"Skipping unexpected message type {msg_type} while waiting for PEERLIST"
                 )
-            except TimeoutError as e:
-                raise DirectoryClientError("Timed out waiting for PEERLIST response") from e
+            except TimeoutError:
+                # Timeout without PEERLIST response - directory likely doesn't support it
+                logger.info(
+                    f"Timed out waiting for PEERLIST from {self.host}:{self.port} - "
+                    "directory likely doesn't support GETPEERLIST (reference implementation)"
+                )
+                self._peerlist_supported = False
+                return []
             except Exception as e:
                 logger.warning(f"Error receiving/parsing message while waiting for PEERLIST: {e}")
                 if asyncio.get_event_loop().time() - start_time > self.timeout:
-                    raise DirectoryClientError(f"Failed to get PEERLIST: {e}") from e
+                    self._peerlist_supported = False
+                    return []
 
         peerlist_str = response["line"]
         logger.debug(f"Peerlist string: {peerlist_str}")
+
+        # Mark peerlist as supported since we got a valid response
+        self._peerlist_supported = True
 
         if not peerlist_str:
             return []
@@ -702,9 +786,12 @@ class DirectoryClient:
         # This is especially important for flaky tests where makers may restart or
         # disconnect between orderbook fetch and CoinJoin execution.
         #
-        # Note: If peerlist is empty (e.g., all peers use NOT-SERVING-ONION in regtest),
-        # we skip filtering and trust the offers. The directory server will still reject
-        # messages to disconnected peers, but this allows testing in local environments.
+        # Note: If peerlist is empty, we skip filtering and trust the offers. This happens when:
+        # 1. All peers use NOT-SERVING-ONION (regtest/local environments)
+        # 2. Directory doesn't support GETPEERLIST (reference implementation)
+        #
+        # The directory server will still reject messages to disconnected peers,
+        # so we're not at risk of sending messages to offline makers.
         if active_nicks:
             original_count = len(offers)
             offers = [o for o in offers if o.counterparty in active_nicks]
@@ -713,6 +800,11 @@ class DirectoryClient:
                 logger.warning(
                     f"Filtered out {filtered_count} stale offers from disconnected makers"
                 )
+        elif self._peerlist_supported is False:
+            logger.debug(
+                "Skipping offer filtering - directory doesn't support GETPEERLIST "
+                "(reference implementation)"
+            )
 
         logger.info(
             f"Fetched {len(offers)} offers and {len(bonds)} fidelity bonds from "
@@ -811,9 +903,16 @@ class DirectoryClient:
 
         # Fetch peerlist with features to populate peer_features cache
         # This allows us to know which features each maker supports
+        # Note: This may return empty if directory doesn't support GETPEERLIST (reference impl)
         try:
             await self.get_peerlist_with_features()
-            logger.info(f"Populated peer_features cache with {len(self.peer_features)} peers")
+            if self._peerlist_supported:
+                logger.info(f"Populated peer_features cache with {len(self.peer_features)} peers")
+            else:
+                logger.info(
+                    "Directory doesn't support GETPEERLIST - peer features will be "
+                    "learned from offer messages"
+                )
         except Exception as e:
             logger.warning(f"Failed to fetch peerlist with features: {e}")
 
@@ -828,6 +927,12 @@ class DirectoryClient:
                 logger.info("Sent !orderbook request to get current offers")
             except Exception as e:
                 logger.warning(f"Failed to send !orderbook request: {e}")
+
+        # Track when we last sent an orderbook request (to avoid spamming)
+        import time
+
+        last_orderbook_request = time.time()
+        orderbook_request_min_interval = 60.0  # Minimum 60 seconds between requests
 
         while self.running:
             try:
@@ -854,19 +959,32 @@ class DirectoryClient:
 
                             # Accept PUBLIC broadcasts or messages addressed to us
                             if to_nick == "PUBLIC" or to_nick == self.nick:
-                                # If we don't have features for this peer, refresh peerlist
-                                # and request orderbook to get their fidelity bond
+                                # If we don't have features for this peer, it's a new peer.
+                                # We can try to refresh peerlist, but respect rate limits
+                                # and don't spam if directory doesn't support it.
                                 is_new_peer = from_nick not in self.peer_features
-                                if is_new_peer:
+                                current_time = time.time()
+
+                                if is_new_peer and self._peerlist_supported is not False:
+                                    # Only refresh peerlist if we haven't recently
+                                    # (get_peerlist_with_features has its own rate limiting)
                                     try:
                                         await self.get_peerlist_with_features()
-                                        logger.debug(
-                                            f"Refreshed peerlist (new peer: {from_nick}), "
-                                            f"now tracking {len(self.peer_features)} peers"
-                                        )
-                                        # Send !orderbook to request fidelity bond from new peer
-                                        # Only do this if we're in request_orderbook mode (orderbook watcher)
-                                        if request_orderbook:
+                                        if self._peerlist_supported:
+                                            logger.debug(
+                                                f"Refreshed peerlist (new peer: {from_nick}), "
+                                                f"now tracking {len(self.peer_features)} peers"
+                                            )
+                                    except Exception as e:
+                                        logger.debug(f"Failed to refresh peerlist: {e}")
+
+                                    # Request orderbook from new peer (rate-limited)
+                                    if (
+                                        request_orderbook
+                                        and current_time - last_orderbook_request
+                                        > orderbook_request_min_interval
+                                    ):
+                                        try:
                                             pubmsg = {
                                                 "type": MessageType.PUBMSG.value,
                                                 "line": f"{self.nick}!PUBLIC!!orderbook",
@@ -874,13 +992,12 @@ class DirectoryClient:
                                             await self.connection.send(
                                                 json.dumps(pubmsg).encode("utf-8")
                                             )
+                                            last_orderbook_request = current_time
                                             logger.info(
                                                 f"Sent !orderbook request for new peer {from_nick}"
                                             )
-                                    except Exception as e:
-                                        logger.debug(
-                                            f"Failed to refresh peerlist or request orderbook: {e}"
-                                        )
+                                        except Exception as e:
+                                            logger.debug(f"Failed to send !orderbook: {e}")
 
                                 # Parse offer announcements
                                 for offer_type_prefix in [
