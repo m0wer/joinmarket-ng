@@ -11,13 +11,14 @@ Stores a simple CSV log of all CoinJoin transactions with key metadata:
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass, fields
+from dataclasses import fields
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from jmcore.paths import get_default_data_dir
 from loguru import logger
+from pydantic.dataclasses import dataclass
 
 if TYPE_CHECKING:
     from jmwallet.backends.base import BlockchainBackend

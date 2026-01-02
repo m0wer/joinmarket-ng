@@ -20,7 +20,6 @@ Reference: https://gist.github.com/AdamISZ/9cbba5e9408d23813ca8
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from jmcore.podle import (
@@ -30,6 +29,7 @@ from jmcore.podle import (
     serialize_revelation,
 )
 from loguru import logger
+from pydantic.dataclasses import dataclass
 
 if TYPE_CHECKING:
     from jmwallet.wallet.models import UTXOInfo

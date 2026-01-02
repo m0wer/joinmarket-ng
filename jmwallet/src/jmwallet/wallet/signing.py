@@ -4,10 +4,9 @@ Bitcoin transaction signing utilities for P2WPKH and P2WSH inputs.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from coincurve import PrivateKey
 from jmcore.bitcoin import create_p2wpkh_script_code, decode_varint, encode_varint, hash256
+from pydantic.dataclasses import dataclass
 
 # Alias for backward compatibility
 read_varint = decode_varint

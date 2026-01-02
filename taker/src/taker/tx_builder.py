@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import struct
-from dataclasses import dataclass
 from typing import Any
 
 from jmcore.bitcoin import (
@@ -21,6 +20,7 @@ from jmcore.bitcoin import (
     hash256,
     serialize_outpoint,
 )
+from pydantic.dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 

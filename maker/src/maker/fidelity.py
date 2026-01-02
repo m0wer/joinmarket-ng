@@ -5,12 +5,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import struct
-from dataclasses import dataclass
 
 from coincurve import PrivateKey
 from jmcore.bond_calc import calculate_timelocked_fidelity_bond_value
 from jmwallet.wallet.service import WalletService
 from loguru import logger
+from pydantic import ConfigDict
+from pydantic.dataclasses import dataclass
 
 # Fidelity bonds are stored in mixdepth 0, internal branch 2
 # Path format: m/84'/coin'/0'/2/index:locktime
@@ -27,7 +28,7 @@ CERT_MAX_VALIDITY_TIME = 1  # Validity time in retarget periods (1 = ~2 weeks)
 CERT_EXPIRY_BLOCKS = 2016 * 52  # ~1 year in blocks (DEPRECATED)
 
 
-@dataclass
+@dataclass(config=ConfigDict(arbitrary_types_allowed=True))
 class FidelityBondInfo:
     txid: str
     vout: int

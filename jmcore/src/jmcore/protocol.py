@@ -51,11 +51,11 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from pydantic.dataclasses import dataclass
 
 # Protocol version: v5 for full reference implementation compatibility
 # Features are negotiated separately via the features dict
@@ -95,7 +95,7 @@ class FeatureSet:
     Used for feature negotiation during handshake and CoinJoin sessions.
     """
 
-    features: set[str] = field(default_factory=set)
+    features: set[str] = Field(default_factory=set)
 
     @classmethod
     def from_handshake(cls, handshake_data: dict[str, Any]) -> FeatureSet:
@@ -189,7 +189,7 @@ class RequiredFeatures:
     Used to filter incompatible peers during maker selection.
     """
 
-    required: set[str] = field(default_factory=set)
+    required: set[str] = Field(default_factory=set)
 
     @classmethod
     def for_neutrino_taker(cls) -> RequiredFeatures:

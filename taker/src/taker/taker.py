@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -44,6 +43,8 @@ from jmwallet.wallet.signing import (
     sign_p2wpkh_input,
 )
 from loguru import logger
+from pydantic import ConfigDict, Field
+from pydantic.dataclasses import dataclass
 
 from taker.config import BroadcastPolicy, Schedule, TakerConfig
 from taker.orderbook import OrderbookManager, calculate_cj_fee
@@ -242,13 +243,13 @@ class TakerState(str, Enum):
     CANCELLED = "cancelled"  # User cancelled the operation
 
 
-@dataclass
+@dataclass(config=ConfigDict(arbitrary_types_allowed=True))
 class MakerSession:
     """Session data for a single maker."""
 
     nick: str
     offer: Offer
-    utxos: list[dict[str, Any]] = field(default_factory=list)
+    utxos: list[dict[str, Any]] = Field(default_factory=list)
     cj_address: str = ""
     change_address: str = ""
     pubkey: str = ""  # Maker's NaCl public key (hex)

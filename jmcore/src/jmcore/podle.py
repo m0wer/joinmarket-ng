@@ -23,11 +23,11 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from dataclasses import dataclass
 from typing import Any
 
 from coincurve import PublicKey
 from loguru import logger
+from pydantic.dataclasses import dataclass
 
 # secp256k1 curve order
 SECP256K1_N = int("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)

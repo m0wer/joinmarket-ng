@@ -98,6 +98,15 @@ async def test_bond_sent_only_in_privmsg_response():
     mock_backend = Mock()
     mock_config = Mock()
     mock_config.data_dir = "/tmp/test"
+    # Add rate limiter config to prevent validation errors
+    mock_config.message_rate_limit = 10
+    mock_config.message_burst_limit = 100
+    mock_config.orderbook_rate_limit = 1
+    mock_config.orderbook_rate_interval = 60
+    mock_config.orderbook_violation_ban_threshold = 5
+    mock_config.orderbook_violation_warning_threshold = 3
+    mock_config.orderbook_violation_severe_threshold = 10
+    mock_config.orderbook_ban_duration = 3600
 
     maker = MakerBot(mock_wallet, mock_backend, mock_config)
 

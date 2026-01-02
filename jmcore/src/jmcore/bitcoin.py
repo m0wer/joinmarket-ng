@@ -16,12 +16,13 @@ from __future__ import annotations
 
 import hashlib
 import struct
-from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
 import base58
 import bech32 as bech32_lib
+from pydantic import validate_call
+from pydantic.dataclasses import dataclass
 
 from jmcore.constants import SATS_PER_BTC
 
@@ -333,6 +334,7 @@ def get_hrp(network: str | NetworkType) -> str:
     return HRP_MAP[network]
 
 
+@validate_call
 def pubkey_to_p2wpkh_address(pubkey: bytes | str, network: str | NetworkType = "mainnet") -> str:
     """
     Convert compressed public key to P2WPKH (native SegWit) address.
@@ -376,6 +378,7 @@ def pubkey_to_p2wpkh_script(pubkey: bytes | str) -> bytes:
     return bytes([0x00, 0x14]) + pubkey_hash
 
 
+@validate_call
 def script_to_p2wsh_address(script: bytes, network: str | NetworkType = "mainnet") -> str:
     """
     Convert witness script to P2WSH address.
@@ -467,6 +470,7 @@ def address_to_scriptpubkey(address: str) -> bytes:
     raise ValueError(f"Unknown address version: {version}")
 
 
+@validate_call
 def scriptpubkey_to_address(scriptpubkey: bytes, network: str | NetworkType = "mainnet") -> str:
     """
     Convert scriptPubKey to address.

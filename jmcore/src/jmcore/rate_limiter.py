@@ -20,8 +20,10 @@ Security considerations:
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
 from enum import Enum
+
+from pydantic import Field, validate_call
+from pydantic.dataclasses import dataclass
 
 
 class RateLimitAction(Enum):
@@ -44,8 +46,8 @@ class TokenBucket:
 
     capacity: int  # Maximum tokens (burst allowance)
     refill_rate: float  # Tokens per second
-    tokens: float = field(init=False)
-    last_refill: float = field(init=False)
+    tokens: float = Field(init=False)
+    last_refill: float = Field(init=False)
 
     def __post_init__(self) -> None:
         self.tokens = float(self.capacity)
@@ -104,6 +106,7 @@ class RateLimiter:
     - Use connection-based keys until identity is cryptographically verified
     """
 
+    @validate_call
     def __init__(
         self,
         rate_limit: int = 10,
