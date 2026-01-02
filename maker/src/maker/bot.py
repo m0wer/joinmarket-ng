@@ -424,7 +424,7 @@ class MakerBot:
             # Initialize commitment blacklist with configured data directory
             set_blacklist_path(data_dir=self.config.data_dir)
 
-            # Load fidelity bond addresses from registry for optimized scanning
+            # Load fidelity bond addresses for optimized scanning
             # We scan wallet + fidelity bonds in a single pass to avoid two separate
             # scantxoutset calls (which take ~90s each on mainnet)
             from jmcore.paths import get_default_data_dir
@@ -433,24 +433,47 @@ class MakerBot:
             resolved_data_dir = (
                 self.config.data_dir if self.config.data_dir else get_default_data_dir()
             )
-            bond_registry = load_registry(resolved_data_dir)
             fidelity_bond_addresses: list[tuple[str, int, int]] = []
-            if bond_registry.bonds:
-                # Extract (address, locktime, index) tuples from registry
-                fidelity_bond_addresses = [
-                    (bond.address, bond.locktime, bond.index) for bond in bond_registry.bonds
-                ]
+
+            # Option 1: Manual specification via fidelity_bond_index + locktimes (bypasses registry)
+            # This is useful when running in Docker or when you don't have a registry yet
+            if self.config.fidelity_bond_index is not None and self.config.fidelity_bond_locktimes:
                 logger.info(
-                    f"Loaded {len(fidelity_bond_addresses)} fidelity bond address(es) from registry"
+                    f"Using manual fidelity bond specification: "
+                    f"index={self.config.fidelity_bond_index}, "
+                    f"locktimes={self.config.fidelity_bond_locktimes}"
                 )
+                for locktime in self.config.fidelity_bond_locktimes:
+                    address = self.wallet.get_fidelity_bond_address(
+                        self.config.fidelity_bond_index, locktime
+                    )
+                    fidelity_bond_addresses.append(
+                        (address, locktime, self.config.fidelity_bond_index)
+                    )
+                    logger.info(
+                        f"Generated fidelity bond address for locktime {locktime}: {address}"
+                    )
+            # Option 2: Load from registry (default)
+            else:
+                bond_registry = load_registry(resolved_data_dir)
+                if bond_registry.bonds:
+                    # Extract (address, locktime, index) tuples from registry
+                    fidelity_bond_addresses = [
+                        (bond.address, bond.locktime, bond.index) for bond in bond_registry.bonds
+                    ]
+                    logger.info(
+                        f"Loaded {len(fidelity_bond_addresses)} "
+                        f"fidelity bond address(es) from registry"
+                    )
 
             logger.info("Syncing wallet and fidelity bonds...")
             await self.wallet.sync_all(fidelity_bond_addresses)
 
-            # Update bond registry with UTXO info from the scan
-            if bond_registry.bonds:
+            # Update bond registry with UTXO info from the scan (only if using registry)
+            if self.config.fidelity_bond_index is None and fidelity_bond_addresses:
                 from jmwallet.wallet.bond_registry import save_registry
 
+                bond_registry = load_registry(resolved_data_dir)
                 for bond in bond_registry.bonds:
                     # Find the UTXO for this bond address in mixdepth 0
                     bond_utxo = next(

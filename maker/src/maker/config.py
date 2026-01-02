@@ -82,6 +82,12 @@ class MakerConfig(WalletConfig):
         default_factory=list, description="List of locktimes to scan for fidelity bonds"
     )
 
+    # Manual fidelity bond specification (bypasses registry)
+    # Use this when you don't have a registry or want to specify a bond directly
+    fidelity_bond_index: int | None = Field(
+        default=None, description="Fidelity bond derivation index (bypasses registry)"
+    )
+
     # Selected fidelity bond (txid, vout) - if not set, largest bond is used automatically
     selected_fidelity_bond: tuple[str, int] | None = Field(
         default=None, description="Selected fidelity bond UTXO (txid, vout)"

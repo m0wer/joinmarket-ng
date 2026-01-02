@@ -227,6 +227,17 @@ def start(
         list[int],
         typer.Option("--fidelity-bond-locktime", "-L", help="Fidelity bond locktimes to scan for"),
     ] = [],  # noqa: B006
+    fidelity_bond_index: Annotated[
+        int | None,
+        typer.Option(
+            "--fidelity-bond-index",
+            "-I",
+            envvar="FIDELITY_BOND_INDEX",
+            help="Fidelity bond derivation index "
+            "(bypasses registry, requires --fidelity-bond-locktime). "
+            "Useful for Docker/automated setups without a registry file.",
+        ),
+    ] = None,
     fidelity_bond: Annotated[
         str | None,
         typer.Option(
@@ -301,6 +312,14 @@ def start(
         )
         raise typer.Exit(1)
 
+    # Validate fidelity bond index requires locktimes
+    if fidelity_bond_index is not None and not fidelity_bond_locktimes:
+        logger.error(
+            "When using --fidelity-bond-index, you must also specify at least one "
+            "--fidelity-bond-locktime"
+        )
+        raise typer.Exit(1)
+
     backend_config: dict[str, str] = {}
     if backend_type == "full_node":
         backend_config = {
@@ -354,6 +373,7 @@ def start(
         cj_fee_absolute=actual_cj_fee_absolute,
         tx_fee_contribution=tx_fee_contribution,
         fidelity_bond_locktimes=list(fidelity_bond_locktimes),
+        fidelity_bond_index=fidelity_bond_index,
         merge_algorithm=parsed_merge_algorithm,
     )
 
