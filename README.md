@@ -276,3 +276,9 @@ The Docker compose file is designed for development and testing purposes. But is
 ## License
 
 MIT License. See [LICENSE](./LICENSE) for details.
+
+## Community
+
+Join the JoinMarket community to discuss, get help, and stay updated:
+
+- **Telegram**: https://t.me/joinmarketorg
