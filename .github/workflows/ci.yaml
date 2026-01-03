@@ -817,8 +817,8 @@ jobs:
           platforms: linux/arm64
           tags: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ github.ref_name }}-${{ github.sha }}${{ matrix.tag_suffix }}-arm64
           cache-from: |
-            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache
-            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ env.CI_TAG }}
+            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache-arm64
+            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:latest
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache-arm64,mode=max
           build-args: |
             BUILDKIT_INLINE_CACHE=1
@@ -892,8 +892,8 @@ jobs:
           platforms: linux/arm/v7
           tags: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ github.ref_name }}-${{ github.sha }}${{ matrix.tag_suffix }}-armv7
           cache-from: |
-            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache
-            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ env.CI_TAG }}
+            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache-armv7
+            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:latest
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache-armv7,mode=max
           build-args: |
             BUILDKIT_INLINE_CACHE=1
@@ -958,7 +958,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}
           flavor: |
