@@ -23,6 +23,13 @@
 #          --cov=orderbook_watcher --cov=maker --cov=taker \
 #          jmcore orderbook_watcher directory_server jmwallet maker taker tests
 #   docker compose --profile all down -v
+#
+# Using pre-built images (CI mode):
+#   Set these env vars to skip local builds and use GHCR images:
+#   - DIRECTORY_SERVER_IMAGE=ghcr.io/org/repo/directory-server:tag
+#   - ORDERBOOK_WATCHER_IMAGE=ghcr.io/org/repo/orderbook-watcher:tag
+#   - MAKER_IMAGE=ghcr.io/org/repo/maker:tag
+#   - TAKER_IMAGE=ghcr.io/org/repo/taker:tag
 
 services:
   # ============================================================================
@@ -101,6 +108,7 @@ services:
   # Note: Uses "testnet" as network name for compatibility with reference JoinMarket
   # which uses "testnet" for both testnet and regtest in its protocol messages
   directory:
+    image: ${DIRECTORY_SERVER_IMAGE:-}
     build:
       context: .
       dockerfile: directory_server/Dockerfile
@@ -131,6 +139,7 @@ services:
 
   # Orderbook watcher (web UI for monitoring)
   orderbook-watcher:
+    image: ${ORDERBOOK_WATCHER_IMAGE:-}
     build:
       context: .
       dockerfile: orderbook_watcher/Dockerfile
@@ -158,6 +167,7 @@ services:
   # ============================================================================
 
   maker:
+    image: ${MAKER_IMAGE:-}
     build:
       context: .
       dockerfile: maker/Dockerfile
@@ -198,6 +208,7 @@ services:
   # ============================================================================
 
   taker:
+    image: ${TAKER_IMAGE:-}
     build:
       context: .
       dockerfile: taker/Dockerfile
@@ -271,6 +282,7 @@ services:
 
   # Maker 1 for e2e tests
   maker1:
+    image: ${MAKER_IMAGE:-}
     build:
       context: .
       dockerfile: maker/Dockerfile
@@ -316,6 +328,7 @@ services:
 
   # Maker 2 for e2e tests
   maker2:
+    image: ${MAKER_IMAGE:-}
     build:
       context: .
       dockerfile: maker/Dockerfile
@@ -742,6 +755,7 @@ services:
   # Maker with neutrino backend
   # Uses the same mnemonic as maker1 so it gets funded by wallet-funder
   maker-neutrino:
+    image: ${MAKER_IMAGE:-}
     build:
       context: .
       dockerfile: maker/Dockerfile
@@ -780,6 +794,7 @@ services:
 
   # Taker with neutrino backend
   taker-neutrino:
+    image: ${TAKER_IMAGE:-}
     build:
       context: .
       dockerfile: taker/Dockerfile

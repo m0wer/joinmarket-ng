@@ -1,4 +1,4 @@
-name: tests
+name: CI
 
 on:
   push:
@@ -12,11 +12,10 @@ on:
       - 'orderbook_watcher/**'
       - 'maker/**'
       - 'taker/**'
-      - 'neutrino_server/**'
       - 'tests/**'
       - 'pytest.ini'
       - 'docker-compose.yml'
-      - '.github/workflows/test.yaml'
+      - '.github/workflows/**'
   pull_request:
     paths:
       - 'jmcore/**'
@@ -25,20 +24,75 @@ on:
       - 'orderbook_watcher/**'
       - 'maker/**'
       - 'taker/**'
-      - 'neutrino_server/**'
       - 'tests/**'
       - 'pytest.ini'
       - 'docker-compose.yml'
-      - '.github/workflows/test.yaml'
+      - '.github/workflows/**'
   workflow_dispatch:
-  workflow_call:
+
+env:
+  REGISTRY: ghcr.io
+  # Unique tag for this CI run - used to pass images between jobs
+  CI_TAG: ci-${{ github.sha }}
 
 jobs:
   # ==========================================================================
-  # Unit tests - run in parallel for speed (no Docker needed)
-  # Uses default marker filter '-m "not docker"' from pytest.ini
+  # Stage 1: Build all Docker images (parallel matrix)
+  # Push to GHCR with CI-specific tag for reuse by integration tests
   # ==========================================================================
+  build-images:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: directory-server
+            dockerfile: ./directory_server/Dockerfile
+            image: directory-server
+          - name: orderbook-watcher
+            dockerfile: ./orderbook_watcher/Dockerfile
+            image: orderbook-watcher
+          - name: maker
+            dockerfile: ./maker/Dockerfile
+            image: maker
+          - name: taker
+            dockerfile: ./taker/Dockerfile
+            image: taker
 
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ env.CI_TAG }}
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache
+            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:latest
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+  # ==========================================================================
+  # Stage 2a: Unit tests (parallel, no Docker needed)
+  # Runs in parallel with image builds for faster feedback
+  # ==========================================================================
   test-jmcore:
     runs-on: ubuntu-latest
     steps:
@@ -132,9 +186,10 @@ jobs:
         if: always()
 
   # ==========================================================================
-  # Tests requiring Docker services
+  # Stage 2b: Tests requiring external Docker services (bitcoin, neutrino)
+  # These don't need our custom images, just external ones
+  # Runs in parallel with image builds
   # ==========================================================================
-
   test-jmwallet:
     runs-on: ubuntu-latest
     steps:
@@ -233,13 +288,19 @@ jobs:
         if: always()
 
   # ==========================================================================
-  # E2E tests with our implementation (no reference JAM)
-  # Uses pytest marker: -m e2e
+  # Stage 3: Integration tests (require our custom Docker images)
+  # Uses pre-built images from Stage 1
   # ==========================================================================
-
   test-e2e:
+    needs: build-images
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # Use pre-built images from CI
+      DIRECTORY_SERVER_IMAGE: ghcr.io/${{ github.repository }}/directory-server:ci-${{ github.sha }}
+      ORDERBOOK_WATCHER_IMAGE: ghcr.io/${{ github.repository }}/orderbook-watcher:ci-${{ github.sha }}
+      MAKER_IMAGE: ghcr.io/${{ github.repository }}/maker:ci-${{ github.sha }}
+      TAKER_IMAGE: ghcr.io/${{ github.repository }}/taker:ci-${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-python-deps
@@ -250,23 +311,28 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Cache Docker layers
-        uses: actions/cache@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-e2e-${{ hashFiles('**/Dockerfile', 'docker-compose.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-e2e-
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull pre-built images
+        run: |
+          docker pull $DIRECTORY_SERVER_IMAGE
+          docker pull $ORDERBOOK_WATCHER_IMAGE
+          docker pull $MAKER_IMAGE
+          docker pull $TAKER_IMAGE
 
       - name: "Start e2e services"
         env:
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
         run: |
-          # Start our implementation only: bitcoin, directory, maker1, maker2
-          docker compose --profile e2e up -d --build
+          # Start with pre-built images (env vars override build)
+          docker compose --profile e2e up -d
 
-          # Wait for services with better health checks
           .github/scripts/wait-for-service.sh "Bitcoin" \
             "docker compose exec -T bitcoin bitcoin-cli -chain=regtest -rpcport=18443 -rpcuser=test -rpcpassword=test getblockchaininfo" \
             60 1
@@ -275,7 +341,6 @@ jobs:
             "nc -z localhost 5222" \
             30 1
 
-          # Give makers time to connect and announce offers
           echo "Waiting for makers to connect..."
           sleep 20
 
@@ -287,8 +352,6 @@ jobs:
           BITCOIN_RPC_USER: test
           BITCOIN_RPC_PASSWORD: test
         run: |
-          # Run e2e tests for our implementation (using marker)
-          # Use reruns for flaky tests that depend on Docker service state
           pytest -c pytest.ini -m e2e --junitxml=junit/test-results.xml \
             --cov --cov-report=term-missing --cov-report=xml \
             -v -s --timeout=300 --reruns=3 --reruns-delay=10 --fail-on-skip
@@ -323,15 +386,15 @@ jobs:
             coverage.xml
         if: always()
 
-  # ==========================================================================
-  # Reference compatibility tests (our makers + JAM taker)
-  # Uses 'reference' profile which excludes neutrino to avoid conflicts
-  # Uses pytest marker: -m reference
-  # ==========================================================================
-
   test-reference:
+    needs: build-images
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      DIRECTORY_SERVER_IMAGE: ghcr.io/${{ github.repository }}/directory-server:ci-${{ github.sha }}
+      ORDERBOOK_WATCHER_IMAGE: ghcr.io/${{ github.repository }}/orderbook-watcher:ci-${{ github.sha }}
+      MAKER_IMAGE: ghcr.io/${{ github.repository }}/maker:ci-${{ github.sha }}
+      TAKER_IMAGE: ghcr.io/${{ github.repository }}/taker:ci-${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-python-deps
@@ -342,20 +405,23 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Cache Docker layers
-        uses: actions/cache@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-reference-${{ hashFiles('**/Dockerfile', 'docker-compose.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-reference-
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull pre-built images
+        run: |
+          docker pull $DIRECTORY_SERVER_IMAGE
+          docker pull $ORDERBOOK_WATCHER_IMAGE
+          docker pull $MAKER_IMAGE
+          docker pull $TAKER_IMAGE
 
       - name: Clone and install reference implementation
         run: |
           git clone --depth 1 https://github.com/JoinMarket-Org/joinmarket-clientserver.git
-          # Install all dependencies from reference implementation (base + jmbitcoin + jmclient)
-          # Note: We install deps manually to avoid the Python <3.14 constraint in pyproject.toml
-          # Using latest klein/werkzeug for Python 3.14 compatibility (ast.Str removed)
           sudo apt-get update && sudo apt-get install -y libsecp256k1-dev
           pip install \
             chromalog==1.0.5 \
@@ -370,22 +436,15 @@ jobs:
             pyjwt==2.4.0 \
             klein \
             werkzeug
-          # The test will add joinmarket-clientserver/src to sys.path
 
       - name: "Start reference services"
         env:
-          # Use CI-specific Tor hidden service key from GitHub secrets
-          # This ensures CI runs don't conflict with each other or developer machines
-          # If the secret is not set, Tor will generate a random key
           TOR_HS_ED25519_SECRET_KEY_BASE64: ${{ secrets.TOR_HS_ED25519_SECRET_KEY_BASE64 }}
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
         run: |
-          # Start reference profile: bitcoin, directory, maker1, maker2, tor, jam
-          # Does NOT include neutrino to avoid UTXO verification issues
-          docker compose --profile reference up -d --build
+          docker compose --profile reference up -d
 
-          # Wait for Bitcoin
           echo "Waiting for Bitcoin..."
           for i in {1..60}; do
             if docker compose exec -T bitcoin bitcoin-cli -chain=regtest \
@@ -397,7 +456,6 @@ jobs:
             sleep 2
           done
 
-          # Wait for directory server
           echo "Waiting for directory server..."
           for i in {1..30}; do
             if nc -z localhost 5222 2>/dev/null; then
@@ -407,7 +465,6 @@ jobs:
             sleep 2
           done
 
-          # Wait for Tor (may generate new key, give it extra time)
           echo "Waiting for Tor hidden service..."
           for i in {1..90}; do
             if docker compose exec -T tor cat /var/lib/tor/directory/hostname 2>/dev/null | grep -q ".onion"; then
@@ -419,7 +476,6 @@ jobs:
             sleep 2
           done
 
-          # Wait for JAM to be healthy
           echo "Waiting for JAM..."
           for i in {1..30}; do
             if docker compose exec -T jam sh -c "timeout 5 bash -c '</dev/tcp/127.0.0.1/80'" 2>/dev/null; then
@@ -429,7 +485,6 @@ jobs:
             sleep 5
           done
 
-          # Give makers time to connect and announce offers
           echo "Waiting for makers to connect..."
           sleep 30
 
@@ -441,8 +496,6 @@ jobs:
           BITCOIN_RPC_USER: test
           BITCOIN_RPC_PASSWORD: test
         run: |
-          # Run reference tests (using marker)
-          # Use reruns for flaky tests that depend on Docker service state
           pytest -c pytest.ini -m reference --junitxml=junit/test-results.xml \
             --cov --cov-report=term-missing --cov-report=xml \
             -v -s --timeout=300 --reruns=3 --reruns-delay=10 --fail-on-skip
@@ -483,14 +536,15 @@ jobs:
             coverage.xml
         if: always()
 
-  # ==========================================================================
-  # Neutrino backend tests (separate from reference tests)
-  # Uses pytest marker: -m neutrino
-  # ==========================================================================
-
   test-neutrino:
+    needs: build-images
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      DIRECTORY_SERVER_IMAGE: ghcr.io/${{ github.repository }}/directory-server:ci-${{ github.sha }}
+      ORDERBOOK_WATCHER_IMAGE: ghcr.io/${{ github.repository }}/orderbook-watcher:ci-${{ github.sha }}
+      MAKER_IMAGE: ghcr.io/${{ github.repository }}/maker:ci-${{ github.sha }}
+      TAKER_IMAGE: ghcr.io/${{ github.repository }}/taker:ci-${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-python-deps
@@ -501,23 +555,27 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Cache Docker layers
-        uses: actions/cache@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-neutrino-${{ hashFiles('**/Dockerfile', 'docker-compose.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-neutrino-
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull pre-built images
+        run: |
+          docker pull $DIRECTORY_SERVER_IMAGE
+          docker pull $ORDERBOOK_WATCHER_IMAGE
+          docker pull $MAKER_IMAGE
+          docker pull $TAKER_IMAGE
 
       - name: "Start neutrino services"
         env:
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
         run: |
-          # Start neutrino profile: bitcoin, directory, neutrino, maker-neutrino
-          docker compose --profile neutrino up -d --build
+          docker compose --profile neutrino up -d
 
-          # Wait for Bitcoin
           echo "Waiting for Bitcoin..."
           for i in {1..60}; do
             if docker compose exec -T bitcoin bitcoin-cli -chain=regtest \
@@ -529,7 +587,6 @@ jobs:
             sleep 2
           done
 
-          # Wait for directory server
           echo "Waiting for directory server..."
           for i in {1..30}; do
             if nc -z localhost 5222 2>/dev/null; then
@@ -539,7 +596,6 @@ jobs:
             sleep 2
           done
 
-          # Wait for Neutrino to be ready
           echo "Waiting for Neutrino..."
           for i in {1..30}; do
             if curl -s http://localhost:8334/v1/status >/dev/null 2>&1; then
@@ -558,8 +614,6 @@ jobs:
           BITCOIN_RPC_PASSWORD: test
           NEUTRINO_URL: http://127.0.0.1:8334
         run: |
-          # Run neutrino-specific tests (using marker)
-          # Use reruns for flaky tests that depend on Docker maker state
           pytest -c pytest.ini -m neutrino --junitxml=junit/test-results.xml \
             --cov --cov-report=term-missing --cov-report=xml \
             -v -s --timeout=180 --reruns=3 --reruns-delay=10 --fail-on-skip
@@ -591,15 +645,15 @@ jobs:
             coverage.xml
         if: always()
 
-  # ==========================================================================
-  # Reference maker compatibility tests (JAM makers + our taker)
-  # Uses 'reference-maker' profile which runs JAM makers with our taker
-  # Uses pytest marker: -m reference_maker
-  # ==========================================================================
-
   test-reference-maker:
+    needs: build-images
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      DIRECTORY_SERVER_IMAGE: ghcr.io/${{ github.repository }}/directory-server:ci-${{ github.sha }}
+      ORDERBOOK_WATCHER_IMAGE: ghcr.io/${{ github.repository }}/orderbook-watcher:ci-${{ github.sha }}
+      MAKER_IMAGE: ghcr.io/${{ github.repository }}/maker:ci-${{ github.sha }}
+      TAKER_IMAGE: ghcr.io/${{ github.repository }}/taker:ci-${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-python-deps
@@ -610,25 +664,28 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Cache Docker layers
-        uses: actions/cache@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-reference-maker-${{ hashFiles('**/Dockerfile', 'docker-compose.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-reference-maker-
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull pre-built images
+        run: |
+          docker pull $DIRECTORY_SERVER_IMAGE
+          docker pull $ORDERBOOK_WATCHER_IMAGE
+          docker pull $MAKER_IMAGE
+          docker pull $TAKER_IMAGE
 
       - name: "Start reference-maker services"
         env:
-          # Use CI-specific Tor hidden service key from GitHub secrets
           TOR_HS_ED25519_SECRET_KEY_BASE64: ${{ secrets.TOR_HS_ED25519_SECRET_KEY_BASE64 }}
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
         run: |
-          # Start reference-maker profile: bitcoin-jam, directory, tor, jam-maker1, jam-maker2
-          docker compose --profile reference-maker up -d --build
+          docker compose --profile reference-maker up -d
 
-          # Wait for Bitcoin (bitcoin-jam)
           echo "Waiting for Bitcoin..."
           for i in {1..60}; do
             if docker compose exec -T bitcoin-jam bitcoin-cli -chain=regtest \
@@ -640,7 +697,6 @@ jobs:
             sleep 2
           done
 
-          # Wait for directory server
           echo "Waiting for directory server..."
           for i in {1..30}; do
             if nc -z localhost 5222 2>/dev/null; then
@@ -650,7 +706,6 @@ jobs:
             sleep 2
           done
 
-          # Wait for Tor
           echo "Waiting for Tor hidden service..."
           for i in {1..90}; do
             if docker compose exec -T tor cat /var/lib/tor/directory/hostname 2>/dev/null | grep -q ".onion"; then
@@ -662,7 +717,6 @@ jobs:
             sleep 2
           done
 
-          # Wait for JAM makers to be ready
           echo "Waiting for JAM makers..."
           for i in {1..30}; do
             if docker compose exec -T jam-maker1 sh -c "timeout 5 bash -c '</dev/tcp/127.0.0.1/80'" 2>/dev/null; then
@@ -672,7 +726,6 @@ jobs:
             sleep 5
           done
 
-          # Give makers time to sync and announce offers
           echo "Waiting for reference makers to connect..."
           sleep 30
 
@@ -684,8 +737,6 @@ jobs:
           BITCOIN_RPC_USER: test
           BITCOIN_RPC_PASSWORD: test
         run: |
-          # Run reference-maker tests (using marker)
-          # Use reruns for flaky tests that depend on Docker service state
           pytest -c pytest.ini -m reference_maker --junitxml=junit/test-results.xml \
             --cov --cov-report=term-missing --cov-report=xml \
             -v -s --timeout=300 --reruns=3 --reruns-delay=10 --fail-on-skip
@@ -724,24 +775,103 @@ jobs:
         if: always()
 
   # ==========================================================================
-  # Docker build - runs only if all tests pass and on push to main/master
+  # Stage 4: Publish images (only after ALL tests pass, only on main/master)
+  # Builds multi-arch images and publishes with production tags
   # ==========================================================================
-
-  build-images:
+  publish-images:
     needs:
+      # Unit tests (run in parallel with build)
       - test-jmcore
       - test-directory-server
       - test-orderbook-watcher
       - test-taker
+      # Tests with external Docker (run in parallel with build)
       - test-jmwallet
       - test-maker
+      # Integration tests (depend on build-images)
       - test-e2e
       - test-reference
       - test-neutrino
       - test-reference-maker
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-    uses: ./.github/workflows/docker.yaml
-    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: directory-server
+            dockerfile: ./directory_server/Dockerfile
+            image: directory-server
+            target: production
+            tag_suffix: ""
+          - name: directory-server-debug
+            dockerfile: ./directory_server/Dockerfile
+            image: directory-server
+            target: debug
+            tag_suffix: "-debug"
+          - name: orderbook-watcher
+            dockerfile: ./orderbook_watcher/Dockerfile
+            image: orderbook-watcher
+            target: ""
+            tag_suffix: ""
+          - name: maker
+            dockerfile: ./maker/Dockerfile
+            image: maker
+            target: ""
+            tag_suffix: ""
+          - name: taker
+            dockerfile: ./taker/Dockerfile
+            image: taker
+            target: ""
+            tag_suffix: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}
+          flavor: |
+            suffix=${{ matrix.tag_suffix }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target || '' }}
+          push: true
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache
+            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ env.CI_TAG }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
