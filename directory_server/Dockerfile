@@ -1,40 +1,59 @@
 # =============================================================================
-# Base stage: shared configuration and dependency installation
+# Builder stage: Install dependencies and build wheels
 # =============================================================================
 ARG PYTHON_VERSION=3.14
 
-FROM python:${PYTHON_VERSION}-slim AS base
+FROM python:${PYTHON_VERSION}-slim AS builder
 
-WORKDIR /app
+WORKDIR /build
 
-# Install system dependencies for building coincurve and running libnacl
+# Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libffi-dev \
-    libsodium23 \
+    libsodium-dev \
     git \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Install jmcore dependencies first (cached layer)
-COPY jmcore/requirements.txt /app/jmcore/requirements.txt
-RUN pip install --no-cache-dir -r /app/jmcore/requirements.txt
+# Install jmcore dependencies
+COPY jmcore/requirements.txt /build/jmcore/requirements.txt
+RUN pip install --no-cache-dir --user -r /build/jmcore/requirements.txt
 
-# Copy jmcore source and install as editable
-COPY jmcore/src /app/jmcore/src
-COPY jmcore/pyproject.toml /app/jmcore/
-RUN pip install --no-cache-dir -e /app/jmcore
+# Copy jmcore source and install
+COPY jmcore/src /build/jmcore/src
+COPY jmcore/pyproject.toml /build/jmcore/
+RUN pip install --no-cache-dir --user /build/jmcore
 
-# Install directory_server dependencies from locked requirements
-COPY directory_server/requirements.txt /app/directory_server/requirements.txt
-RUN pip install --no-cache-dir -r /app/directory_server/requirements.txt
+# Install directory_server dependencies
+COPY directory_server/requirements.txt /build/directory_server/requirements.txt
+RUN pip install --no-cache-dir --user -r /build/directory_server/requirements.txt
 
-# Copy directory_server source and install as editable
-COPY directory_server /app/directory_server
-RUN pip install --no-cache-dir -e /app/directory_server
+# Copy directory_server source and install
+COPY directory_server/src /build/directory_server/src
+COPY directory_server/pyproject.toml /build/directory_server/
+RUN pip install --no-cache-dir --user /build/directory_server
 
-RUN useradd -m -u 1000 jm && \
-    chown -R jm:jm /app
+# =============================================================================
+# Production stage: Minimal runtime image
+# =============================================================================
+FROM python:${PYTHON_VERSION}-slim AS production
+
+WORKDIR /app
+
+# Install only runtime dependencies (no build tools)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsodium23 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Python packages from builder
+COPY --from=builder /root/.local /root/.local
+
+# Make sure scripts are in PATH
+ENV PATH=/root/.local/bin:$PATH
+
+# Create non-root user
+RUN useradd -m -u 1000 jm
 
 USER jm
 
@@ -53,41 +72,55 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 CMD ["jm-directory-server"]
 
 # =============================================================================
-# Production stage: slim image (default)
+# Debug stage: Full Python image with debug symbols and tools
 # =============================================================================
-FROM base AS production
+FROM python:${PYTHON_VERSION} AS debug-builder
 
-# No additional changes needed - base already uses slim image
+WORKDIR /build
 
-# =============================================================================
-# Debug stage: full Python image with debug symbols + debugging tools
-# =============================================================================
-FROM python:${PYTHON_VERSION} AS debug-base
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libffi-dev \
+    libsodium-dev \
+    git \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN apt update && \
-    apt install --no-install-recommends -y gdb libsodium23 && \
-    rm -rf /var/lib/apt/lists/*
+# Install jmcore dependencies
+COPY jmcore/requirements.txt /build/jmcore/requirements.txt
+RUN pip install --no-cache-dir --user -r /build/jmcore/requirements.txt
+
+# Copy jmcore source and install
+COPY jmcore/src /build/jmcore/src
+COPY jmcore/pyproject.toml /build/jmcore/
+RUN pip install --no-cache-dir --user /build/jmcore
+
+# Install directory_server dependencies
+COPY directory_server/requirements.txt /build/directory_server/requirements.txt
+RUN pip install --no-cache-dir --user -r /build/directory_server/requirements.txt
+
+# Copy directory_server source and install
+COPY directory_server/src /build/directory_server/src
+COPY directory_server/pyproject.toml /build/directory_server/
+RUN pip install --no-cache-dir --user /build/directory_server
+
+FROM python:${PYTHON_VERSION} AS debug
 
 WORKDIR /app
 
-# Install jmcore dependencies first (cached layer)
-COPY jmcore/requirements.txt /app/jmcore/requirements.txt
-RUN pip install --no-cache-dir -r /app/jmcore/requirements.txt
+# Install runtime and debug dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsodium23 \
+    gdb \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy jmcore source and install as editable
-COPY jmcore /app/jmcore
-RUN pip install --no-cache-dir -e /app/jmcore
+# Copy Python packages from debug builder
+COPY --from=debug-builder /root/.local /root/.local
 
-# Install directory_server dependencies from locked requirements
-COPY directory_server/requirements.txt /app/directory_server/requirements.txt
-RUN pip install --no-cache-dir -r /app/directory_server/requirements.txt
+ENV PATH=/root/.local/bin:$PATH
 
-# Copy directory_server source and install as editable
-COPY directory_server /app/directory_server
-RUN pip install --no-cache-dir -e /app/directory_server
-
-RUN useradd -m -u 1000 jm && \
-    chown -R jm:jm /app
+RUN useradd -m -u 1000 jm
 
 USER jm
 
@@ -104,5 +137,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD ["jm-directory-server", "health"]
 
 CMD ["jm-directory-server"]
-
-FROM debug-base AS debug

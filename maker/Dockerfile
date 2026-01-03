@@ -1,8 +1,11 @@
-FROM python:3.14-slim
+# =============================================================================
+# Builder stage: Install dependencies and build wheels
+# =============================================================================
+FROM python:3.14-slim AS builder
 
-WORKDIR /app
+WORKDIR /build
 
-# Install system dependencies for cryptography
+# Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libffi-dev \
@@ -11,34 +14,53 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Install jmcore dependencies first (cached layer)
-COPY jmcore/requirements.txt /app/jmcore/requirements.txt
-RUN pip install --no-cache-dir -r /app/jmcore/requirements.txt
+# Install jmcore dependencies
+COPY jmcore/requirements.txt /build/jmcore/requirements.txt
+RUN pip install --no-cache-dir --user -r /build/jmcore/requirements.txt
 
 # Copy jmcore source and install
-COPY jmcore/src /app/jmcore/src
-COPY jmcore/pyproject.toml /app/jmcore/
-RUN pip install --no-cache-dir -e /app/jmcore
+COPY jmcore/src /build/jmcore/src
+COPY jmcore/pyproject.toml /build/jmcore/
+RUN pip install --no-cache-dir --user /build/jmcore
 
-# Install jmwallet dependencies and source
-COPY jmwallet/requirements.txt /app/jmwallet/requirements.txt
-RUN pip install --no-cache-dir -r /app/jmwallet/requirements.txt
-COPY jmwallet/pyproject.toml /app/jmwallet/pyproject.toml
-COPY jmwallet/src /app/jmwallet/src
-RUN pip install --no-cache-dir -e /app/jmwallet
+# Install jmwallet dependencies
+COPY jmwallet/requirements.txt /build/jmwallet/requirements.txt
+RUN pip install --no-cache-dir --user -r /build/jmwallet/requirements.txt
+
+# Copy jmwallet source and install
+COPY jmwallet/pyproject.toml /build/jmwallet/pyproject.toml
+COPY jmwallet/src /build/jmwallet/src
+RUN pip install --no-cache-dir --user /build/jmwallet
 
 # Install maker dependencies
-COPY maker/requirements.txt /app/maker/requirements.txt
-RUN pip install --no-cache-dir -r /app/maker/requirements.txt
+COPY maker/requirements.txt /build/maker/requirements.txt
+RUN pip install --no-cache-dir --user -r /build/maker/requirements.txt
 
 # Copy maker source and install
-COPY maker/src /app/maker/src
-COPY maker/pyproject.toml /app/maker/
-RUN pip install --no-cache-dir -e /app/maker
+COPY maker/src /build/maker/src
+COPY maker/pyproject.toml /build/maker/
+RUN pip install --no-cache-dir --user /build/maker
+
+# =============================================================================
+# Production stage: Minimal runtime image
+# =============================================================================
+FROM python:3.14-slim AS production
+
+WORKDIR /app
+
+# Install only runtime dependencies (no build tools)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsodium23 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Python packages from builder
+COPY --from=builder /root/.local /root/.local
+
+# Make sure scripts are in PATH
+ENV PATH=/root/.local/bin:$PATH
 
 # Create non-root user
-RUN useradd -m -u 1000 jm && \
-    chown -R jm:jm /app
+RUN useradd -m -u 1000 jm
 
 USER jm
 

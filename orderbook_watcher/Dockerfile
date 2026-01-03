@@ -1,32 +1,55 @@
-FROM python:3.14-slim
+# =============================================================================
+# Builder stage: Install dependencies and build wheels
+# =============================================================================
+FROM python:3.14-slim AS builder
 
-WORKDIR /app
+WORKDIR /build
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libffi-dev \
-    libsodium23 \
+    libsodium-dev \
     git \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-COPY jmcore/requirements.txt /app/jmcore/
-RUN pip install --no-cache-dir -r /app/jmcore/requirements.txt
+# Install jmcore dependencies
+COPY jmcore/requirements.txt /build/jmcore/
+RUN pip install --no-cache-dir --user -r /build/jmcore/requirements.txt
 
-# Copy jmcore source (needed for editable install in requirements.txt)
-COPY jmcore /app/jmcore
+# Copy jmcore source and install
+COPY jmcore/src /build/jmcore/src
+COPY jmcore/pyproject.toml /build/jmcore/
+RUN pip install --no-cache-dir --user /build/jmcore
 
-# Install jmcore explicitly
-RUN pip install --no-cache-dir -e /app/jmcore
+# Install orderbook_watcher dependencies
+COPY orderbook_watcher/requirements.txt /build/orderbook_watcher/
+RUN pip install --no-cache-dir --user -r /build/orderbook_watcher/requirements.txt
 
-COPY orderbook_watcher/requirements.txt /app/orderbook_watcher/
-RUN pip install --no-cache-dir -r /app/orderbook_watcher/requirements.txt
+# =============================================================================
+# Production stage: Minimal runtime image
+# =============================================================================
+FROM python:3.14-slim AS production
 
+WORKDIR /app
+
+# Install only runtime dependencies (no build tools)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsodium23 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Python packages from builder
+COPY --from=builder /root/.local /root/.local
+
+# Make sure scripts are in PATH
+ENV PATH=/root/.local/bin:$PATH
+
+# Copy application source and static files
 COPY orderbook_watcher/src /app/orderbook_watcher/src
 COPY orderbook_watcher/static /app/orderbook_watcher/static
 
-ENV PYTHONPATH=/app/jmcore/src:/app/orderbook_watcher/src
+ENV PYTHONPATH=/app/orderbook_watcher/src
 
 EXPOSE 8000
 

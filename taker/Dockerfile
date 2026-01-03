@@ -1,44 +1,66 @@
-FROM python:3.14-slim
+# =============================================================================
+# Builder stage: Install dependencies and build wheels
+# =============================================================================
+FROM python:3.14-slim AS builder
 
-WORKDIR /app
+WORKDIR /build
 
-# Install system dependencies for cryptography and libnacl
+# Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libffi-dev \
-    libsodium23 \
+    libsodium-dev \
     git \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Install jmcore dependencies first (cached layer)
-COPY jmcore/requirements.txt /app/jmcore/requirements.txt
-RUN pip install --no-cache-dir -r /app/jmcore/requirements.txt
+# Install jmcore dependencies
+COPY jmcore/requirements.txt /build/jmcore/requirements.txt
+RUN pip install --no-cache-dir --user -r /build/jmcore/requirements.txt
 
 # Copy jmcore source and install
-COPY jmcore/src /app/jmcore/src
-COPY jmcore/pyproject.toml /app/jmcore/
-RUN pip install --no-cache-dir -e /app/jmcore
+COPY jmcore/src /build/jmcore/src
+COPY jmcore/pyproject.toml /build/jmcore/
+RUN pip install --no-cache-dir --user /build/jmcore
 
-# Install jmwallet dependencies and source
-COPY jmwallet/requirements.txt /app/jmwallet/requirements.txt
-RUN pip install --no-cache-dir -r /app/jmwallet/requirements.txt
-COPY jmwallet/pyproject.toml /app/jmwallet/pyproject.toml
-COPY jmwallet/src /app/jmwallet/src
-RUN pip install --no-cache-dir -e /app/jmwallet
+# Install jmwallet dependencies
+COPY jmwallet/requirements.txt /build/jmwallet/requirements.txt
+RUN pip install --no-cache-dir --user -r /build/jmwallet/requirements.txt
+
+# Copy jmwallet source and install
+COPY jmwallet/pyproject.toml /build/jmwallet/pyproject.toml
+COPY jmwallet/src /build/jmwallet/src
+RUN pip install --no-cache-dir --user /build/jmwallet
 
 # Install taker dependencies
-COPY taker/requirements.txt /app/taker/requirements.txt
-RUN pip install --no-cache-dir -r /app/taker/requirements.txt
+COPY taker/requirements.txt /build/taker/requirements.txt
+RUN pip install --no-cache-dir --user -r /build/taker/requirements.txt
 
 # Copy taker source and install
-COPY taker/src /app/taker/src
-COPY taker/pyproject.toml /app/taker/
-RUN pip install --no-cache-dir -e /app/taker
+COPY taker/src /build/taker/src
+COPY taker/pyproject.toml /build/taker/
+RUN pip install --no-cache-dir --user /build/taker
+
+# =============================================================================
+# Production stage: Minimal runtime image
+# =============================================================================
+FROM python:3.14-slim AS production
+
+WORKDIR /app
+
+# Install only runtime dependencies (no build tools)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsodium23 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Python packages from builder
+COPY --from=builder /root/.local /root/.local
+
+# Make sure scripts are in PATH
+ENV PATH=/root/.local/bin:$PATH
 
 # Create non-root user
-RUN useradd -m -u 1000 jm && \
-    chown -R jm:jm /app
+RUN useradd -m -u 1000 jm
 
 USER jm
 
