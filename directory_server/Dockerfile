@@ -46,16 +46,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsodium23 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Python packages from builder
-COPY --from=builder /root/.local /root/.local
-
-# Make sure scripts are in PATH
-ENV PATH=/root/.local/bin:$PATH
-
-# Create non-root user
+# Create non-root user first
 RUN useradd -m -u 1000 jm
 
+# Copy Python packages from builder and set ownership
+COPY --from=builder --chown=jm:jm /root/.local /home/jm/.local
+
+# Switch to non-root user
 USER jm
+
+# Make sure scripts are in PATH
+ENV PATH=/home/jm/.local/bin:$PATH
 
 EXPOSE 5222 8080
 
@@ -115,14 +116,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gdb \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Python packages from debug builder
-COPY --from=debug-builder /root/.local /root/.local
-
-ENV PATH=/root/.local/bin:$PATH
-
+# Create non-root user first
 RUN useradd -m -u 1000 jm
 
+# Copy Python packages from debug builder and set ownership
+COPY --from=debug-builder --chown=jm:jm /root/.local /home/jm/.local
+
+# Switch to non-root user
 USER jm
+
+# Make sure scripts are in PATH
+ENV PATH=/home/jm/.local/bin:$PATH
 
 EXPOSE 5222 8080
 

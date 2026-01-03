@@ -39,15 +39,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsodium23 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Python packages from builder
-COPY --from=builder /root/.local /root/.local
+# Create non-root user first
+RUN useradd -m -u 1000 jm
+
+# Copy Python packages from builder and set ownership
+COPY --from=builder --chown=jm:jm /root/.local /home/jm/.local
+
+# Switch to non-root user
+USER jm
 
 # Make sure scripts are in PATH
-ENV PATH=/root/.local/bin:$PATH
+ENV PATH=/home/jm/.local/bin:$PATH
 
-# Copy application source and static files
-COPY orderbook_watcher/src /app/orderbook_watcher/src
-COPY orderbook_watcher/static /app/orderbook_watcher/static
+# Copy application source and static files (as jm user)
+COPY --chown=jm:jm orderbook_watcher/src /app/orderbook_watcher/src
+COPY --chown=jm:jm orderbook_watcher/static /app/orderbook_watcher/static
 
 ENV PYTHONPATH=/app/orderbook_watcher/src
 
