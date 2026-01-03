@@ -867,52 +867,68 @@ Allows cold storage of bond privkey while hot wallet handles per-session proofs.
 
 #### Cold Wallet Setup
 
-For maximum security, fidelity bonds can use a certificate chain that keeps the bond UTXO private key offline:
+For maximum security, fidelity bonds can use a certificate chain that keeps the bond UTXO private key completely offline in cold storage (hardware wallet):
 
-1. **Generate hot wallet keypair** (on hot wallet):
+1. **Generate bond address** (can be done on cold wallet or using watch-only):
+   ```bash
+   jm-wallet generate-bond-address \
+     --mnemonic-file wallet.enc \
+     --password "..." \
+     --locktime-date "2026-01-01" \
+     --index 0 \
+     --network mainnet
+   ```
+   Fund this address with Bitcoin to create the bond. Note the bond address for later steps.
+
+2. **Generate hot wallet keypair** (on online machine):
    ```bash
    jm-wallet generate-hot-keypair
    ```
-   This creates a random keypair. Store the private key securely, and note the public key for the next step.
+   This creates a random keypair. Store both the private and public keys securely.
 
-2. **Generate certificate** (on cold wallet with bond mnemonic):
+3. **Prepare certificate message** (on online machine - NO private keys needed):
    ```bash
-   jm-wallet generate-certificate \
-     --mnemonic-file cold-wallet.enc \
-     --password "..." \
-     --index 0 \
-     --locktime-date "2026-01-01" \
+   jm-wallet prepare-certificate-message <bond_address> \
      --cert-pubkey <hot_wallet_pubkey> \
      --cert-expiry-blocks 104832  # ~2 years
    ```
-   This signs a certificate binding the hot wallet public key to the bond UTXO, using the cold wallet's private key.
+   This outputs the message that needs to be signed. **IMPORTANT**: This step does NOT require your cold wallet mnemonic or private keys.
 
-3. **Import certificate** (on hot wallet):
+4. **Sign the message** (using hardware wallet with Sparrow or similar):
+   - Open Sparrow Wallet and connect your hardware wallet
+   - Navigate to the bond address (the P2WSH timelocked address)
+   - Use the "Sign Message" feature
+   - Paste the exact message from step 3
+   - The hardware wallet will sign the message
+   - Copy the resulting signature (in hex format)
+
+5. **Import certificate** (on online machine):
    ```bash
    jm-wallet import-certificate <bond_address> \
      --cert-pubkey <hot_wallet_pubkey> \
      --cert-privkey <hot_wallet_privkey> \
-     --cert-signature <signature_from_step_2> \
-     --cert-expiry 52  # Periods (from step 2)
+     --cert-signature <signature_from_hardware_wallet> \
+     --cert-expiry 52  # Periods (104832 blocks / 2016)
    ```
    This imports the certificate into the hot wallet's bond registry.
 
-4. **Run maker** (on hot wallet):
+6. **Run maker** (on online machine):
    ```bash
    jm-maker start --mnemonic-file hot-wallet.enc
    ```
    The maker will automatically detect the certificate and use it to create bond proofs without needing the cold wallet's private key.
 
 **Security benefits:**
-- Bond UTXO private key never touches the online machine
+- **Bond UTXO private key NEVER leaves the hardware wallet** - no mnemonic exposure to online systems
+- Hardware wallet signs the message directly - most secure approach
 - Certificate expires after a configurable period (default ~2 years)
 - If hot wallet is compromised, attacker can only impersonate the bond until expiry
-- Bond funds remain safe in cold storage
+- Bond funds remain completely safe in cold storage
 
 **Certificate expiry:**
 - Specified in 2016-block periods (Bitcoin difficulty adjustment period)
 - Example: `cert_expiry=52` means 52 × 2016 = 104,832 blocks ≈ 2 years
-- After expiry, generate a new certificate to continue using the bond
+- After expiry, sign a new certificate message to continue using the bond
 
 ### Context-Specific Verification
 

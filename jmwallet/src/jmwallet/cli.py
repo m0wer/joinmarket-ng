@@ -1459,66 +1459,37 @@ def generate_hot_keypair(
     print("=" * 80 + "\n")
 
 
-@app.command("generate-certificate")
-def generate_certificate(
-    mnemonic: Annotated[str | None, typer.Option("--mnemonic")] = None,
-    mnemonic_file: Annotated[Path | None, typer.Option("--mnemonic-file", "-f")] = None,
-    password: Annotated[str | None, typer.Option("--password", "-p")] = None,
-    index: Annotated[int, typer.Option("--index", "-i", help="Bond index")] = 0,
-    locktime: Annotated[
-        int, typer.Option("--locktime", "-L", help="Locktime as Unix timestamp")
-    ] = 0,
-    locktime_date: Annotated[
-        str | None,
-        typer.Option(
-            "--locktime-date", "-d", help="Locktime as date (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)"
-        ),
-    ] = None,
+@app.command("prepare-certificate-message")
+def prepare_certificate_message(
+    bond_address: Annotated[str, typer.Argument(help="Bond P2WSH address")],
     cert_pubkey: Annotated[
         str, typer.Option("--cert-pubkey", help="Certificate public key (hex)")
-    ] = "",
+    ],
     cert_expiry_blocks: Annotated[
         int, typer.Option("--cert-expiry-blocks", help="Certificate expiry in blocks")
     ] = 104832,  # ~2 years (52 * 2016)
-    network: Annotated[str, typer.Option("--network", "-n")] = "mainnet",
+    data_dir_opt: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-dir",
+            help="Data directory (default: ~/.joinmarket-ng or $JOINMARKET_DATA_DIR)",
+        ),
+    ] = None,
     log_level: Annotated[str, typer.Option("--log-level")] = "INFO",
 ) -> None:
     """
-    Generate a certificate signature for a fidelity bond (cold wallet support).
+    Prepare certificate message for signing with hardware wallet (cold wallet support).
 
-    This allows you to sign a certificate with your cold wallet's private key,
-    which can then be imported into a hot wallet for making offers.
+    This generates the message that needs to be signed by the bond UTXO's private key.
+    The message can then be signed using a hardware wallet via tools like Sparrow Wallet.
 
-    The certificate proves ownership of the bond UTXO without exposing the
-    cold wallet private key online.
+    IMPORTANT: This command does NOT require your mnemonic or private keys.
+    It only prepares the message that you will sign with your hardware wallet.
     """
     setup_logging(log_level)
 
     if not cert_pubkey:
         logger.error("--cert-pubkey is required")
-        raise typer.Exit(1)
-
-    try:
-        resolved_mnemonic = _resolve_mnemonic(mnemonic, mnemonic_file, password, True)
-    except (FileNotFoundError, ValueError) as e:
-        logger.error(str(e))
-        raise typer.Exit(1)
-
-    # Parse locktime
-    if locktime_date:
-        try:
-            try:
-                dt = datetime.strptime(locktime_date, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                dt = datetime.strptime(locktime_date, "%Y-%m-%d")
-            locktime = int(dt.timestamp())
-        except ValueError:
-            logger.error(f"Invalid date format: {locktime_date}")
-            logger.info("Use format: YYYY-MM-DD or YYYY-MM-DD HH:MM:SS")
-            raise typer.Exit(1)
-
-    if locktime <= 0:
-        logger.error("Locktime is required. Use --locktime or --locktime-date")
         raise typer.Exit(1)
 
     # Validate cert_pubkey
@@ -1530,45 +1501,62 @@ def generate_certificate(
         logger.error(f"Invalid certificate pubkey: {e}")
         raise typer.Exit(1)
 
-    from jmwallet.wallet.bip32 import HDKey, mnemonic_to_seed
-    from jmwallet.wallet.service import FIDELITY_BOND_BRANCH
-
-    # Derive the bond private key
-    seed = mnemonic_to_seed(resolved_mnemonic)
-    master_key = HDKey.from_seed(seed)
-    coin_type = 0 if network == "mainnet" else 1
-    path = f"m/84'/{coin_type}'/0'/{FIDELITY_BOND_BRANCH}/{index}"
-    key = master_key.derive(path)
-
     # Calculate cert_expiry as 2016-block periods
     cert_expiry = cert_expiry_blocks // 2016
 
-    # Create certificate message
+    # Create certificate message (binary format)
     cert_msg = (
         b"fidelity-bond-cert|" + cert_pubkey_bytes + b"|" + str(cert_expiry).encode("ascii")
     )
 
-    # Sign with Bitcoin message format
-    from coincurve import PrivateKey
+    # Save message to file for easier signing
+    from jmcore.paths import get_default_data_dir
 
-    from jmcore.crypto import bitcoin_message_hash
-
-    privkey = key.private_key  # HDKey.private_key returns PrivateKey object
-    msg_hash = bitcoin_message_hash(cert_msg)
-    cert_signature = privkey.sign(msg_hash, hasher=None)
+    data_dir = data_dir_opt if data_dir_opt else get_default_data_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    message_file = data_dir / "certificate_message.bin"
+    message_file.write_bytes(cert_msg)
 
     print("\n" + "=" * 80)
-    print("FIDELITY BOND CERTIFICATE")
+    print("FIDELITY BOND CERTIFICATE MESSAGE")
     print("=" * 80)
-    print(f"\nBond Index:            {index}")
-    print(f"Bond Path:             {path}")
-    print(f"Bond Locktime:         {locktime} ({datetime.fromtimestamp(locktime)})")
+    print(f"\nBond Address:          {bond_address}")
     print(f"Certificate Pubkey:    {cert_pubkey}")
     print(f"Certificate Expiry:    {cert_expiry} periods ({cert_expiry_blocks} blocks)")
-    print(f"Certificate Signature: {cert_signature.hex()}")
+    print("\n" + "-" * 80)
+    print("MESSAGE (hex format):")
+    print("-" * 80)
+    print(cert_msg.hex())
+    print("-" * 80)
+    print(f"\nMessage saved to: {message_file}")
     print("\n" + "=" * 80)
-    print("IMPORTANT: Store this certificate signature securely!")
-    print("           Use 'jm-wallet import-certificate' to import it into your hot wallet.")
+    print("HOW TO SIGN THIS MESSAGE:")
+    print("=" * 80)
+    print()
+    print("This certificate message contains binary data that must be signed with")
+    print("the bond UTXO's private key using Bitcoin message signing.")
+    print()
+    print("OPTION 1: Use reference JoinMarket tools (most reliable)")
+    print("  The reference JoinMarket implementation has signing utilities that")
+    print("  handle this correctly. If you have the reference implementation,")
+    print("  you can use its wallet-tool.py to sign the message.")
+    print()
+    print("OPTION 2: Use Bitcoin Core or compatible wallet")
+    print("  If your wallet software supports signing arbitrary messages with")
+    print("  P2WSH addresses, you can use it. Note: Not all wallets support")
+    print("  signing with timelocked addresses.")
+    print()
+    print("OPTION 3: Command-line signing (advanced)")
+    print(f"  The message has been saved to: {message_file}")
+    print("  You can use Bitcoin libraries to sign this binary file.")
+    print()
+    print("After signing, you'll receive a signature (typically 70-73 bytes in hex).")
+    print("Use that signature with 'jm-wallet import-certificate'.")
+    print()
+    print("SECURITY REMINDER:")
+    print("  - Sign this message OFFLINE with your cold storage wallet")
+    print("  - Use a hardware wallet or air-gapped computer")
+    print("  - Never expose your bond private key to online systems")
     print("=" * 80 + "\n")
 
 
