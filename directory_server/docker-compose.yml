@@ -1,6 +1,6 @@
 services:
   directory_server:
-    image: ghcr.io/m0wer/joinmarket-ng-directory-server:master
+    image: ghcr.io/m0wer/joinmarket-ng/directory-server:master
     # build:
     #   context: ..
     #   dockerfile: directory_server/Dockerfile
