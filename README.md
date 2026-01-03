@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="media/logo.svg" alt="JoinMarket NG Logo" width="200"/>
+</p>
+
 # JoinMarket NG
 
 > **⚠️ IMPORTANT NOTICE**

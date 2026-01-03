@@ -68,6 +68,7 @@ def inject_dark_theme() -> None:
 
     # CSS injection template
     css_inject = f"""
+    <link rel="icon" type="image/x-icon" href="../favicon.ico">
     <style>
     {dark_css}
     </style>
@@ -144,6 +145,7 @@ def convert_docs_md() -> None:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>JoinMarket NG Documentation</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
     <style>
         :root {{
             --bg-primary: #ffffff;
@@ -460,6 +462,23 @@ def create_nojekyll() -> None:
     print("✓ .nojekyll created")
 
 
+def copy_favicon() -> None:
+    """Copy favicon.ico to documentation build directory."""
+    print("Copying favicon.ico to documentation build...")
+
+    import shutil
+
+    favicon_src = ROOT / "media" / "favicon.ico"
+    if not favicon_src.exists():
+        print(f"Warning: {favicon_src} not found, skipping favicon copy")
+        return
+
+    favicon_dest = OUTPUT_DIR / "favicon.ico"
+    shutil.copy2(favicon_src, favicon_dest)
+
+    print("✓ favicon.ico copied to documentation build")
+
+
 def main() -> None:
     """Main entry point."""
     print("=" * 60)
@@ -484,6 +503,9 @@ def main() -> None:
 
     # Create .nojekyll for GitHub Pages
     create_nojekyll()
+
+    # Copy favicon to docs build
+    copy_favicon()
 
     print("=" * 60)
     print("✓ Documentation build complete!")
