@@ -1,24 +1,10 @@
-name: pre-commit
+name: Prek checks
 
-on:
-  push:
-    branches:
-      - main
-      - master
-  pull_request:
-  workflow_call:
+on: [push, pull_request]
 
 jobs:
-  pre-commit:
+  prek:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: actions/setup-python@v6
-      with:
-        python-version: '3.14'
-        cache: pip
-    - uses: actions/cache@v5
-      with:
-        path: ~/.cache/pre-commit
-        key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
-    - uses: pre-commit/action@v3
+      - uses: actions/checkout@v6
+      - uses: j178/prek-action@v1
