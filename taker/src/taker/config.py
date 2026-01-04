@@ -61,7 +61,7 @@ class TakerConfig(WalletConfig):
         default=3.0, ge=1.0, description="Multiply estimated fee by this factor"
     )
     bondless_makers_allowance: float = Field(
-        default=0.125,
+        default=0.0,
         ge=0.0,
         le=1.0,
         description="Fraction of time to choose makers randomly (not by fidelity bond)",
