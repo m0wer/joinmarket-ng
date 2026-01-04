@@ -804,6 +804,7 @@ def send(
             rpc_password,
             broadcast,
             yes,
+            bip39_passphrase or "",
         )
     )
 
@@ -820,6 +821,7 @@ async def _send_transaction(
     rpc_password: str,
     broadcast: bool,
     skip_confirmation: bool,
+    bip39_passphrase: str = "",
 ) -> None:
     """Send transaction implementation."""
     from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
@@ -840,6 +842,7 @@ async def _send_transaction(
         backend=backend,
         network=network,
         mixdepth_count=5,
+        passphrase=bip39_passphrase,
     )
 
     try:
@@ -1425,6 +1428,14 @@ def registry_sync(
     mnemonic: Annotated[str | None, typer.Option("--mnemonic")] = None,
     mnemonic_file: Annotated[Path | None, typer.Option("--mnemonic-file", "-f")] = None,
     password: Annotated[str | None, typer.Option("--password", "-p")] = None,
+    bip39_passphrase: Annotated[
+        str | None,
+        typer.Option(
+            "--bip39-passphrase",
+            envvar="BIP39_PASSPHRASE",
+            help="BIP39 passphrase (13th/25th word)",
+        ),
+    ] = None,
     network: Annotated[str, typer.Option("--network", "-n")] = "mainnet",
     rpc_url: Annotated[
         str, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")
@@ -1472,6 +1483,7 @@ def registry_sync(
             rpc_user,
             rpc_password,
             resolved_data_dir,
+            bip39_passphrase or "",
         )
     )
 
@@ -1484,6 +1496,7 @@ async def _sync_bonds_async(
     rpc_user: str,
     rpc_password: str,
     data_dir: Path,
+    bip39_passphrase: str = "",
 ) -> None:
     """Async implementation of bond syncing."""
     from jmwallet.backends import BitcoinCoreBackend

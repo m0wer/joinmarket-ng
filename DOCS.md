@@ -201,6 +201,50 @@ mixdepth 0/internal: m/84'/0'/0'/0/1/0 → bc1q... (change)
 mixdepth 1/external: m/84'/0'/0'/1/0/0 → bc1q... (CJ output from mixdepth 0)
 ```
 
+### BIP39 Passphrase Support
+
+JoinMarket NG supports the optional BIP39 passphrase (also known as the "13th word" for 12-word mnemonics or "25th word" for 24-word mnemonics). This allows deriving different wallets from the same mnemonic phrase.
+
+**Important Distinction**:
+- **File encryption password** (`--password`): Encrypts the mnemonic file on disk with AES
+- **BIP39 passphrase** (`--bip39-passphrase`): Used in seed derivation per BIP39 spec
+
+**Use Cases**:
+- Migrate existing wallets with passphrases (e.g., from other implementations)
+- Derive multiple wallets from one mnemonic for different purposes
+- Plausible deniability (different passphrase → different wallet)
+
+**Usage Examples**:
+
+```bash
+# jmwallet - Generate bond address with passphrase
+jmwallet generate-bond-address --mnemonic-file=wallet.enc --password=filepass --bip39-passphrase=seedpass --locktime=1893456000
+
+# jmwallet - Check wallet info with passphrase
+jmwallet info --mnemonic-file=wallet.enc --password=filepass --bip39-passphrase=seedpass
+
+# Maker - Start with passphrase (via CLI)
+jm-maker start --mnemonic-file=wallet.enc --password=filepass --bip39-passphrase=seedpass
+
+# Maker - Start with passphrase (via environment variable)
+export BIP39_PASSPHRASE=seedpass
+jm-maker start --mnemonic-file=wallet.enc --password=filepass
+
+# Taker - Run CoinJoin with passphrase
+jm-taker coinjoin --amount=1000000 --mnemonic-file=wallet.enc --password=filepass --bip39-passphrase=seedpass
+```
+
+**Environment Variable**:
+- All commands support `BIP39_PASSPHRASE` environment variable
+- Useful for Docker deployments and automation
+- CLI flag takes precedence over environment variable
+
+**Security Notes**:
+- Empty passphrase (`""`) is valid and different from no passphrase
+- Passphrase is case-sensitive and whitespace-sensitive
+- Lost passphrase = lost access to that wallet derivation
+- For fidelity bonds: Same passphrase must be used for bond creation and redemption
+
 ### No BerkeleyDB Requirement
 
 Reference implementation requires Bitcoin Core wallet (BerkeleyDB). Bitcoin Core v30+ removed BDB support.
