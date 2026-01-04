@@ -42,6 +42,7 @@ class WalletService:
         mixdepth_count: int = 5,
         gap_limit: int = 20,
         data_dir: Path | None = None,
+        passphrase: str = "",
     ):
         self.mnemonic = mnemonic
         self.backend = backend
@@ -49,8 +50,9 @@ class WalletService:
         self.mixdepth_count = mixdepth_count
         self.gap_limit = gap_limit
         self.data_dir = data_dir
+        self.passphrase = passphrase
 
-        seed = mnemonic_to_seed(mnemonic)
+        seed = mnemonic_to_seed(mnemonic, passphrase)
         self.master_key = HDKey.from_seed(seed)
 
         coin_type = 0 if network == "mainnet" else 1

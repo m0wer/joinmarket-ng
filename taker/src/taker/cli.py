@@ -120,6 +120,14 @@ def coinjoin(
     password: Annotated[
         str | None, typer.Option("--password", "-p", help="Password for encrypted mnemonic file")
     ] = None,
+    bip39_passphrase: Annotated[
+        str | None,
+        typer.Option(
+            "--bip39-passphrase",
+            envvar="BIP39_PASSPHRASE",
+            help="BIP39 passphrase (13th/25th word)",
+        ),
+    ] = None,
     network: Annotated[
         str, typer.Option("--network", help="Protocol network for handshakes")
     ] = "mainnet",
@@ -235,6 +243,7 @@ def coinjoin(
     # Build config
     config = TakerConfig(
         mnemonic=resolved_mnemonic,
+        passphrase=bip39_passphrase or "",
         network=network_type,
         bitcoin_network=bitcoin_network_type,
         backend_type=backend_type,
@@ -288,6 +297,7 @@ async def _run_coinjoin(
     # Create wallet with bitcoin_network for address generation
     wallet = WalletService(
         mnemonic=config.mnemonic,
+        passphrase=config.passphrase,
         backend=backend,
         network=bitcoin_network.value,
         mixdepth_count=config.mixdepth_count,
@@ -351,6 +361,14 @@ def tumble(
     ] = None,
     password: Annotated[
         str | None, typer.Option("--password", "-p", help="Password for encrypted mnemonic file")
+    ] = None,
+    bip39_passphrase: Annotated[
+        str | None,
+        typer.Option(
+            "--bip39-passphrase",
+            envvar="BIP39_PASSPHRASE",
+            help="BIP39 passphrase (13th/25th word)",
+        ),
     ] = None,
     network: Annotated[str, typer.Option("--network", help="Bitcoin network")] = "mainnet",
     backend_type: Annotated[
@@ -455,6 +473,7 @@ def tumble(
     # Build config
     config = TakerConfig(
         mnemonic=resolved_mnemonic,
+        passphrase=bip39_passphrase or "",
         network=network_type,
         backend_type=backend_type,
         backend_config=backend_config,
@@ -494,6 +513,7 @@ async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
     # Create wallet with bitcoin_network for address generation
     wallet = WalletService(
         mnemonic=config.mnemonic,
+        passphrase=config.passphrase,
         backend=backend,
         network=bitcoin_network.value,
         mixdepth_count=config.mixdepth_count,
