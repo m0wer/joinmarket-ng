@@ -8,7 +8,7 @@ import math
 from datetime import UTC, datetime
 
 DEFAULT_INTEREST_RATE = 0.015
-DEFAULT_BOND_VALUE_EXPONENT = 1.3
+DEFAULT_BOND_VALUE_EXPONENT = 2.0
 
 
 def calculate_timelocked_fidelity_bond_value(
