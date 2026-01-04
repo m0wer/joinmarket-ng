@@ -359,6 +359,14 @@ def info(
     password: Annotated[
         str | None, typer.Option("--password", "-p", help="Password for encrypted file")
     ] = None,
+    bip39_passphrase: Annotated[
+        str | None,
+        typer.Option(
+            "--bip39-passphrase",
+            envvar="BIP39_PASSPHRASE",
+            help="BIP39 passphrase (13th/25th word)",
+        ),
+    ] = None,
     network: Annotated[str, typer.Option("--network", "-n", help="Bitcoin network")] = "mainnet",
     backend_type: Annotated[
         str, typer.Option("--backend", "-b", help="Backend: full_node | neutrino")
@@ -386,7 +394,14 @@ def info(
 
     asyncio.run(
         _show_wallet_info(
-            resolved_mnemonic, network, backend_type, rpc_url, rpc_user, rpc_password, neutrino_url
+            resolved_mnemonic,
+            network,
+            backend_type,
+            rpc_url,
+            rpc_user,
+            rpc_password,
+            neutrino_url,
+            bip39_passphrase or "",
         )
     )
 
@@ -399,6 +414,7 @@ async def _show_wallet_info(
     rpc_user: str,
     rpc_password: str,
     neutrino_url: str,
+    bip39_passphrase: str = "",
 ) -> None:
     """Show wallet info implementation."""
     from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
@@ -422,6 +438,7 @@ async def _show_wallet_info(
         backend=backend,
         network=network,
         mixdepth_count=5,
+        passphrase=bip39_passphrase,
     )
 
     try:
@@ -447,6 +464,14 @@ def list_bonds(
     mnemonic: Annotated[str | None, typer.Option("--mnemonic")] = None,
     mnemonic_file: Annotated[Path | None, typer.Option("--mnemonic-file", "-f")] = None,
     password: Annotated[str | None, typer.Option("--password", "-p")] = None,
+    bip39_passphrase: Annotated[
+        str | None,
+        typer.Option(
+            "--bip39-passphrase",
+            envvar="BIP39_PASSPHRASE",
+            help="BIP39 passphrase (13th/25th word)",
+        ),
+    ] = None,
     network: Annotated[str, typer.Option("--network", "-n")] = "mainnet",
     backend_type: Annotated[str, typer.Option("--backend", "-b")] = "full_node",
     rpc_url: Annotated[
@@ -479,6 +504,7 @@ def list_bonds(
             rpc_user,
             rpc_password,
             locktimes or [],
+            bip39_passphrase or "",
         )
     )
 
@@ -491,6 +517,7 @@ async def _list_fidelity_bonds(
     rpc_user: str,
     rpc_password: str,
     locktimes: list[int],
+    bip39_passphrase: str = "",
 ) -> None:
     """List fidelity bonds implementation."""
     from jmcore.paths import get_default_data_dir
@@ -516,6 +543,7 @@ async def _list_fidelity_bonds(
         network=network,
         mixdepth_count=5,
         gap_limit=gap_limit,
+        passphrase=bip39_passphrase,
     )
 
     try:
@@ -580,6 +608,14 @@ def generate_bond_address(
     mnemonic: Annotated[str | None, typer.Option("--mnemonic")] = None,
     mnemonic_file: Annotated[Path | None, typer.Option("--mnemonic-file", "-f")] = None,
     password: Annotated[str | None, typer.Option("--password", "-p")] = None,
+    bip39_passphrase: Annotated[
+        str | None,
+        typer.Option(
+            "--bip39-passphrase",
+            envvar="BIP39_PASSPHRASE",
+            help="BIP39 passphrase (13th/25th word)",
+        ),
+    ] = None,
     locktime: Annotated[
         int, typer.Option("--locktime", "-L", help="Locktime as Unix timestamp")
     ] = 0,
@@ -648,7 +684,7 @@ def generate_bond_address(
     )
     from jmwallet.wallet.service import FIDELITY_BOND_BRANCH
 
-    seed = mnemonic_to_seed(resolved_mnemonic)
+    seed = mnemonic_to_seed(resolved_mnemonic, bip39_passphrase or "")
     master_key = HDKey.from_seed(seed)
 
     coin_type = 0 if network == "mainnet" else 1
@@ -723,6 +759,14 @@ def send(
     mnemonic: Annotated[str | None, typer.Option("--mnemonic")] = None,
     mnemonic_file: Annotated[Path | None, typer.Option("--mnemonic-file", "-f")] = None,
     password: Annotated[str | None, typer.Option("--password", "-p")] = None,
+    bip39_passphrase: Annotated[
+        str | None,
+        typer.Option(
+            "--bip39-passphrase",
+            envvar="BIP39_PASSPHRASE",
+            help="BIP39 passphrase (13th/25th word)",
+        ),
+    ] = None,
     mixdepth: Annotated[int, typer.Option("--mixdepth", "-m", help="Source mixdepth")] = 0,
     fee_rate: Annotated[int, typer.Option("--fee-rate", help="Fee rate in sat/vB")] = 10,
     network: Annotated[str, typer.Option("--network", "-n")] = "mainnet",
