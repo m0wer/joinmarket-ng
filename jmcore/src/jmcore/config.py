@@ -149,6 +149,7 @@ class WalletConfig(BaseModel):
 
     # Wallet seed
     mnemonic: str = Field(..., description="BIP39 mnemonic phrase for wallet seed")
+    passphrase: str = Field(default="", description="BIP39 passphrase (13th/25th word)")
 
     # Network settings
     network: NetworkType = Field(

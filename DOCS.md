@@ -201,6 +201,28 @@ mixdepth 0/internal: m/84'/0'/0'/0/1/0 → bc1q... (change)
 mixdepth 1/external: m/84'/0'/0'/1/0/0 → bc1q... (CJ output from mixdepth 0)
 ```
 
+### BIP39 Passphrase Support
+
+JoinMarket NG supports the optional BIP39 passphrase (also known as the "13th word" for 12-word mnemonics or "25th word" for 24-word mnemonics). This allows deriving different wallets from the same mnemonic phrase.
+
+**Important Distinction**:
+
+- **File encryption password** (`--password`): Encrypts the mnemonic file on disk with AES
+- **BIP39 passphrase** (`--bip39-passphrase`): Used in seed derivation per BIP39 spec
+
+**Use Cases**:
+
+- Migrate existing wallets with passphrases (e.g., from other implementations)
+- Derive multiple wallets from one mnemonic for different purposes
+- Plausible deniability (different passphrase → different wallet)
+
+**Security Notes**:
+
+- Empty passphrase (`""`) is valid and different from no passphrase
+- Passphrase is case-sensitive and whitespace-sensitive
+- Lost passphrase = lost access to that wallet derivation
+- For fidelity bonds: Same passphrase must be used for bond creation and redemption
+
 ### No BerkeleyDB Requirement
 
 Reference implementation requires Bitcoin Core wallet (BerkeleyDB). Bitcoin Core v30+ removed BDB support.

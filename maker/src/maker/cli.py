@@ -116,6 +116,7 @@ def create_wallet_service(config: MakerConfig) -> WalletService:
         network=bitcoin_network.value,
         mixdepth_count=config.mixdepth_count,
         gap_limit=config.gap_limit,
+        passphrase=config.passphrase,
     )
     return wallet
 
@@ -130,6 +131,14 @@ def start(
     ] = None,
     password: Annotated[
         str | None, typer.Option("--password", "-p", help="Password for encrypted mnemonic file")
+    ] = None,
+    bip39_passphrase: Annotated[
+        str | None,
+        typer.Option(
+            "--bip39-passphrase",
+            envvar="BIP39_PASSPHRASE",
+            help="BIP39 passphrase (13th/25th word)",
+        ),
     ] = None,
     data_dir: Annotated[
         Path | None,
@@ -379,6 +388,7 @@ def start(
 
     config = MakerConfig(
         mnemonic=resolved_mnemonic,
+        passphrase=bip39_passphrase or "",
         network=network,
         bitcoin_network=actual_bitcoin_network,
         data_dir=data_dir,
@@ -443,6 +453,14 @@ def generate_address(
     password: Annotated[
         str | None, typer.Option("--password", "-p", help="Password for encrypted mnemonic file")
     ] = None,
+    bip39_passphrase: Annotated[
+        str | None,
+        typer.Option(
+            "--bip39-passphrase",
+            envvar="BIP39_PASSPHRASE",
+            help="BIP39 passphrase (13th/25th word)",
+        ),
+    ] = None,
     network: Annotated[NetworkType, typer.Option(case_sensitive=False)] = NetworkType.MAINNET,
     bitcoin_network: Annotated[
         NetworkType | None,
@@ -464,6 +482,7 @@ def generate_address(
     actual_bitcoin_network = bitcoin_network or network
     config = MakerConfig(
         mnemonic=resolved_mnemonic,
+        passphrase=bip39_passphrase or "",
         network=network,
         bitcoin_network=actual_bitcoin_network,
         backend_type=backend_type,
