@@ -14,9 +14,17 @@ Relay server for peer discovery and message routing in the JoinMarket network.
 
 ## Installation
 
+See [INSTALL.md](../INSTALL.md) for general installation instructions.
+
+**For directory server** (manual installation):
+
 ```bash
+cd joinmarket-ng
+source jmvenv/bin/activate  # If you used install.sh
+# OR create venv: python3 -m venv jmvenv && source jmvenv/bin/activate
+
 # Install jmcore first
-cd ../jmcore
+cd jmcore
 pip install -e .
 
 # Install directory server

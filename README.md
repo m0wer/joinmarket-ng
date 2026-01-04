@@ -206,33 +206,33 @@ Lightweight SPV server using BIP157/158 compact block filters.
 
 ### Installation
 
-For local development, install dependencies in order:
+**New users**: See [INSTALL.md](./INSTALL.md) for the complete installation guide with automated setup script.
+
+**Quick install** (Linux/macOS):
 
 ```bash
-# 1. Install jmcore (foundation)
-cd jmcore
-pip install -r requirements.txt
-pip install -e .
-
-# 2. Install jmwallet
-cd ../jmwallet
-pip install -r requirements.txt
-pip install -e .
-
-# 3. Install maker/taker/etc.
-cd ../maker
-pip install -r requirements.txt
-pip install -e .
+git clone https://github.com/m0wer/joinmarket-ng.git
+cd joinmarket-ng
+./install.sh
+source jmvenv/bin/activate
 ```
 
-For development with testing tools:
+**Manual install** for developers:
 
 ```bash
-# After production install
-pip install -r requirements-dev.txt
+# Create virtual environment
+python3 -m venv jmvenv
+source jmvenv/bin/activate
+
+# Install core libraries
+cd jmcore && pip install -e . && cd ..
+cd jmwallet && pip install -e . && cd ..
+
+# Install components (maker/taker/etc.)
+cd maker && pip install -e . && cd ..
 ```
 
-See [DOCS.md § Dependency Management](./DOCS.md#dependency-management) for complete dependency management documentation.
+See [INSTALL.md](./INSTALL.md) for troubleshooting and platform-specific instructions.
 
 ### Component Documentation
 

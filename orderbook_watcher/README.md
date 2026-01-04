@@ -57,8 +57,16 @@ docker-compose up -d
 
 ### Manual Installation
 
+See [INSTALL.md](../INSTALL.md) for general installation instructions and Tor setup.
+
+**For orderbook watcher** (manual installation):
+
 1. Install dependencies:
 ```bash
+cd joinmarket-ng
+source jmvenv/bin/activate  # If you used install.sh
+# OR create venv: python3 -m venv jmvenv && source jmvenv/bin/activate
+
 cd jmcore
 pip install -e .
 
@@ -66,7 +74,7 @@ cd ../orderbook_watcher
 pip install -r requirements.txt
 ```
 
-2. Make sure Tor is running on port 9050
+2. Make sure Tor is running on port 9050 (see [INSTALL.md - Tor Setup](../INSTALL.md#tor-setup))
 
 3. Set environment variables:
 ```bash

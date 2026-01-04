@@ -4,7 +4,19 @@ Earn fees by providing liquidity for CoinJoin transactions. Makers passively ear
 
 ## Installation
 
+See [INSTALL.md](../INSTALL.md) for complete installation instructions including:
+- Automated installation with `install.sh`
+- Virtual environment setup
+- Backend setup (Bitcoin Core or Neutrino)
+- Tor configuration
+
+**Quick install** (if you already have the repo):
+
 ```bash
+cd joinmarket-ng
+source jmvenv/bin/activate  # If you used install.sh
+# OR create venv: python3 -m venv jmvenv && source jmvenv/bin/activate
+cd maker
 pip install -e ../jmcore ../jmwallet .
 ```
 
@@ -12,7 +24,7 @@ pip install -e ../jmcore ../jmwallet .
 
 **Tor is REQUIRED for production use.** Makers need Tor for privacy and to advertise .onion addresses for direct peer connections.
 
-You should configure Tor to serve the SOCKS proxy and control port. You can use the example torrc file in the [Docker Deployment](#docker-deployment) section.
+See [INSTALL.md - Tor Setup](../INSTALL.md#tor-setup) for installation and configuration instructions.
 
 The maker bot tries to auto-detect Tor configuration. For manual setup, see [Environment Variables](#environment-variables).
 

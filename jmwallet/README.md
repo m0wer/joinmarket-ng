@@ -4,9 +4,19 @@ Modern HD wallet for JoinMarket with support for Bitcoin Core nodes and lightwei
 
 ## Installation
 
+See [INSTALL.md](../INSTALL.md) for complete installation instructions including:
+- Automated installation with `install.sh`
+- Virtual environment setup
+- Backend setup (Bitcoin Core or Neutrino)
+
+**Quick install** (if you already have the repo):
+
 ```bash
+cd joinmarket-ng
+source jmvenv/bin/activate  # If you used install.sh
+# OR create venv: python3 -m venv jmvenv && source jmvenv/bin/activate
 cd jmwallet
-pip install -e .
+pip install -e ../jmcore .
 ```
 
 ## Quick Start
