@@ -20,7 +20,7 @@ Before installing JoinMarket-NG, you need to install some system packages requir
 **Debian/Ubuntu/Raspberry Pi OS:**
 ```bash
 sudo apt update
-sudo apt install -y build-essential libffi-dev libsodium-dev pkg-config python3 python3-venv python3-pip
+sudo apt install -y git build-essential libffi-dev libsodium-dev pkg-config python3 python3-venv python3-pip
 ```
 
 **macOS:**
@@ -29,6 +29,7 @@ brew install libsodium pkg-config python3
 ```
 
 These packages are needed for:
+- `git`: Version control (required to clone the repository)
 - `build-essential` / Xcode Command Line Tools: C compiler and build tools
 - `libffi-dev`: Foreign Function Interface library (for cryptography)
 - `libsodium-dev` / `libsodium`: Cryptographic library
@@ -56,6 +57,8 @@ The script will:
 - Optionally install maker, taker, or both
 - Set up the basic directory structure
 
+**Note**: You can run `./install.sh` multiple times safely. If you accidentally exit the script (e.g., with Ctrl+C), simply run it again to resume or change your component selection.
+
 ### 4. Activate the Environment
 
 After installation completes:
@@ -75,7 +78,7 @@ If you prefer to install manually or the script doesn't work on your system:
 **Debian/Ubuntu/Raspberry Pi OS:**
 ```bash
 sudo apt update
-sudo apt install -y build-essential libffi-dev libsodium-dev pkg-config python3 python3-venv python3-pip
+sudo apt install -y git build-essential libffi-dev libsodium-dev pkg-config python3 python3-venv python3-pip
 ```
 
 **macOS:**
@@ -315,7 +318,7 @@ This error occurs when installing dependencies like `coincurve`. You need to ins
 ```bash
 # Debian/Ubuntu/Raspberry Pi OS
 sudo apt update
-sudo apt install -y build-essential libffi-dev libsodium-dev pkg-config python3-venv
+sudo apt install -y git build-essential libffi-dev libsodium-dev pkg-config python3-venv
 
 # macOS
 brew install libsodium pkg-config
@@ -390,11 +393,19 @@ First, check if system dependencies are installed:
 ```bash
 # Debian/Ubuntu/Raspberry Pi OS
 sudo apt update
-sudo apt install -y build-essential libffi-dev libsodium-dev pkg-config python3-venv
+sudo apt install -y git build-essential libffi-dev libsodium-dev pkg-config python3-venv
 
 # macOS
 brew install libsodium pkg-config
 ```
+
+If the script was interrupted (e.g., with Ctrl+C), you can simply run it again:
+
+```bash
+./install.sh
+```
+
+The script is safe to run multiple times and will let you change your component selection.
 
 If the issue persists, try manual installation (see [Manual Installation](#manual-installation) section above).
 
