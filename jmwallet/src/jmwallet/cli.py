@@ -17,6 +17,7 @@ from loguru import logger
 
 if TYPE_CHECKING:
     from jmwallet.wallet.bond_registry import BondRegistry
+    from jmwallet.wallet.service import WalletService
 
 app = typer.Typer(
     name="jm-wallet",
@@ -381,6 +382,19 @@ def info(
     neutrino_url: Annotated[
         str, typer.Option("--neutrino-url", envvar="NEUTRINO_URL")
     ] = "http://127.0.0.1:8334",
+    extended: Annotated[
+        bool, typer.Option("--extended", "-e", help="Show detailed address view with derivations")
+    ] = False,
+    gap: Annotated[
+        int, typer.Option("--gap", "-g", help="Max address gap to show in extended view")
+    ] = 6,
+    data_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-dir",
+            help="Data directory (default: ~/.joinmarket-ng or $JOINMARKET_DATA_DIR)",
+        ),
+    ] = None,
     log_level: Annotated[str, typer.Option("--log-level", "-l")] = "INFO",
 ) -> None:
     """Display wallet information and balances by mixdepth."""
@@ -402,6 +416,9 @@ def info(
             rpc_password,
             neutrino_url,
             bip39_passphrase or "",
+            extended=extended,
+            gap_limit=gap,
+            data_dir=data_dir,
         )
     )
 
@@ -415,13 +432,23 @@ async def _show_wallet_info(
     rpc_password: str,
     neutrino_url: str,
     bip39_passphrase: str = "",
+    extended: bool = False,
+    gap_limit: int = 6,
+    data_dir: Path | None = None,
 ) -> None:
     """Show wallet info implementation."""
+    from jmcore.paths import get_default_data_dir
+
     from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
     from jmwallet.backends.neutrino import NeutrinoBackend
+    from jmwallet.history import get_address_history_types, get_used_addresses
     from jmwallet.wallet.service import WalletService
 
+    # Resolve data directory
+    resolved_data_dir = data_dir if data_dir else get_default_data_dir()
+
     # Create backend
+    backend: BitcoinCoreBackend | NeutrinoBackend
     if backend_type == "neutrino":
         backend = NeutrinoBackend(neutrino_url=neutrino_url, network=network)
         logger.info("Waiting for neutrino to sync...")
@@ -432,13 +459,14 @@ async def _show_wallet_info(
     else:
         backend = BitcoinCoreBackend(rpc_url=rpc_url, rpc_user=rpc_user, rpc_password=rpc_password)
 
-    # Create wallet
+    # Create wallet with data_dir for history lookups
     wallet = WalletService(
         mnemonic=mnemonic,
         backend=backend,
         network=network,
         mixdepth_count=5,
         passphrase=bip39_passphrase,
+        data_dir=resolved_data_dir,
     )
 
     try:
@@ -448,15 +476,135 @@ async def _show_wallet_info(
 
         total_balance = await wallet.get_total_balance()
         print(f"\nTotal Balance: {format_amount(total_balance)}")
-        print("\nBalance by mixdepth:")
 
-        for md in range(5):
-            balance = await wallet.get_balance(md)
-            addr = wallet.get_receive_address(md, 0)
-            print(f"  Mixdepth {md}: {balance:>15,} sats  |  {addr}")
+        # Get history info for address status
+        used_addresses = get_used_addresses(resolved_data_dir)
+        history_addresses = get_address_history_types(resolved_data_dir)
+
+        if extended:
+            # Extended view with detailed address information
+            print("\nJM wallet")
+            _show_extended_wallet_info(wallet, used_addresses, history_addresses, gap_limit)
+        else:
+            # Simple view - show balance and suggested address per mixdepth
+            print("\nBalance by mixdepth:")
+            for md in range(5):
+                balance = await wallet.get_balance(md)
+                # Get next unused unflagged address (not just index 0)
+                addr, _ = wallet.get_next_unused_unflagged_address(md, used_addresses)
+                print(f"  Mixdepth {md}: {balance:>15,} sats  |  {addr}")
 
     finally:
         await wallet.close()
+
+
+def _show_extended_wallet_info(
+    wallet: WalletService,
+    used_addresses: set[str],
+    history_addresses: dict[str, str],
+    gap_limit: int,
+) -> None:
+    """
+    Display extended wallet information with detailed address listings.
+
+    Mirrors the reference implementation's output format:
+    - Shows xpub for each mixdepth
+    - Lists external and internal addresses with derivation paths
+    - Shows address status (deposit, cj-out, non-cj-change, new, etc.)
+    - Shows balance per address and per branch
+    """
+    from jmcore.bitcoin import sats_to_btc
+
+    from jmwallet.wallet.service import FIDELITY_BOND_BRANCH
+
+    for md in range(wallet.mixdepth_count):
+        # Get account xpub
+        xpub = wallet.get_account_xpub(md)
+        # Truncate xpub for display (show first 12 and last 8 chars)
+        xpub_short = f"{xpub[:12]}...{xpub[-8:]}" if len(xpub) > 24 else xpub
+
+        print(f"mixdepth\t{md}\t{xpub_short}")
+
+        # External addresses (receive / deposit)
+        ext_addresses = wallet.get_address_info_for_mixdepth(
+            md, 0, gap_limit, used_addresses, history_addresses
+        )
+        # Get the external branch xpub path
+        ext_path = f"m/84'/{0 if wallet.network == 'mainnet' else 1}'/{md}'/0"
+        print(f"external addresses\t{ext_path}\t{xpub_short}")
+
+        ext_balance = 0
+        for addr_info in ext_addresses:
+            btc_balance = sats_to_btc(addr_info.balance)
+            ext_balance += addr_info.balance
+            # Format: path  address  balance  status
+            print(f"{addr_info.path}\t{addr_info.address}\t{btc_balance:.8f}\t{addr_info.status}")
+
+        print(f"Balance:\t{sats_to_btc(ext_balance):.8f}")
+
+        # Internal addresses (change / CJ output)
+        int_addresses = wallet.get_address_info_for_mixdepth(
+            md, 1, gap_limit, used_addresses, history_addresses
+        )
+        int_path = f"m/84'/{0 if wallet.network == 'mainnet' else 1}'/{md}'/1"
+        print(f"internal addresses\t{int_path}")
+
+        int_balance = 0
+        for addr_info in int_addresses:
+            btc_balance = sats_to_btc(addr_info.balance)
+            int_balance += addr_info.balance
+            print(f"{addr_info.path}\t{addr_info.address}\t{btc_balance:.8f}\t{addr_info.status}")
+
+        print(f"Balance:\t{sats_to_btc(int_balance):.8f}")
+
+        # Fidelity bond branch (only for mixdepth 0)
+        if md == 0:
+            bond_addresses = wallet.get_fidelity_bond_addresses_info(gap_limit)
+            if bond_addresses:
+                bond_path = (
+                    f"m/84'/{0 if wallet.network == 'mainnet' else 1}'/0'/{FIDELITY_BOND_BRANCH}"
+                )
+                print(f"fidelity bond addresses\t{bond_path}\t{xpub_short}")
+
+                bond_balance = 0
+                bond_locked = 0  # Locked balance (not yet expired)
+                import time
+
+                current_time = int(time.time())
+
+                for addr_info in bond_addresses:
+                    btc_balance = sats_to_btc(addr_info.balance)
+                    bond_balance += addr_info.balance
+                    is_locked = addr_info.locktime and addr_info.locktime > current_time
+                    if is_locked:
+                        bond_locked += addr_info.balance
+
+                    # Show locktime as date for bonds
+                    locktime_str = ""
+                    if addr_info.locktime:
+                        from datetime import datetime
+
+                        dt = datetime.fromtimestamp(addr_info.locktime)
+                        locktime_str = dt.strftime("%Y-%m-%d")
+                        if is_locked:
+                            locktime_str += " [LOCKED]"
+
+                    print(
+                        f"{addr_info.path}\t{addr_info.address}\t{btc_balance:.8f}\t{locktime_str}"
+                    )
+
+                # Show bond balance with locked amount in parentheses
+                if bond_locked > 0:
+                    print(
+                        f"Balance:\t{sats_to_btc(bond_balance - bond_locked):.8f} "
+                        f"({sats_to_btc(bond_locked):.8f})"
+                    )
+                else:
+                    print(f"Balance:\t{sats_to_btc(bond_balance):.8f}")
+
+        # Total balance for mixdepth
+        total_md_balance = ext_balance + int_balance
+        print(f"Balance for mixdepth {md}:\t{sats_to_btc(total_md_balance):.8f}")
 
 
 @app.command()

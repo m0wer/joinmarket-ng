@@ -613,6 +613,45 @@ def get_used_addresses(data_dir: Path | None = None) -> set[str]:
     return used_addresses
 
 
+def get_address_history_types(data_dir: Path | None = None) -> dict[str, str]:
+    """
+    Get the history type for each address used in CoinJoin history.
+
+    This maps addresses to their role in CoinJoin transactions:
+    - "cj_out": CoinJoin output address (destination)
+    - "change": Change address
+    - "flagged": Address was shared but transaction failed
+
+    Args:
+        data_dir: Optional data directory
+
+    Returns:
+        Dict mapping address -> type string
+    """
+    entries = read_history(data_dir)
+    address_types: dict[str, str] = {}
+
+    for entry in entries:
+        if entry.destination_address:
+            # CoinJoin output address
+            if entry.success:
+                address_types[entry.destination_address] = "cj_out"
+            else:
+                # Transaction failed - address was shared but not used
+                # Still mark as flagged to prevent reuse
+                address_types[entry.destination_address] = "flagged"
+
+        if entry.change_address:
+            # Change address
+            if entry.success:
+                address_types[entry.change_address] = "change"
+            else:
+                # Transaction failed but address was shared
+                address_types[entry.change_address] = "flagged"
+
+    return address_types
+
+
 async def detect_coinjoin_peer_count(
     backend: BlockchainBackend | Any,
     txid: str,

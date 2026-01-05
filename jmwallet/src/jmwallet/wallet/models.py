@@ -4,7 +4,43 @@ Wallet data models.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic.dataclasses import dataclass
+
+# Address status types for wallet info display
+AddressStatus = Literal[
+    "deposit",  # External address with funds (received deposit)
+    "cj-out",  # Internal address - CoinJoin output (from previous CJ)
+    "non-cj-change",  # Internal address - regular change (not from CJ)
+    "new",  # Unused address (no funds, never used)
+    "reused",  # Address that was used and reused (privacy warning)
+    "used-empty",  # Address that had funds but is now empty
+    "bond",  # Fidelity bond address
+    "flagged",  # Address flagged/shared but tx failed (should not reuse)
+]
+
+
+@dataclass
+class AddressInfo:
+    """Information about a wallet address for display."""
+
+    address: str
+    index: int
+    balance: int  # satoshis
+    status: AddressStatus
+    path: str
+    is_external: bool  # True for receive (external), False for change (internal)
+    is_bond: bool = False
+    locktime: int | None = None  # For fidelity bond addresses
+
+    @property
+    def short_path(self) -> str:
+        """Get shortened path for display (e.g., m/84'/0'/0'/0/5 -> 0/5)."""
+        parts = self.path.split("/")
+        if len(parts) >= 2:
+            return f"{parts[-2]}/{parts[-1]}"
+        return self.path
 
 
 @dataclass

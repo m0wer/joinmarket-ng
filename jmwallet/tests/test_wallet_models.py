@@ -4,7 +4,7 @@ Tests for wallet data models.
 
 import pytest
 
-from jmwallet.wallet.models import UTXOInfo
+from jmwallet.wallet.models import AddressInfo, UTXOInfo
 
 
 class TestUTXOInfo:
@@ -96,3 +96,88 @@ class TestUTXOInfo:
         )
         assert utxo.is_p2wpkh is False
         assert utxo.is_p2wsh is False
+
+
+class TestAddressInfo:
+    """Tests for AddressInfo model."""
+
+    def test_address_info_basic(self):
+        """Test basic AddressInfo creation."""
+        info = AddressInfo(
+            address="bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+            index=5,
+            balance=100000,
+            status="deposit",
+            path="m/84'/0'/0'/0/5",
+            is_external=True,
+        )
+        assert info.address == "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+        assert info.index == 5
+        assert info.balance == 100000
+        assert info.status == "deposit"
+        assert info.is_external is True
+        assert info.is_bond is False
+        assert info.locktime is None
+
+    def test_address_info_short_path(self):
+        """Test short_path property."""
+        info = AddressInfo(
+            address="bc1q...",
+            index=5,
+            balance=0,
+            status="new",
+            path="m/84'/0'/0'/0/5",
+            is_external=True,
+        )
+        assert info.short_path == "0/5"
+
+    def test_address_info_short_path_internal(self):
+        """Test short_path for internal address."""
+        info = AddressInfo(
+            address="bc1q...",
+            index=10,
+            balance=50000,
+            status="cj-out",
+            path="m/84'/0'/0'/1/10",
+            is_external=False,
+        )
+        assert info.short_path == "1/10"
+
+    def test_address_info_bond(self):
+        """Test AddressInfo for fidelity bond."""
+        info = AddressInfo(
+            address="bc1q...",
+            index=0,
+            balance=1000000,
+            status="bond",
+            path="m/84'/0'/0'/2/0:1768435200",
+            is_external=False,
+            is_bond=True,
+            locktime=1768435200,
+        )
+        assert info.is_bond is True
+        assert info.locktime == 1768435200
+        assert info.status == "bond"
+
+    def test_address_info_statuses(self):
+        """Test different address statuses."""
+        statuses = [
+            "deposit",
+            "cj-out",
+            "non-cj-change",
+            "new",
+            "reused",
+            "used-empty",
+            "bond",
+            "flagged",
+        ]
+        for status in statuses:
+            info = AddressInfo(
+                address="bc1q...",
+                index=0,
+                balance=0,
+                status=status,
+                path="m/84'/0'/0'/0/0",
+                is_external=True,
+            )
+            assert info.status == status
