@@ -520,10 +520,8 @@ def _show_extended_wallet_info(
     for md in range(wallet.mixdepth_count):
         # Get account xpub
         xpub = wallet.get_account_xpub(md)
-        # Truncate xpub for display (show first 12 and last 8 chars)
-        xpub_short = f"{xpub[:12]}...{xpub[-8:]}" if len(xpub) > 24 else xpub
 
-        print(f"mixdepth\t{md}\t{xpub_short}")
+        print(f"mixdepth\t{md}\t{xpub}")
 
         # External addresses (receive / deposit)
         ext_addresses = wallet.get_address_info_for_mixdepth(
@@ -531,7 +529,7 @@ def _show_extended_wallet_info(
         )
         # Get the external branch xpub path
         ext_path = f"m/84'/{0 if wallet.network == 'mainnet' else 1}'/{md}'/0"
-        print(f"external addresses\t{ext_path}\t{xpub_short}")
+        print(f"external addresses\t{ext_path}\t{xpub}")
 
         ext_balance = 0
         for addr_info in ext_addresses:
@@ -564,7 +562,7 @@ def _show_extended_wallet_info(
                 bond_path = (
                     f"m/84'/{0 if wallet.network == 'mainnet' else 1}'/0'/{FIDELITY_BOND_BRANCH}"
                 )
-                print(f"fidelity bond addresses\t{bond_path}\t{xpub_short}")
+                print(f"fidelity bond addresses\t{bond_path}\t{xpub}")
 
                 bond_balance = 0
                 bond_locked = 0  # Locked balance (not yet expired)
