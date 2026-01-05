@@ -292,6 +292,26 @@ def fresh_docker_makers():
             timeout=10,
         )
 
+        # Clear commitment blacklists for both makers before restarting
+        for maker in ["jm-maker1", "jm-maker2"]:
+            try:
+                subprocess.run(
+                    [
+                        "docker",
+                        "exec",
+                        maker,
+                        "sh",
+                        "-c",
+                        "rm -rf /home/jm/.joinmarket-ng/cmtdata/commitmentlist",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                logger.debug(f"Cleared commitment blacklist for {maker}")
+            except Exception as e:
+                logger.warning(f"Failed to clear commitment blacklist for {maker}: {e}")
+
         # Restart the e2e profile makers
         result = subprocess.run(
             ["docker", "restart", "jm-maker1", "jm-maker2"],
