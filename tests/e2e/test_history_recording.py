@@ -271,9 +271,28 @@ async def test_coinjoin_creates_history_entry(
             # Verify entry details
             assert cj_entry.role == "taker", "Should be a taker entry"
             assert cj_entry.cj_amount == cj_amount, "CJ amount should match"
-            assert cj_entry.success is True, "CoinJoin should be successful"
+            # Entry is initially marked as pending (success=False)
+            # Need to update after confirmation
             assert cj_entry.peer_count == 2, "Should have 2 peers"
             assert cj_entry.destination_address is not None, "Should have destination"
+
+            # Update confirmation status after mining a block
+            from jmwallet.history import update_transaction_confirmation
+
+            updated = update_transaction_confirmation(
+                txid=txid,
+                confirmations=1,
+                data_dir=data_dir,
+            )
+            assert updated, "Should update history entry"
+
+            # Re-read and verify entry is now marked as successful
+            entries = read_history(data_dir=data_dir)
+            cj_entry = next((e for e in entries if e.txid == txid), None)
+            assert cj_entry is not None, f"Should have history entry for txid {txid}"
+            assert cj_entry.success is True, (
+                "CoinJoin should be marked successful after confirmation"
+            )
 
             print("✓ Complete CoinJoin history recording verified:")
             print(f"  - TXID: {cj_entry.txid}")
