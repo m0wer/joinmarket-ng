@@ -968,7 +968,7 @@ class MakerBot:
         from jmwallet.history import (
             get_pending_transactions,
             update_pending_transaction_txid,
-            update_transaction_confirmation,
+            update_transaction_confirmation_with_detection,
         )
 
         pending = get_pending_transactions(data_dir=self.config.data_dir)
@@ -1035,9 +1035,10 @@ class MakerBot:
                         f"Transaction {entry.txid[:16]}... confirmed "
                         f"({confirmations} confirmation(s))"
                     )
-                    update_transaction_confirmation(
+                    await update_transaction_confirmation_with_detection(
                         txid=entry.txid,
                         confirmations=confirmations,
+                        backend=self.backend,
                         data_dir=self.config.data_dir,
                     )
 
