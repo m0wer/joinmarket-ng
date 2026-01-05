@@ -182,9 +182,27 @@ def coinjoin(
     bondless_makers_allowance: Annotated[
         float,
         typer.Option(
-            "--bondless-allowance", help="Fraction of time to choose makers randomly (0.0-1.0)"
+            "--bondless-allowance",
+            envvar="BONDLESS_MAKERS_ALLOWANCE",
+            help="Fraction of time to choose makers randomly (0.0-1.0)",
         ),
     ] = 0.125,
+    bond_value_exponent: Annotated[
+        float,
+        typer.Option(
+            "--bond-exponent",
+            envvar="BOND_VALUE_EXPONENT",
+            help="Exponent for fidelity bond value calculation (default 1.3)",
+        ),
+    ] = 1.3,
+    bondless_require_zero_fee: Annotated[
+        bool,
+        typer.Option(
+            "--bondless-zero-fee/--no-bondless-zero-fee",
+            envvar="BONDLESS_REQUIRE_ZERO_FEE",
+            help="For bondless spots, require zero absolute fee (default: enabled)",
+        ),
+    ] = True,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompt")] = False,
     log_level: Annotated[str, typer.Option("--log-level", "-l", help="Log level")] = "INFO",
 ) -> None:
@@ -248,6 +266,8 @@ def coinjoin(
         counterparty_count=counterparties,
         max_cj_fee=MaxCjFee(abs_fee=max_abs_fee, rel_fee=max_rel_fee),
         bondless_makers_allowance=bondless_makers_allowance,
+        bond_value_exponent=bond_value_exponent,
+        bondless_makers_allowance_require_zero_fee=bondless_require_zero_fee,
     )
 
     asyncio.run(_run_coinjoin(config, amount, destination, mixdepth, counterparties, yes))

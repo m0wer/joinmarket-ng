@@ -282,6 +282,8 @@ def fidelity_bond_weighted_choose(
     offers: list[Offer],
     n: int,
     bondless_makers_allowance: float = 0.125,
+    bondless_require_zero_fee: bool = True,
+    cj_amount: int = 0,
 ) -> list[Offer]:
     """
     Choose n offers with fidelity bond weighting.
@@ -293,6 +295,8 @@ def fidelity_bond_weighted_choose(
         offers: Eligible offers
         n: Number of offers to choose
         bondless_makers_allowance: Probability of using random selection
+        bondless_require_zero_fee: If True, bondless spots only select zero absolute fee offers
+        cj_amount: CoinJoin amount for fee filtering
 
     Returns:
         Selected offers
@@ -303,7 +307,37 @@ def fidelity_bond_weighted_choose(
     # With some probability, use random selection (allows makers without bonds)
     if random.random() < bondless_makers_allowance:
         logger.debug("Using random selection (bondless makers allowance)")
-        return random_order_choose(offers, n)
+
+        # If require_zero_fee is enabled, filter to only zero absolute fee offers
+        if bondless_require_zero_fee:
+            zero_fee_offers = [
+                o
+                for o in offers
+                if o.ordertype in (OfferType.SW0_ABSOLUTE, OfferType.SWA_ABSOLUTE)
+                and int(o.cjfee) == 0
+            ]
+            # Include relative fee offers (they don't have absolute fee)
+            relative_fee_offers = [
+                o
+                for o in offers
+                if o.ordertype not in (OfferType.SW0_ABSOLUTE, OfferType.SWA_ABSOLUTE)
+            ]
+            eligible_offers = zero_fee_offers + relative_fee_offers
+
+            if len(eligible_offers) >= n:
+                logger.debug(
+                    f"Bondless selection: filtered to {len(eligible_offers)} offers "
+                    f"with zero absolute fee (or relative fee)"
+                )
+                return random_order_choose(eligible_offers, n)
+            else:
+                logger.warning(
+                    f"Not enough zero-fee offers for bondless selection "
+                    f"({len(eligible_offers)} < {n}), falling back to all offers"
+                )
+                return random_order_choose(offers, n)
+        else:
+            return random_order_choose(offers, n)
 
     # Weight by fidelity bond value
     bond_values = [o.fidelity_bond_value for o in offers]
@@ -354,6 +388,7 @@ def choose_orders(
     ignored_makers: set[str] | None = None,
     min_nick_version: int | None = None,
     bondless_makers_allowance: float = 0.125,
+    bondless_require_zero_fee: bool = True,
 ) -> tuple[dict[str, Offer], int]:
     """
     Choose n orders from the orderbook for a CoinJoin.
@@ -367,16 +402,20 @@ def choose_orders(
         ignored_makers: Makers to exclude
         min_nick_version: Minimum required nick version (e.g., 6 for neutrino takers)
         bondless_makers_allowance: Probability of random selection vs fidelity bond weighting
+        bondless_require_zero_fee: If True, bondless spots only select zero absolute fee offers
 
     Returns:
         (dict of counterparty -> offer, total_cj_fee)
     """
     if choose_fn is None:
-        # Use partial to bind bondless_makers_allowance
+        # Use partial to bind bondless_makers_allowance and bondless_require_zero_fee
         from functools import partial
 
         choose_fn = partial(
-            fidelity_bond_weighted_choose, bondless_makers_allowance=bondless_makers_allowance
+            fidelity_bond_weighted_choose,
+            bondless_makers_allowance=bondless_makers_allowance,
+            bondless_require_zero_fee=bondless_require_zero_fee,
+            cj_amount=cj_amount,
         )
 
     # Filter offers
@@ -423,6 +462,7 @@ def choose_sweep_orders(
     ignored_makers: set[str] | None = None,
     min_nick_version: int | None = None,
     bondless_makers_allowance: float = 0.125,
+    bondless_require_zero_fee: bool = True,
 ) -> tuple[dict[str, Offer], int, int]:
     """
     Choose n orders for a sweep transaction (no change).
@@ -440,6 +480,7 @@ def choose_sweep_orders(
         ignored_makers: Makers to exclude
         min_nick_version: Minimum required nick version (e.g., 6 for neutrino takers)
         bondless_makers_allowance: Probability of random selection vs fidelity bond weighting
+        bondless_require_zero_fee: If True, bondless spots only select zero absolute fee offers
 
     Returns:
         (dict of counterparty -> offer, cj_amount, total_cj_fee)
@@ -448,7 +489,9 @@ def choose_sweep_orders(
         from functools import partial
 
         choose_fn = partial(
-            fidelity_bond_weighted_choose, bondless_makers_allowance=bondless_makers_allowance
+            fidelity_bond_weighted_choose,
+            bondless_makers_allowance=bondless_makers_allowance,
+            bondless_require_zero_fee=bondless_require_zero_fee,
         )
 
     if ignored_makers is None:
@@ -515,9 +558,15 @@ def choose_sweep_orders(
 class OrderbookManager:
     """Manages orderbook state and maker selection."""
 
-    def __init__(self, max_cj_fee: MaxCjFee, bondless_makers_allowance: float = 0.125):
+    def __init__(
+        self,
+        max_cj_fee: MaxCjFee,
+        bondless_makers_allowance: float = 0.125,
+        bondless_require_zero_fee: bool = True,
+    ):
         self.max_cj_fee = max_cj_fee
         self.bondless_makers_allowance = bondless_makers_allowance
+        self.bondless_require_zero_fee = bondless_require_zero_fee
         self.offers: list[Offer] = []
         self.bonds: dict[str, Any] = {}  # maker -> bond info
         self.ignored_makers: set[str] = set()
@@ -570,6 +619,7 @@ class OrderbookManager:
             ignored_makers=self.ignored_makers,
             min_nick_version=min_nick_version,
             bondless_makers_allowance=self.bondless_makers_allowance,
+            bondless_require_zero_fee=self.bondless_require_zero_fee,
         )
 
     def select_makers_for_sweep(
@@ -607,4 +657,5 @@ class OrderbookManager:
             ignored_makers=self.ignored_makers,
             min_nick_version=min_nick_version,
             bondless_makers_allowance=self.bondless_makers_allowance,
+            bondless_require_zero_fee=self.bondless_require_zero_fee,
         )

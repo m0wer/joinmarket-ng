@@ -308,7 +308,11 @@ class Taker:
         )
 
         # Orderbook manager
-        self.orderbook_manager = OrderbookManager(config.max_cj_fee)
+        self.orderbook_manager = OrderbookManager(
+            config.max_cj_fee,
+            bondless_makers_allowance=config.bondless_makers_allowance,
+            bondless_require_zero_fee=config.bondless_makers_allowance_require_zero_fee,
+        )
 
         # PoDLE manager for commitment tracking
         self.podle_manager = PoDLEManager(config.data_dir)

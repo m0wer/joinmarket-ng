@@ -66,6 +66,15 @@ class TakerConfig(WalletConfig):
         le=1.0,
         description="Fraction of time to choose makers randomly (not by fidelity bond)",
     )
+    bond_value_exponent: float = Field(
+        default=1.3,
+        gt=0.0,
+        description="Exponent for fidelity bond value calculation (default 1.3)",
+    )
+    bondless_makers_allowance_require_zero_fee: bool = Field(
+        default=True,
+        description="For bondless maker spots, require zero absolute fee (percentage fee OK)",
+    )
 
     # PoDLE settings
     taker_utxo_retries: int = Field(

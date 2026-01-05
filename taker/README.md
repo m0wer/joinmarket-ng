@@ -205,6 +205,26 @@ jm-taker coinjoin \
   --max-rel-fee 0.0005
 ```
 
+### Bondless Maker Selection
+
+The taker uses fidelity bonds to select makers, but occasionally selects makers randomly to give bondless makers a chance. This is controlled by `--bondless-allowance` (default 12.5%).
+
+To reduce the economic incentive for sybil attacks by bondless makers, the `--bondless-zero-fee` option (enabled by default) ensures that bondless maker spots only go to makers charging zero absolute fees. This removes the incentive to run many bondless bots to collect more fees.
+
+```bash
+# Disable zero-fee requirement for bondless spots (not recommended)
+jm-taker coinjoin \
+  --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
+  --amount 1000000 \
+  --no-bondless-zero-fee
+
+# Adjust bondless maker allowance
+jm-taker coinjoin \
+  --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
+  --amount 1000000 \
+  --bondless-allowance 0.2
+```
+
 ## Docker Deployment
 
 A production-ready `docker-compose.yml` is provided in this directory with:
@@ -317,6 +337,9 @@ Note: Takers only need Tor SOCKS proxy (port 9050) - they don't serve a hidden s
 | `MIN_MAKERS` | `4` | Minimum number of makers |
 | `MAX_CJ_FEE_REL` | `0.001` | Maximum relative fee (0.1%) |
 | `MAX_CJ_FEE_ABS` | `5000` | Maximum absolute fee in sats |
+| `BONDLESS_MAKERS_ALLOWANCE` | `0.125` | Fraction of time to choose makers randomly (0.0-1.0) |
+| `BOND_VALUE_EXPONENT` | `1.3` | Exponent for fidelity bond value calculation |
+| `BONDLESS_REQUIRE_ZERO_FEE` | `true` | Require zero absolute fee for bondless maker spots |
 | `TOR_SOCKS_HOST` | `127.0.0.1` | Tor SOCKS proxy host |
 | `TOR_SOCKS_PORT` | `9050` | Tor SOCKS proxy port |
 | `SENSITIVE_LOGGING` | - | Enable sensitive logging (set to `1` or `true`) |
@@ -346,6 +369,9 @@ jm-taker tumble --help
 | `--backend` | full_node | Backend: full_node or neutrino |
 | `--max-abs-fee` | 500 | Max absolute fee per maker (sats) |
 | `--max-rel-fee` | 0.001 | Max relative fee (0.1%) |
+| `--bondless-allowance` | 0.125 | Fraction of time to choose makers randomly (0.0-1.0) |
+| `--bond-exponent` | 1.3 | Exponent for fidelity bond value calculation |
+| `--bondless-zero-fee` | enabled | Require zero absolute fee for bondless spots |
 
 Use env vars for RPC credentials (see jmwallet README).
 
