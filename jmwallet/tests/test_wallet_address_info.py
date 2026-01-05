@@ -427,3 +427,65 @@ class TestAccountXpub:
         assert xpub_0 != xpub_1
         assert xpub_1 != xpub_2
         assert xpub_0 != xpub_2
+
+
+class TestAccountZpub:
+    """Tests for zpub generation."""
+
+    @pytest.fixture
+    def mock_backend(self):
+        """Create a mock backend."""
+        backend = Mock()
+        backend.close = AsyncMock()
+        return backend
+
+    @pytest.fixture
+    def wallet(self, mock_backend, test_mnemonic, test_network):
+        """Create a wallet for testing."""
+        return WalletService(
+            mnemonic=test_mnemonic,
+            backend=mock_backend,
+            network=test_network,
+            mixdepth_count=5,
+        )
+
+    def test_get_account_zpub_mainnet(self, mock_backend, test_mnemonic):
+        """Test zpub generation for mainnet."""
+        wallet = WalletService(
+            mnemonic=test_mnemonic,
+            backend=mock_backend,
+            network="mainnet",
+            mixdepth_count=5,
+        )
+        zpub = wallet.get_account_zpub(0)
+        assert zpub.startswith("zpub")
+
+    def test_get_account_zpub_testnet(self, mock_backend, test_mnemonic):
+        """Test zpub generation for testnet."""
+        wallet = WalletService(
+            mnemonic=test_mnemonic,
+            backend=mock_backend,
+            network="testnet",
+            mixdepth_count=5,
+        )
+        zpub = wallet.get_account_zpub(0)
+        assert zpub.startswith("vpub")
+
+    def test_different_mixdepths_different_zpubs(self, wallet):
+        """Test that different mixdepths produce different zpubs."""
+        zpub_0 = wallet.get_account_zpub(0)
+        zpub_1 = wallet.get_account_zpub(1)
+        zpub_2 = wallet.get_account_zpub(2)
+
+        assert zpub_0 != zpub_1
+        assert zpub_1 != zpub_2
+        assert zpub_0 != zpub_2
+
+    def test_zpub_xpub_different_same_key(self, wallet):
+        """Test that zpub and xpub are different for the same account."""
+        zpub = wallet.get_account_zpub(0)
+        xpub = wallet.get_account_xpub(0)
+
+        assert zpub != xpub
+        assert zpub.startswith("zpub") or zpub.startswith("vpub")
+        assert xpub.startswith("xpub") or xpub.startswith("tpub")

@@ -508,7 +508,7 @@ def _show_extended_wallet_info(
     Display extended wallet information with detailed address listings.
 
     Mirrors the reference implementation's output format:
-    - Shows xpub for each mixdepth
+    - Shows zpub for each mixdepth (BIP84 native segwit format)
     - Lists external and internal addresses with derivation paths
     - Shows address status (deposit, cj-out, non-cj-change, new, etc.)
     - Shows balance per address and per branch
@@ -518,18 +518,18 @@ def _show_extended_wallet_info(
     from jmwallet.wallet.service import FIDELITY_BOND_BRANCH
 
     for md in range(wallet.mixdepth_count):
-        # Get account xpub
-        xpub = wallet.get_account_xpub(md)
+        # Get account zpub (BIP84 format for native segwit)
+        zpub = wallet.get_account_zpub(md)
 
-        print(f"mixdepth\t{md}\t{xpub}")
+        print(f"mixdepth\t{md}\t{zpub}")
 
         # External addresses (receive / deposit)
         ext_addresses = wallet.get_address_info_for_mixdepth(
             md, 0, gap_limit, used_addresses, history_addresses
         )
-        # Get the external branch xpub path
+        # Get the external branch zpub path
         ext_path = f"m/84'/{0 if wallet.network == 'mainnet' else 1}'/{md}'/0"
-        print(f"external addresses\t{ext_path}\t{xpub}")
+        print(f"external addresses\t{ext_path}\t{zpub}")
 
         ext_balance = 0
         for addr_info in ext_addresses:
@@ -562,7 +562,7 @@ def _show_extended_wallet_info(
                 bond_path = (
                     f"m/84'/{0 if wallet.network == 'mainnet' else 1}'/0'/{FIDELITY_BOND_BRANCH}"
                 )
-                print(f"fidelity bond addresses\t{bond_path}\t{xpub}")
+                print(f"fidelity bond addresses\t{bond_path}\t{zpub}")
 
                 bond_balance = 0
                 bond_locked = 0  # Locked balance (not yet expired)

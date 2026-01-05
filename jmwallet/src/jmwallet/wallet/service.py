@@ -101,6 +101,23 @@ class WalletService:
         account_key = self.master_key.derive(account_path)
         return account_key.get_xpub(self.network)
 
+    def get_account_zpub(self, mixdepth: int) -> str:
+        """
+        Get the BIP84 extended public key (zpub) for a mixdepth account.
+
+        Derives the key at path m/84'/coin'/mixdepth' and returns its zpub.
+        zpub explicitly indicates this is a native segwit (P2WPKH) wallet.
+
+        Args:
+            mixdepth: The mixdepth (account) number (0-4)
+
+        Returns:
+            zpub/vpub string for the account
+        """
+        account_path = f"{self.root_path}/{mixdepth}'"
+        account_key = self.master_key.derive(account_path)
+        return account_key.get_zpub(self.network)
+
     def get_scan_descriptors(self, scan_range: int = DEFAULT_SCAN_RANGE) -> list[dict[str, Any]]:
         """
         Generate descriptors for efficient UTXO scanning with Bitcoin Core.

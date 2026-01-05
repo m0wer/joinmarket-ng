@@ -78,6 +78,45 @@ def test_xpub_serialization(test_mnemonic):
     assert len(tpub) >= 100
 
 
+def test_zpub_serialization(test_mnemonic):
+    """Test that zpub serialization produces valid Base58Check output for BIP84."""
+    seed = mnemonic_to_seed(test_mnemonic)
+    master_key = HDKey.from_seed(seed)
+
+    # Derive to account level (m/84'/0'/0')
+    account_key = master_key.derive("m/84'/0'/0'")
+
+    # Test mainnet zpub
+    zpub = account_key.get_zpub("mainnet")
+    assert zpub.startswith("zpub")
+    # BIP32 serialized keys are 78 bytes, which encodes to 111-112 Base58 chars
+    assert len(zpub) >= 100
+
+    # Test testnet vpub
+    vpub = account_key.get_zpub("testnet")
+    assert vpub.startswith("vpub")
+    assert len(vpub) >= 100
+
+
+def test_xpub_zpub_difference(test_mnemonic):
+    """Test that xpub and zpub are different for the same key."""
+    seed = mnemonic_to_seed(test_mnemonic)
+    master_key = HDKey.from_seed(seed)
+
+    # Derive to account level
+    account_key = master_key.derive("m/84'/0'/0'")
+
+    xpub = account_key.get_xpub("mainnet")
+    zpub = account_key.get_zpub("mainnet")
+
+    # They should be different (different version bytes)
+    assert xpub != zpub
+    assert xpub.startswith("xpub")
+    assert zpub.startswith("zpub")
+    # But same length (both encode 78 bytes)
+    assert len(xpub) == len(zpub)
+
+
 def test_xprv_serialization(test_mnemonic):
     """Test that xprv serialization produces valid Base58Check output."""
     seed = mnemonic_to_seed(test_mnemonic)

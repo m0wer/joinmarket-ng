@@ -22,6 +22,12 @@ XPRV_MAINNET = bytes.fromhex("0488ADE4")  # xprv
 XPUB_TESTNET = bytes.fromhex("043587CF")  # tpub
 XPRV_TESTNET = bytes.fromhex("04358394")  # tprv
 
+# BIP84 version bytes for native segwit extended keys
+ZPUB_MAINNET = bytes.fromhex("04B24746")  # zpub
+ZPRV_MAINNET = bytes.fromhex("04B2430C")  # zprv
+VPUB_TESTNET = bytes.fromhex("045F1CF6")  # vpub
+VPRV_TESTNET = bytes.fromhex("045F18BC")  # vprv
+
 
 def _base58check_encode(payload: bytes) -> str:
     """Encode bytes with Base58Check (with checksum)."""
@@ -205,6 +211,40 @@ class HDKey:
         # 4 bytes: child number
         # 32 bytes: chain code
         # 33 bytes: public key (compressed)
+        depth_byte = min(self.depth, 255).to_bytes(1, "big")
+        child_num_bytes = self.child_number.to_bytes(4, "big")
+        pubkey_bytes = self._public_key.format(compressed=True)
+
+        payload = (
+            version
+            + depth_byte
+            + self.parent_fingerprint
+            + child_num_bytes
+            + self.chain_code
+            + pubkey_bytes
+        )
+
+        return _base58check_encode(payload)
+
+    def get_zpub(self, network: str = "mainnet") -> str:
+        """
+        Serialize the public key as a BIP84 extended public key (zpub/vpub).
+
+        This produces a BIP84-compliant extended public key for native segwit wallets.
+        zpub/vpub explicitly indicates the key is intended for P2WPKH addresses.
+
+        Args:
+            network: "mainnet" for zpub, "testnet"/"regtest" for vpub
+
+        Returns:
+            Base58Check-encoded extended public key (zpub or vpub)
+        """
+        if network == "mainnet":
+            version = ZPUB_MAINNET
+        else:
+            version = VPUB_TESTNET
+
+        # Same serialization format as xpub but with BIP84 version bytes
         depth_byte = min(self.depth, 255).to_bytes(1, "big")
         child_num_bytes = self.child_number.to_bytes(4, "big")
         pubkey_bytes = self._public_key.format(compressed=True)
