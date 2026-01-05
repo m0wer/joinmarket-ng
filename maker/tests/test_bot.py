@@ -663,5 +663,106 @@ class TestWalletRescanAndOfferUpdate:
         assert default_config.rescan_interval_sec == 600
 
 
+class TestPeerCountDetection:
+    """Tests for peer count detection after CoinJoin confirmation."""
+
+    @pytest.fixture
+    def mock_wallet(self):
+        """Create a mock wallet service."""
+        from unittest.mock import AsyncMock
+
+        wallet = MagicMock()
+        wallet.mixdepth_count = 5
+        wallet.utxo_cache = {}
+        wallet.sync_all = AsyncMock()
+        wallet.get_total_balance = AsyncMock(return_value=1_000_000)
+        return wallet
+
+    @pytest.fixture
+    def mock_backend(self):
+        """Create a mock blockchain backend with transaction data."""
+        from unittest.mock import AsyncMock
+
+        from jmwallet.backends.base import Transaction
+
+        backend = MagicMock()
+        backend.get_block_height = AsyncMock(return_value=930000)
+
+        # Mock transaction with 3 equal-value outputs (peer count = 3)
+        mock_tx = Transaction(
+            txid="test_txid_123",
+            confirmations=1,
+            raw="01000000...",  # Minimal mock
+        )
+        backend.get_transaction = AsyncMock(return_value=mock_tx)
+
+        return backend
+
+    @pytest.fixture
+    def config(self, tmp_path):
+        """Create a test maker config with temp data dir."""
+        return MakerConfig(
+            mnemonic="test " * 12,
+            directory_servers=["localhost:5222"],
+            network=NetworkType.REGTEST,
+            data_dir=tmp_path,
+        )
+
+    @pytest.fixture
+    def maker_bot(self, mock_wallet, mock_backend, config):
+        """Create a MakerBot instance for testing."""
+        bot = MakerBot(
+            wallet=mock_wallet,
+            backend=mock_backend,
+            config=config,
+        )
+        return bot
+
+    @pytest.mark.asyncio
+    async def test_update_pending_history_calls_detection_function(
+        self, maker_bot, mock_backend, config, tmp_path
+    ):
+        """Test that _update_pending_history uses update_transaction_confirmation_with_detection.
+
+        This ensures that makers can automatically detect peer count after transaction
+        confirmation, since they don't know the full transaction until it's broadcast.
+        """
+        from jmwallet.history import append_history_entry, create_maker_history_entry
+
+        # Create a pending history entry
+        entry = create_maker_history_entry(
+            taker_nick="J5TakerNick",
+            cj_amount=91554,
+            fee_received=0,
+            txfee_contribution=0,
+            cj_address="bc1qtest",
+            change_address="bc1qchange",
+            our_utxos=[("abcd1234" * 8, 0)],
+            txid="test_txid_123",
+            network="regtest",
+        )
+        append_history_entry(entry, data_dir=tmp_path)
+
+        # Mock the detection function to verify it's called
+        from unittest.mock import AsyncMock, patch
+
+        with patch("jmwallet.history.detect_coinjoin_peer_count", new=AsyncMock(return_value=3)):
+            # Run the update
+            await maker_bot._update_pending_history()
+
+            # Read the history back
+            from jmwallet.history import read_history
+
+            entries = read_history(data_dir=tmp_path)
+            assert len(entries) == 1
+
+            # Transaction should be marked as confirmed
+            assert entries[0].confirmations == 1
+            assert entries[0].success is True
+
+            # Peer count should be detected and set
+            assert entries[0].peer_count == 3
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
