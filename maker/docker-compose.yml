@@ -16,6 +16,7 @@ services:
       - TOR_CONTROL_HOST=tor
       - TOR_CONTROL_PORT=9051
       - TOR_COOKIE_PATH=/var/lib/tor/control_auth_cookie
+      - ONION_SERVING_HOST=maker
       # Fee configuration (uncomment one)
       # - CJ_FEE_RELATIVE=0.001  # 0.1% relative fee (default)
       # - CJ_FEE_ABSOLUTE=1000   # Fixed 1000 sats per coinjoin

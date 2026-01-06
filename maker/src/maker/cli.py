@@ -223,6 +223,20 @@ def start(
             help="Disable Tor control port integration (maker won't create ephemeral onion)",
         ),
     ] = False,
+    onion_serving_host: Annotated[
+        str,
+        typer.Option(
+            envvar="ONION_SERVING_HOST",
+            help="Host for incoming .onion connections (use service name in Docker Compose)",
+        ),
+    ] = "127.0.0.1",
+    onion_serving_port: Annotated[
+        int,
+        typer.Option(
+            envvar="ONION_SERVING_PORT",
+            help="Port for incoming .onion connections",
+        ),
+    ] = 5222,
     fidelity_bond_locktimes: Annotated[
         list[int],
         typer.Option("--fidelity-bond-locktime", "-L", help="Fidelity bond locktimes to scan for"),
@@ -367,6 +381,8 @@ def start(
         socks_host=tor_socks_host,
         socks_port=tor_socks_port,
         tor_control=tor_control_cfg,
+        onion_serving_host=onion_serving_host,
+        onion_serving_port=onion_serving_port,
         min_size=min_size,
         offer_type=parsed_offer_type,
         cj_fee_relative=actual_cj_fee_relative,
