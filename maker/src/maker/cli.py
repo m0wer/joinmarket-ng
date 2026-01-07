@@ -196,10 +196,13 @@ def start(
     ] = None,
     tx_fee_contribution: Annotated[int, typer.Option(help="Tx fee contribution in sats")] = 0,
     directory_servers: Annotated[
-        list[str] | None,
+        str | None,
         typer.Option(
+            "--directory",
+            "-D",
             envvar="DIRECTORY_SERVERS",
-            help="Directory servers host:port. Defaults to mainnet directory nodes.",
+            help="Directory servers (comma-separated host:port). "
+            "Defaults to mainnet directory nodes.",
         ),
     ] = None,
     tor_socks_host: Annotated[
@@ -328,9 +331,10 @@ def start(
         logger.info("No fee specified, using default relative fee: 0.001 (0.1%)")
 
     # Resolve directory servers: use provided list or default for network
-    resolved_directory_servers = (
-        directory_servers if directory_servers else get_default_directory_nodes(network)
-    )
+    if directory_servers:
+        dir_servers = [s.strip() for s in directory_servers.split(",")]
+    else:
+        dir_servers = get_default_directory_nodes(network)
 
     # Parse and validate merge algorithm
     try:
@@ -394,7 +398,7 @@ def start(
         data_dir=data_dir,
         backend_type=backend_type,
         backend_config=backend_config,
-        directory_servers=resolved_directory_servers,
+        directory_servers=dir_servers,
         socks_host=tor_socks_host,
         socks_port=tor_socks_port,
         tor_control=tor_control_cfg,
