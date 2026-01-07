@@ -17,6 +17,7 @@ from typing import Any
 
 from jmcore.commitment_blacklist import add_commitment, check_commitment, set_blacklist_path
 from jmcore.crypto import NickIdentity
+from jmcore.deduplication import MessageDeduplicator
 from jmcore.directory_client import DirectoryClient, DirectoryClientError
 from jmcore.models import Offer
 from jmcore.network import HiddenServiceListener, TCPConnection
@@ -256,80 +257,6 @@ class OrderbookRateLimiter:
             "banned_peers": banned,
             "top_violators": top_violators,
         }
-
-
-class MessageDeduplicator:
-    """
-    Deduplicates messages received from multiple sources.
-
-    When makers are connected to N directory servers, they receive each message N times.
-    This class tracks recently-seen messages to:
-    1. Avoid processing duplicates (especially expensive operations like !auth, !tx)
-    2. Prevent rate limiter from counting duplicates as violations
-    3. Track which source each message came from for better logging
-
-    Design:
-    - Simple time-based deduplication window (default 30s)
-    - Message fingerprint: from_nick + command + first_arg (e.g., "alice!fill!order123")
-    - Tracks first source for each message to enable better logging
-    - Auto-cleanup of old entries to prevent memory leaks
-    """
-
-    def __init__(self, window_seconds: float = 30.0):
-        """
-        Initialize deduplicator.
-
-        Args:
-            window_seconds: How long to remember messages (default 30s)
-        """
-        self.window_seconds = window_seconds
-        # fingerprint -> (timestamp, source, count)
-        self._seen: dict[str, tuple[float, str, int]] = {}
-
-    def is_duplicate(self, fingerprint: str, source: str) -> tuple[bool, str, int]:
-        """
-        Check if this message is a duplicate.
-
-        Returns:
-            Tuple of (is_duplicate, first_source, total_count):
-            - is_duplicate: True if seen before within window
-            - first_source: Which source saw it first
-            - total_count: How many times we've seen this message
-        """
-        now = time.monotonic()
-        self._cleanup(now)
-
-        if fingerprint in self._seen:
-            first_time, first_source, count = self._seen[fingerprint]
-            # Update count
-            self._seen[fingerprint] = (first_time, first_source, count + 1)
-            return (True, first_source, count + 1)
-
-        # First time seeing this message
-        self._seen[fingerprint] = (now, source, 1)
-        return (False, source, 1)
-
-    def _cleanup(self, now: float) -> None:
-        """Remove entries older than the window."""
-        cutoff = now - self.window_seconds
-        expired = [fp for fp, (ts, _, _) in self._seen.items() if ts < cutoff]
-        for fp in expired:
-            del self._seen[fp]
-
-    @staticmethod
-    def make_fingerprint(from_nick: str, command: str, first_arg: str = "") -> str:
-        """
-        Create a message fingerprint for deduplication.
-
-        Args:
-            from_nick: Who sent the message
-            command: Command name (fill, auth, tx, etc.)
-            first_arg: First argument (e.g., order ID for fill)
-
-        Returns:
-            String fingerprint like "alice:fill:order123"
-        """
-        return f"{from_nick}:{command}:{first_arg}"
 
 
 class MakerBot:

@@ -590,6 +590,7 @@ services:
       - e2e
       - reference
       - reference-maker
+      - neutrino
       - all
 
   tor:
@@ -623,6 +624,7 @@ services:
       - e2e
       - reference
       - reference-maker
+      - neutrino
       - all
 
   # Init container for JAM config files

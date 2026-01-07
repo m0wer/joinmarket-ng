@@ -22,6 +22,7 @@ from typing import Any
 from jmcore.bitcoin import calculate_sweep_amount
 from jmcore.commitment_blacklist import set_blacklist_path
 from jmcore.crypto import NickIdentity
+from jmcore.deduplication import ResponseDeduplicator
 from jmcore.directory_client import DirectoryClient
 from jmcore.encryption import CryptoSession
 from jmcore.models import Offer
@@ -105,7 +106,6 @@ class MultiDirectoryClient:
             except Exception as e:
                 logger.warning(f"Failed to connect to {server}: {e}")
         return connected
-        return connected
 
     async def close_all(self) -> None:
         """Close all directory connections."""
@@ -159,9 +159,15 @@ class MultiDirectoryClient:
         - Makers may send !error messages instead of the expected response
         - These indicate protocol failures (e.g., blacklisted PoDLE commitment)
         - Errors are returned in the response dict with {"error": True, "data": "reason"}
+
+        Deduplication:
+        - When connected to multiple directory servers, the same response may arrive
+          multiple times. ResponseDeduplicator tracks which responses we've seen
+          and logs duplicates for debugging.
         """
         responses: dict[str, dict[str, Any]] = {}
         remaining_nicks = set(expected_nicks)
+        deduplicator = ResponseDeduplicator()
         start_time = asyncio.get_event_loop().time()
 
         while remaining_nicks:
@@ -172,7 +178,7 @@ class MultiDirectoryClient:
 
             remaining_time = min(5.0, timeout - elapsed)  # Listen in 5s chunks
 
-            for client in self.clients.values():
+            for server, client in self.clients.items():
                 try:
                     messages = await client.listen_for_messages(duration=remaining_time)
                     for msg in messages:
@@ -182,6 +188,10 @@ class MultiDirectoryClient:
                         if "!error" in line:
                             for nick in list(remaining_nicks):
                                 if nick in line:
+                                    # Deduplicate error responses too
+                                    if not deduplicator.add_response(nick, "error", line, server):
+                                        logger.debug(f"Duplicate !error from {nick} via {server}")
+                                        break
                                     # Extract error message after !error
                                     parts = line.split("!error", 1)
                                     error_msg = (
@@ -200,6 +210,14 @@ class MultiDirectoryClient:
                         # Match against remaining nicks
                         for nick in list(remaining_nicks):
                             if nick in line:
+                                # Check for duplicate response from another directory
+                                if not deduplicator.add_response(
+                                    nick, expected_command, line, server
+                                ):
+                                    logger.debug(
+                                        f"Duplicate {expected_command} from {nick} via {server}"
+                                    )
+                                    break
                                 # Extract data after the command
                                 parts = line.split(expected_command, 1)
                                 if len(parts) > 1:
@@ -213,6 +231,15 @@ class MultiDirectoryClient:
             # Check if we got all responses
             if not remaining_nicks:
                 break
+
+        # Log deduplication stats if there were duplicates
+        stats = deduplicator.stats
+        if stats.duplicates_dropped > 0:
+            logger.debug(
+                f"Response deduplication: {stats.unique_messages} unique, "
+                f"{stats.duplicates_dropped} duplicates dropped "
+                f"({stats.duplicate_rate:.1f}% duplicate rate)"
+            )
 
         return responses
 

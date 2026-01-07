@@ -1112,6 +1112,27 @@ jm-taker coinjoin --socks-host=127.0.0.1 --socks-port=9050 ...
 
 Implementation: `jmcore/src/jmcore/tor_control.py`
 
+### Multi-Channel Message Deduplication
+
+When connected to N directory servers, each message is received N times (once per server). The deduplication system prevents:
+1. Processing the same protocol message multiple times (expensive operations like `!auth`, `!tx`)
+2. Rate limiter counting duplicates as violations
+3. Log spam from duplicate messages
+
+**Message Fingerprinting**: Messages are identified by `from_nick:command:first_arg`:
+- `alice:fill:order123` - Fill request for order 123
+- `bob:pubkey:abc123` - Pubkey response
+
+**Time-Based Window**: Duplicates within a 30-second window are dropped. Window should exceed expected network latency variance between directory servers.
+
+**Implementation**:
+- **Maker** (`maker/bot.py`): Uses `MessageDeduplicator` from `jmcore.deduplication` to filter incoming messages before processing
+- **Taker** (`taker/taker.py`): Uses `ResponseDeduplicator` in `MultiDirectoryClient.wait_for_responses()` to collect unique responses
+
+**Orderbook Deduplication**: The taker's orderbook uses `(counterparty, oid)` as the key for offer deduplication, matching the reference implementation's approach.
+
+**Statistics**: Both deduplicators track stats (total processed, duplicates dropped, duplicate rate) for debugging multi-directory configurations.
+
 ---
 
 ## Development

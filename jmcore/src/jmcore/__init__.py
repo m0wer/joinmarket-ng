@@ -50,6 +50,11 @@ from jmcore.constants import (
     DUST_THRESHOLD,
     STANDARD_DUST_LIMIT,
 )
+from jmcore.deduplication import (
+    DeduplicationStats,
+    MessageDeduplicator,
+    ResponseDeduplicator,
+)
 from jmcore.directory_client import DirectoryClient, DirectoryClientError
 from jmcore.encryption import CryptoSession, NaclError
 from jmcore.models import (
@@ -117,6 +122,10 @@ __all__ = [
     "DEFAULT_DUST_THRESHOLD",
     "DUST_THRESHOLD",
     "STANDARD_DUST_LIMIT",
+    # Deduplication
+    "DeduplicationStats",
+    "MessageDeduplicator",
+    "ResponseDeduplicator",
     # Config
     "BackendConfig",
     "DirectoryServerConfig",
