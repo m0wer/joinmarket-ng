@@ -305,3 +305,125 @@ class TestDirectoryClientActiveNicks:
         assert isinstance(offers_ts[0], OfferWithTimestamp)
         assert offers_ts[0].bond_utxo_key == "bond:0"
         assert offers_ts[0].received_at > 0
+
+
+class TestDirectoryClientStalenessCleanup:
+    """Tests for staleness-based offer cleanup."""
+
+    def test_cleanup_stale_offers_removes_old_offers(self) -> None:
+        """Offers older than max_age_seconds should be removed."""
+        client = DirectoryClient(
+            host="test.onion",
+            port=5222,
+            network="regtest",
+        )
+
+        # Manually create an old offer by backdating the timestamp
+        offer = Offer(
+            counterparty="J5stale",
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="0.001",
+        )
+        old_timestamp = time.time() - 2000  # 33+ minutes ago
+        client.offers[("J5stale", 0)] = OfferWithTimestamp(offer, old_timestamp)
+
+        # Add a fresh offer
+        fresh_offer = Offer(
+            counterparty="J5fresh",
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="0.001",
+        )
+        client._store_offer(("J5fresh", 0), fresh_offer, None)
+
+        # Verify both exist
+        assert len(client.offers) == 2
+
+        # Run cleanup with 30 minute threshold
+        removed = client.cleanup_stale_offers(max_age_seconds=1800.0)
+
+        # Verify stale offer was removed, fresh one remains
+        assert removed == 1
+        assert len(client.offers) == 1
+        assert ("J5stale", 0) not in client.offers
+        assert ("J5fresh", 0) in client.offers
+
+    def test_cleanup_stale_offers_cleans_bond_mapping(self) -> None:
+        """Bond mapping should be cleaned up when stale offers are removed."""
+        client = DirectoryClient(
+            host="test.onion",
+            port=5222,
+            network="regtest",
+        )
+
+        # Create an old offer with a bond
+        offer = Offer(
+            counterparty="J5stale",
+            oid=0,
+            ordertype=OfferType.SW0_ABSOLUTE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="100",
+        )
+        bond_key = "stalebond:0"
+        old_timestamp = time.time() - 2000  # 33+ minutes ago
+        client.offers[("J5stale", 0)] = OfferWithTimestamp(offer, old_timestamp, bond_key)
+        client._bond_to_offers[bond_key] = {("J5stale", 0)}
+
+        # Verify bond mapping exists
+        assert bond_key in client._bond_to_offers
+
+        # Run cleanup
+        removed = client.cleanup_stale_offers(max_age_seconds=1800.0)
+
+        # Verify offer removed and bond mapping cleaned
+        assert removed == 1
+        assert bond_key not in client._bond_to_offers or len(client._bond_to_offers[bond_key]) == 0
+
+    def test_cleanup_stale_offers_respects_threshold(self) -> None:
+        """Offers younger than max_age_seconds should NOT be removed."""
+        client = DirectoryClient(
+            host="test.onion",
+            port=5222,
+            network="regtest",
+        )
+
+        # Create an offer just under the threshold
+        offer = Offer(
+            counterparty="J5recent",
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="0.001",
+        )
+        recent_timestamp = time.time() - 1700  # 28+ minutes ago (under 30 min threshold)
+        client.offers[("J5recent", 0)] = OfferWithTimestamp(offer, recent_timestamp)
+
+        # Run cleanup with 30 minute threshold
+        removed = client.cleanup_stale_offers(max_age_seconds=1800.0)
+
+        # Verify offer was NOT removed
+        assert removed == 0
+        assert len(client.offers) == 1
+        assert ("J5recent", 0) in client.offers
+
+    def test_cleanup_stale_offers_returns_zero_when_empty(self) -> None:
+        """Cleanup on empty offers dict should return 0."""
+        client = DirectoryClient(
+            host="test.onion",
+            port=5222,
+            network="regtest",
+        )
+
+        removed = client.cleanup_stale_offers(max_age_seconds=1800.0)
+        assert removed == 0

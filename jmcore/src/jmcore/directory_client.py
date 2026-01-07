@@ -1256,6 +1256,48 @@ class DirectoryClient:
         """Get set of nicks from the last peerlist update."""
         return set(self._active_peers.keys())
 
+    def cleanup_stale_offers(self, max_age_seconds: float = 1800.0) -> int:
+        """
+        Remove offers that haven't been re-announced within the staleness threshold.
+
+        This is a fallback cleanup mechanism for directories that don't support
+        GETPEERLIST (reference implementation). For offers with fidelity bonds,
+        bond-based deduplication handles most cases, but this catches offers
+        from makers that silently went offline.
+
+        Args:
+            max_age_seconds: Maximum age in seconds before an offer is considered stale.
+                Default is 30 minutes (1800 seconds).
+
+        Returns:
+            Number of stale offers removed
+        """
+        current_time = time.time()
+        stale_keys: list[tuple[str, int]] = []
+
+        for key, offer_data in self.offers.items():
+            age = current_time - offer_data.received_at
+            if age > max_age_seconds:
+                stale_keys.append(key)
+
+        removed = 0
+        for key in stale_keys:
+            offer_data = self.offers.pop(key, None)
+            if offer_data:
+                removed += 1
+                # Clean up bond mapping
+                if offer_data.bond_utxo_key and offer_data.bond_utxo_key in self._bond_to_offers:
+                    self._bond_to_offers[offer_data.bond_utxo_key].discard(key)
+                logger.debug(
+                    f"Removed stale offer from {key[0]} oid={key[1]} "
+                    f"(age={current_time - offer_data.received_at:.0f}s)"
+                )
+
+        if removed > 0:
+            logger.info(f"Cleaned up {removed} stale offers (older than {max_age_seconds}s)")
+
+        return removed
+
     def get_current_offers(self) -> list[Offer]:
         """Get the current list of cached offers."""
         return [offer_data.offer for offer_data in self.offers.values()]
