@@ -137,6 +137,46 @@ services:
       bitcoin:
         condition: service_healthy
 
+  # Second directory server for testing multi-directory scenarios
+  # This helps test:
+  # - Message deduplication when receiving from multiple directories
+  # - Rate limiting with legitimate duplicates
+  # - Network resilience when one directory goes down
+  directory2:
+    image: ${DIRECTORY_SERVER_IMAGE:-}
+    build:
+      context: .
+      dockerfile: directory_server/Dockerfile
+    container_name: jm-directory2
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    environment:
+      - NETWORK=testnet
+      - LOG_LEVEL=DEBUG
+      - PORT=5223
+      - HOST=0.0.0.0
+    ports:
+      - "5223:5223"
+    networks:
+      - jm-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s = socket.socket(); s.connect(('localhost', 5223)); s.close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      bitcoin:
+        condition: service_healthy
+    profiles:
+      - e2e
+      - reference
+      - neutrino
+      - all
+
   # Orderbook watcher (web UI for monitoring)
   orderbook-watcher:
     image: ${ORDERBOOK_WATCHER_IMAGE:-}
@@ -301,7 +341,7 @@ services:
       - BITCOIN_RPC_URL=http://jm-bitcoin:18443
       - BITCOIN_RPC_USER=test
       - BITCOIN_RPC_PASSWORD=test
-      - DIRECTORY_SERVERS=jm-directory:5222
+      - DIRECTORY_SERVERS=jm-directory:5222,jm-directory2:5223
       - LOG_LEVEL=DEBUG
       - MIN_SIZE=10000
       - TX_FEE_CONTRIBUTION=500
@@ -317,6 +357,8 @@ services:
       bitcoin:
         condition: service_healthy
       directory:
+        condition: service_healthy
+      directory2:
         condition: service_healthy
       wallet-funder:
         condition: service_completed_successfully
@@ -347,7 +389,7 @@ services:
       - BITCOIN_RPC_URL=http://jm-bitcoin:18443
       - BITCOIN_RPC_USER=test
       - BITCOIN_RPC_PASSWORD=test
-      - DIRECTORY_SERVERS=jm-directory:5222
+      - DIRECTORY_SERVERS=jm-directory:5222,jm-directory2:5223
       - LOG_LEVEL=DEBUG
       - MIN_SIZE=10000
       - TX_FEE_CONTRIBUTION=500
@@ -360,6 +402,66 @@ services:
       bitcoin:
         condition: service_healthy
       directory:
+        condition: service_healthy
+      directory2:
+        condition: service_healthy
+      wallet-funder:
+        condition: service_completed_successfully
+    profiles:
+      - e2e
+      - reference
+      - neutrino
+      - all
+
+  # Maker 3 for e2e tests (with Tor onion service for direct connections)
+  # This maker supports both directory routing AND direct onion connections
+  # Tests verify that takers can connect directly via Tor onion address
+  maker3:
+    image: ${MAKER_IMAGE:-}
+    build:
+      context: .
+      dockerfile: maker/Dockerfile
+    container_name: jm-maker3
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    environment:
+      - MNEMONIC=echo rural present blue chapter game keen keen keen keen keen keen
+      - NETWORK=testnet
+      - BITCOIN_NETWORK=regtest
+      - BACKEND_TYPE=full_node
+      - BITCOIN_RPC_URL=http://jm-bitcoin:18443
+      - BITCOIN_RPC_USER=test
+      - BITCOIN_RPC_PASSWORD=test
+      # Connect to both directories to test multi-directory handling
+      - DIRECTORY_SERVERS=jm-directory:5222,jm-directory2:5223
+      - LOG_LEVEL=DEBUG
+      - MIN_SIZE=10000
+      - TX_FEE_CONTRIBUTION=500
+      - CJ_FEE_RELATIVE=0.0002
+      # Tor configuration for direct connections
+      - TOR_SOCKS_HOST=jm-tor
+      - TOR_SOCKS_PORT=9050
+      - TOR_CONTROL_HOST=jm-tor
+      - TOR_CONTROL_PORT=9051
+      - ONION_SERVING_HOST=0.0.0.0
+      - ONION_SERVING_PORT=5000
+    volumes:
+      - maker3-data:/home/jm/.joinmarket-ng
+      - tor-data:/var/lib/tor:ro
+    networks:
+      - jm-network
+    depends_on:
+      bitcoin:
+        condition: service_healthy
+      directory:
+        condition: service_healthy
+      directory2:
+        condition: service_healthy
+      tor:
         condition: service_healthy
       wallet-funder:
         condition: service_completed_successfully
@@ -485,6 +587,7 @@ services:
     volumes:
       - tor-data:/var/lib/tor
     profiles:
+      - e2e
       - reference
       - reference-maker
       - all
@@ -517,6 +620,7 @@ services:
       tor-init:
         condition: service_completed_successfully
     profiles:
+      - e2e
       - reference
       - reference-maker
       - all
@@ -839,13 +943,14 @@ volumes:
   jam-data:
   jam-maker1-data:
   jam-maker2-data:
-  tor-data:
-  maker-data:
+  orderbook-watcher-data:
   maker1-data:
   maker2-data:
+  maker3-data:
   maker-neutrino-data:
   taker-data:
   taker-neutrino-data:
+  tor-data:
 
 networks:
   jm-network:

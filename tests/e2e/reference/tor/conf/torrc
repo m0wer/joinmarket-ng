@@ -6,6 +6,11 @@ Log notice stdout
 # Bind to all interfaces so Docker containers can connect
 SocksPort 0.0.0.0:9050
 
+# Control port for programmatic control (used by makers to create ephemeral hidden services)
+ControlPort 0.0.0.0:9051
+CookieAuthentication 1
+CookieAuthFile /var/lib/tor/control_auth_cookie
+
 # Hidden service for directory server
 HiddenServiceDir /var/lib/tor/directory
 HiddenServicePort 5222 jm-directory:5222

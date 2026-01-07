@@ -142,7 +142,7 @@ CMD ["sh", "-c", "\
     fi; \
     DIRECTORY_ARG=\"\"; \
     if [ -n \"${DIRECTORY_SERVERS}\" ]; then \
-        DIRECTORY_ARG=\"--directory-servers ${DIRECTORY_SERVERS}\"; \
+        DIRECTORY_ARG=\"--directory ${DIRECTORY_SERVERS}\"; \
     fi; \
     FEE_ARG=\"\"; \
     if [ -n \"${CJ_FEE_ABSOLUTE}\" ]; then \

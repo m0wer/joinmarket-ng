@@ -258,6 +258,80 @@ class OrderbookRateLimiter:
         }
 
 
+class MessageDeduplicator:
+    """
+    Deduplicates messages received from multiple sources.
+
+    When makers are connected to N directory servers, they receive each message N times.
+    This class tracks recently-seen messages to:
+    1. Avoid processing duplicates (especially expensive operations like !auth, !tx)
+    2. Prevent rate limiter from counting duplicates as violations
+    3. Track which source each message came from for better logging
+
+    Design:
+    - Simple time-based deduplication window (default 30s)
+    - Message fingerprint: from_nick + command + first_arg (e.g., "alice!fill!order123")
+    - Tracks first source for each message to enable better logging
+    - Auto-cleanup of old entries to prevent memory leaks
+    """
+
+    def __init__(self, window_seconds: float = 30.0):
+        """
+        Initialize deduplicator.
+
+        Args:
+            window_seconds: How long to remember messages (default 30s)
+        """
+        self.window_seconds = window_seconds
+        # fingerprint -> (timestamp, source, count)
+        self._seen: dict[str, tuple[float, str, int]] = {}
+
+    def is_duplicate(self, fingerprint: str, source: str) -> tuple[bool, str, int]:
+        """
+        Check if this message is a duplicate.
+
+        Returns:
+            Tuple of (is_duplicate, first_source, total_count):
+            - is_duplicate: True if seen before within window
+            - first_source: Which source saw it first
+            - total_count: How many times we've seen this message
+        """
+        now = time.monotonic()
+        self._cleanup(now)
+
+        if fingerprint in self._seen:
+            first_time, first_source, count = self._seen[fingerprint]
+            # Update count
+            self._seen[fingerprint] = (first_time, first_source, count + 1)
+            return (True, first_source, count + 1)
+
+        # First time seeing this message
+        self._seen[fingerprint] = (now, source, 1)
+        return (False, source, 1)
+
+    def _cleanup(self, now: float) -> None:
+        """Remove entries older than the window."""
+        cutoff = now - self.window_seconds
+        expired = [fp for fp, (ts, _, _) in self._seen.items() if ts < cutoff]
+        for fp in expired:
+            del self._seen[fp]
+
+    @staticmethod
+    def make_fingerprint(from_nick: str, command: str, first_arg: str = "") -> str:
+        """
+        Create a message fingerprint for deduplication.
+
+        Args:
+            from_nick: Who sent the message
+            command: Command name (fill, auth, tx, etc.)
+            first_arg: First argument (e.g., order ID for fill)
+
+        Returns:
+            String fingerprint like "alice:fill:order123"
+        """
+        return f"{from_nick}:{command}:{first_arg}"
+
+
 class MakerBot:
     """
     Main maker bot coordinating all components.
@@ -288,6 +362,12 @@ class MakerBot:
         self.running = False
         self.listen_tasks: list[asyncio.Task[None]] = []
 
+        # Lock to prevent concurrent processing of the same session
+        # Key: taker_nick, Value: asyncio.Lock
+        # This prevents race conditions when duplicate messages arrive via multiple
+        # directory servers or direct connections
+        self._session_locks: dict[str, asyncio.Lock] = {}
+
         # Hidden service listener for direct peer connections
         self.hidden_service_listener: HiddenServiceListener | None = None
         self.direct_connections: dict[str, TCPConnection] = {}
@@ -312,6 +392,10 @@ class MakerBot:
             violation_severe_threshold=config.orderbook_violation_severe_threshold,
             ban_duration=config.orderbook_ban_duration,
         )
+
+        # Message deduplicator to handle receiving same message from multiple directories
+        # This prevents processing duplicates and avoids false rate limit violations
+        self._message_deduplicator = MessageDeduplicator(window_seconds=30.0)
 
     async def _setup_tor_hidden_service(self) -> str | None:
         """
@@ -402,6 +486,34 @@ class MakerBot:
                 logger.warning(f"Error closing Tor control connection: {e}")
             self._tor_control = None
             self._ephemeral_hidden_service = None
+
+    async def _regenerate_nick(self) -> None:
+        """
+        Regenerate nick identity for privacy.
+
+        This should be called:
+        1. After a successful CoinJoin (to prevent linking multiple CJs)
+        2. When offers are updated due to wallet changes (new funds, etc.)
+
+        Benefits:
+        - Prevents takers from tracking maker activity across multiple CoinJoins
+        - Makes it harder to correlate orderbook changes with specific makers
+        - Improves overall privacy without affecting functionality
+
+        Note: Offers will need to be recreated with the new nick.
+        """
+        old_nick = self.nick
+
+        # Generate new identity
+        self.nick_identity = NickIdentity(JM_VERSION)
+        self.nick = self.nick_identity.nick
+
+        # Update offer manager's nick (don't recreate to preserve mocks in tests)
+        self.offer_manager.maker_nick = self.nick
+
+        logger.info(f"Regenerated nick for privacy: {old_nick} -> {self.nick}")
+
+        # Note: Offers are recreated by the caller (usually _update_offers)
 
     async def start(self) -> None:
         """
@@ -711,6 +823,16 @@ class MakerBot:
         await self.wallet.close()
         logger.info("Maker bot stopped")
 
+    def _get_session_lock(self, taker_nick: str) -> asyncio.Lock:
+        """Get or create a lock for a session to prevent concurrent processing."""
+        if taker_nick not in self._session_locks:
+            self._session_locks[taker_nick] = asyncio.Lock()
+        return self._session_locks[taker_nick]
+
+    def _cleanup_session_lock(self, taker_nick: str) -> None:
+        """Clean up session lock when session is removed."""
+        self._session_locks.pop(taker_nick, None)
+
     def _cleanup_timed_out_sessions(self) -> None:
         """Remove timed-out sessions from active_sessions and clean up rate limiter."""
         timed_out = [
@@ -724,6 +846,7 @@ class MakerBot:
                 f"Cleaning up timed-out session with {nick} (state: {session.state}, age: {age}s)"
             )
             del self.active_sessions[nick]
+            self._cleanup_session_lock(nick)
 
         # Periodically cleanup old rate limiter entries to prevent memory growth
         self._orderbook_rate_limiter.cleanup_old_entries()
@@ -795,6 +918,14 @@ class MakerBot:
                 if old_maxsize == new_maxsize:
                     logger.debug("Offer maxsize unchanged, skipping re-announcement")
                     return
+
+            # Regenerate nick when offers change for additional privacy
+            # This makes it harder for observers to track maker activity over time
+            await self._regenerate_nick()
+
+            # Update offers with new nick (OfferManager.maker_nick was updated by _regenerate_nick)
+            for offer in new_offers:
+                offer.counterparty = self.nick
 
             self.current_offers = new_offers
             await self._announce_offers()
@@ -1148,7 +1279,7 @@ class MakerBot:
                 messages = await client.listen_for_messages(duration=1.0)
 
                 for message in messages:
-                    await self._handle_message(message)
+                    await self._handle_message(message, source=f"dir:{node_id}")
 
                 # Periodic cleanup of timed-out sessions
                 now = asyncio.get_event_loop().time()
@@ -1169,8 +1300,14 @@ class MakerBot:
 
         logger.info(f"Stopped listening on {node_id}")
 
-    async def _handle_message(self, message: dict[str, Any]) -> None:
-        """Handle incoming message from directory"""
+    async def _handle_message(self, message: dict[str, Any], source: str = "unknown") -> None:
+        """
+        Handle incoming message from directory or direct connection.
+
+        Args:
+            message: Message dict with 'type' and 'line' keys
+            source: Message source for logging (e.g., "dir:node1", "direct:alice")
+        """
         try:
             from jmcore.protocol import MessageType
 
@@ -1179,23 +1316,63 @@ class MakerBot:
 
             # Extract from_nick for rate limiting (format: from_nick!to_nick!msg)
             parts = line.split(COMMAND_PREFIX)
-            if len(parts) >= 1:
-                from_nick = parts[0]
+            if len(parts) < 1:
+                return
 
-                # Apply generic per-peer rate limiting
-                if not self._message_rate_limiter.check(from_nick):
-                    violations = self._message_rate_limiter.get_violation_count(from_nick)
-                    # Only log every 50th violation to prevent log flooding
-                    if violations % 50 == 0:
-                        logger.warning(
-                            f"Rate limit exceeded for {from_nick} ({violations} violations total)"
-                        )
-                    return  # Drop the message
+            from_nick = parts[0]
 
-            if msg_type == MessageType.PRIVMSG.value:
-                await self._handle_privmsg(line)
+            # Create message fingerprint for deduplication
+            # For private messages: use command (fill, auth, tx, etc.)
+            # For public messages: use the whole message
+            fingerprint = ""
+            command = ""
+
+            if msg_type == MessageType.PRIVMSG.value and len(parts) >= 3:
+                # Format: from!to!command args...
+                cmd_and_args = COMMAND_PREFIX.join(parts[2:])
+                cmd_parts = cmd_and_args.strip().split(maxsplit=1)
+                command = cmd_parts[0].lstrip("!")
+                first_arg = cmd_parts[1].split()[0] if len(cmd_parts) > 1 else ""
+                fingerprint = MessageDeduplicator.make_fingerprint(from_nick, command, first_arg)
             elif msg_type == MessageType.PUBMSG.value:
-                await self._handle_pubmsg(line)
+                # For public messages, use the whole message as fingerprint
+                fingerprint = MessageDeduplicator.make_fingerprint(
+                    from_nick, "pubmsg", line[len(from_nick) :]
+                )
+
+            # Check for duplicates
+            if fingerprint:
+                is_dup, first_source, count = self._message_deduplicator.is_duplicate(
+                    fingerprint, source
+                )
+                if is_dup:
+                    # This is a duplicate - log and skip processing
+                    # Only log first few duplicates to avoid spam
+                    if count <= 3:
+                        logger.debug(
+                            f"Duplicate message #{count} from {from_nick} "
+                            f"via {source} (first via {first_source}): {command or 'pubmsg'}"
+                        )
+                    return
+
+            # Apply generic per-peer rate limiting (only for non-duplicates)
+            action, _delay = self._message_rate_limiter.check(from_nick)
+            from jmcore.rate_limiter import RateLimitAction
+
+            if action != RateLimitAction.ALLOW:
+                violations = self._message_rate_limiter.get_violation_count(from_nick)
+                # Only log every 50th violation to prevent log flooding
+                if violations % 50 == 0:
+                    logger.warning(
+                        f"Rate limit exceeded for {from_nick} ({violations} violations total)"
+                    )
+                return  # Drop the message
+
+            # Process the message
+            if msg_type == MessageType.PRIVMSG.value:
+                await self._handle_privmsg(line, source=source)
+            elif msg_type == MessageType.PUBMSG.value:
+                await self._handle_pubmsg(line, source=source)
             elif msg_type == MessageType.PEERLIST.value:
                 logger.debug(f"Received peerlist: {line[:50]}...")
             else:
@@ -1204,8 +1381,14 @@ class MakerBot:
         except Exception as e:
             logger.error(f"Failed to handle message: {e}")
 
-    async def _handle_pubmsg(self, line: str) -> None:
-        """Handle public message (e.g., !orderbook request)"""
+    async def _handle_pubmsg(self, line: str, source: str = "unknown") -> None:
+        """
+        Handle public message (e.g., !orderbook request).
+
+        Args:
+            line: Message line in format "from_nick!to_nick!msg"
+            source: Message source for logging (e.g., "dir:node1")
+        """
         try:
             parts = line.split(COMMAND_PREFIX)
             if len(parts) < 3:
@@ -1323,8 +1506,14 @@ class MakerBot:
         except Exception as e:
             logger.error(f"Failed to send offers to taker {taker_nick}: {e}")
 
-    async def _handle_privmsg(self, line: str) -> None:
-        """Handle private message (CoinJoin protocol)"""
+    async def _handle_privmsg(self, line: str, source: str = "unknown") -> None:
+        """
+        Handle private message (CoinJoin protocol).
+
+        Args:
+            line: Message line in format "from_nick!to_nick!msg"
+            source: Message source for logging (e.g., "dir:node1", "direct:alice")
+        """
         try:
             parts = line.split(COMMAND_PREFIX)
             if len(parts) < 3:
@@ -1429,91 +1618,111 @@ class MakerBot:
 
         After decryption, the plaintext is pipe-separated:
         txid:vout|P|P2|sig|e
+
+        Note: The taker sends !auth via all directory servers, so we may receive
+        duplicates. We use a lock per session to ensure only one message is
+        processed at a time, and check state early to reject duplicates.
         """
-        try:
-            if taker_nick not in self.active_sessions:
-                logger.warning(f"No active session for {taker_nick}")
-                return
-
-            session = self.active_sessions[taker_nick]
-
-            logger.info(f"Received !auth from {taker_nick}, decrypting and verifying PoDLE...")
-
-            # Parse: auth <encrypted_base64> [<signing_pk> <sig>]
-            parts = msg.split()
-            if len(parts) < 2:
-                logger.error("Invalid !auth format: missing encrypted data")
-                return
-
-            encrypted_data = parts[1]
-
-            # Decrypt the auth message
-            if not session.crypto.is_encrypted:
-                logger.error("Encryption not set up for this session")
-                return
-
+        # Acquire lock for this session to prevent concurrent processing
+        lock = self._get_session_lock(taker_nick)
+        async with lock:
             try:
-                decrypted = session.crypto.decrypt(encrypted_data)
-                logger.debug(f"Decrypted auth message length: {len(decrypted)}")
-            except Exception as e:
-                logger.error(f"Failed to decrypt auth message: {e}")
-                return
+                if taker_nick not in self.active_sessions:
+                    logger.warning(f"No active session for {taker_nick}")
+                    return
 
-            # Parse the decrypted revelation - pipe-separated format:
-            # txid:vout|P|P2|sig|e
-            try:
-                revelation_parts = decrypted.split("|")
-                if len(revelation_parts) != 5:
-                    logger.error(
-                        f"Invalid revelation format: expected 5 parts, got {len(revelation_parts)}"
+                session = self.active_sessions[taker_nick]
+
+                # Early state check to reject duplicate !auth messages
+                # This happens when taker sends via multiple directory servers
+                from maker.coinjoin import CoinJoinState
+
+                if session.state != CoinJoinState.PUBKEY_SENT:
+                    logger.debug(
+                        f"Ignoring duplicate !auth from {taker_nick} "
+                        f"(state={session.state}, expected=PUBKEY_SENT)"
                     )
                     return
 
-                utxo_str, p_hex, p2_hex, sig_hex, e_hex = revelation_parts
+                logger.info(f"Received !auth from {taker_nick}, decrypting and verifying PoDLE...")
 
-                # Parse utxo
-                if ":" not in utxo_str:
-                    logger.error(f"Invalid utxo format: {utxo_str}")
+                # Parse: auth <encrypted_base64> [<signing_pk> <sig>]
+                parts = msg.split()
+                if len(parts) < 2:
+                    logger.error("Invalid !auth format: missing encrypted data")
                     return
 
-                # Validate utxo format (txid:vout)
-                if not utxo_str.rsplit(":", 1)[1].isdigit():
-                    logger.error(f"Invalid vout in utxo: {utxo_str}")
+                encrypted_data = parts[1]
+
+                # Decrypt the auth message
+                if not session.crypto.is_encrypted:
+                    logger.error("Encryption not set up for this session")
                     return
 
-                # parse_podle_revelation expects hex strings, not bytes
-                revelation = {
-                    "utxo": utxo_str,
-                    "P": p_hex,
-                    "P2": p2_hex,
-                    "sig": sig_hex,
-                    "e": e_hex,
-                }
-                logger.debug(f"Parsed revelation: utxo={utxo_str}, P={p_hex[:16]}...")
+                try:
+                    decrypted = session.crypto.decrypt(encrypted_data)
+                    logger.debug(f"Decrypted auth message length: {len(decrypted)}")
+                except Exception as e:
+                    logger.error(f"Failed to decrypt auth message: {e}")
+                    return
+
+                # Parse the decrypted revelation - pipe-separated format:
+                # txid:vout|P|P2|sig|e
+                try:
+                    revelation_parts = decrypted.split("|")
+                    if len(revelation_parts) != 5:
+                        logger.error(
+                            f"Invalid revelation format: expected 5 parts, "
+                            f"got {len(revelation_parts)}"
+                        )
+                        return
+
+                    utxo_str, p_hex, p2_hex, sig_hex, e_hex = revelation_parts
+
+                    # Parse utxo
+                    if ":" not in utxo_str:
+                        logger.error(f"Invalid utxo format: {utxo_str}")
+                        return
+
+                    # Validate utxo format (txid:vout)
+                    if not utxo_str.rsplit(":", 1)[1].isdigit():
+                        logger.error(f"Invalid vout in utxo: {utxo_str}")
+                        return
+
+                    # parse_podle_revelation expects hex strings, not bytes
+                    revelation = {
+                        "utxo": utxo_str,
+                        "P": p_hex,
+                        "P2": p2_hex,
+                        "sig": sig_hex,
+                        "e": e_hex,
+                    }
+                    logger.debug(f"Parsed revelation: utxo={utxo_str}, P={p_hex[:16]}...")
+                except Exception as e:
+                    logger.error(f"Failed to parse revelation: {e}")
+                    return
+
+                # The commitment was already stored from the !fill message
+                commitment = self.active_sessions[taker_nick].commitment.hex()
+
+                # kphex is empty for now - we don't use it yet
+                kphex = ""
+
+                success, response = await session.handle_auth(commitment, revelation, kphex)
+
+                if success:
+                    await self._send_response(taker_nick, "ioauth", response)
+
+                    # Broadcast the commitment via hp2 so other makers can blacklist it
+                    # This prevents reuse of commitments in future CoinJoin attempts
+                    await self._broadcast_commitment(commitment)
+                else:
+                    logger.error(f"Auth failed: {response.get('error')}")
+                    del self.active_sessions[taker_nick]
+                    self._cleanup_session_lock(taker_nick)
+
             except Exception as e:
-                logger.error(f"Failed to parse revelation: {e}")
-                return
-
-            # The commitment was already stored from the !fill message
-            commitment = self.active_sessions[taker_nick].commitment.hex()
-
-            # kphex is empty for now - we don't use it yet
-            kphex = ""
-
-            success, response = await session.handle_auth(commitment, revelation, kphex)
-
-            if success:
-                await self._send_response(taker_nick, "ioauth", response)
-
-                # Broadcast the commitment via hp2 so other makers can blacklist it
-                # This prevents reuse of commitments in future CoinJoin attempts
-                await self._broadcast_commitment(commitment)
-            else:
-                logger.error(f"Auth failed: {response.get('error')}")
-                del self.active_sessions[taker_nick]
-
-        except Exception as e:
-            logger.error(f"Failed to handle !auth: {e}")
+                logger.error(f"Failed to handle !auth: {e}")
 
     async def _handle_tx(self, taker_nick: str, msg: str) -> None:
         """Handle !tx request from taker.
@@ -1522,89 +1731,118 @@ class MakerBot:
         Format: tx <encrypted_base64> [<signing_pk> <sig>]
 
         After decryption, the plaintext is base64-encoded transaction bytes.
+
+        Note: The taker sends !tx via all directory servers, so we may receive
+        duplicates. We use a lock per session to ensure only one message is
+        processed at a time, and check state early to reject duplicates.
         """
-        try:
-            if taker_nick not in self.active_sessions:
-                logger.warning(f"No active session for {taker_nick}")
-                return
-
-            session = self.active_sessions[taker_nick]
-
-            logger.info(f"Received !tx from {taker_nick}, decrypting and verifying transaction...")
-
-            # Parse: tx <encrypted_base64> [<signing_pk> <sig>]
-            parts = msg.split()
-            if len(parts) < 2:
-                logger.warning("Invalid !tx format")
-                return
-
-            encrypted_data = parts[1]
-
-            # Decrypt the tx message
-            if not session.crypto.is_encrypted:
-                logger.error("Encryption not set up for this session")
-                return
-
+        # Acquire lock for this session to prevent concurrent processing
+        lock = self._get_session_lock(taker_nick)
+        async with lock:
             try:
-                decrypted = session.crypto.decrypt(encrypted_data)
-                logger.debug(f"Decrypted tx message length: {len(decrypted)}")
-            except Exception as e:
-                logger.error(f"Failed to decrypt tx message: {e}")
-                return
+                if taker_nick not in self.active_sessions:
+                    logger.warning(f"No active session for {taker_nick}")
+                    return
 
-            # The decrypted content is base64-encoded transaction
-            import base64
+                session = self.active_sessions[taker_nick]
 
-            try:
-                tx_bytes = base64.b64decode(decrypted)
-                tx_hex = tx_bytes.hex()
-            except Exception as e:
-                logger.error(f"Failed to decode transaction: {e}")
-                return
+                # Early state check to reject duplicate !tx messages
+                # This happens when taker sends via multiple directory servers
+                from maker.coinjoin import CoinJoinState
 
-            success, response = await session.handle_tx(tx_hex)
-
-            if success:
-                # Send each signature as a separate message
-                signatures = response.get("signatures", [])
-                for sig in signatures:
-                    await self._send_response(taker_nick, "sig", {"signature": sig})
-                logger.info(f"CoinJoin with {taker_nick} COMPLETE ✓ (sent {len(signatures)} sigs)")
-
-                # Record transaction in history
-                try:
-                    fee_received = session.offer.calculate_fee(session.amount)
-                    txfee_contribution = session.offer.txfee
-                    our_utxos = list(session.our_utxos.keys())
-
-                    history_entry = create_maker_history_entry(
-                        taker_nick=taker_nick,
-                        cj_amount=session.amount,
-                        fee_received=fee_received,
-                        txfee_contribution=txfee_contribution,
-                        cj_address=session.cj_address,
-                        change_address=session.change_address,
-                        our_utxos=our_utxos,
-                        txid=response.get("txid"),
-                        network=self.config.network.value,
+                if session.state != CoinJoinState.IOAUTH_SENT:
+                    logger.debug(
+                        f"Ignoring duplicate !tx from {taker_nick} "
+                        f"(state={session.state}, expected=IOAUTH_SENT)"
                     )
-                    append_history_entry(history_entry, data_dir=self.config.data_dir)
-                    net = fee_received - txfee_contribution
-                    logger.debug(f"Recorded CoinJoin in history: net fee {net} sats")
+                    return
+
+                logger.info(
+                    f"Received !tx from {taker_nick}, decrypting and verifying transaction..."
+                )
+
+                # Parse: tx <encrypted_base64> [<signing_pk> <sig>]
+                parts = msg.split()
+                if len(parts) < 2:
+                    logger.warning("Invalid !tx format")
+                    return
+
+                encrypted_data = parts[1]
+
+                # Decrypt the tx message
+                if not session.crypto.is_encrypted:
+                    logger.error("Encryption not set up for this session")
+                    return
+
+                try:
+                    decrypted = session.crypto.decrypt(encrypted_data)
+                    logger.debug(f"Decrypted tx message length: {len(decrypted)}")
                 except Exception as e:
-                    logger.warning(f"Failed to record CoinJoin history: {e}")
+                    logger.error(f"Failed to decrypt tx message: {e}")
+                    return
 
-                del self.active_sessions[taker_nick]
+                # The decrypted content is base64-encoded transaction
+                import base64
 
-                # Schedule wallet re-sync in background to avoid blocking !push handling
-                # The transaction hasn't been broadcast yet, so we should not block here
-                asyncio.create_task(self._deferred_wallet_resync())
-            else:
-                logger.error(f"TX verification failed: {response.get('error')}")
-                del self.active_sessions[taker_nick]
+                try:
+                    tx_bytes = base64.b64decode(decrypted)
+                    tx_hex = tx_bytes.hex()
+                except Exception as e:
+                    logger.error(f"Failed to decode transaction: {e}")
+                    return
 
-        except Exception as e:
-            logger.error(f"Failed to handle !tx: {e}")
+                success, response = await session.handle_tx(tx_hex)
+
+                if success:
+                    # Send each signature as a separate message
+                    signatures = response.get("signatures", [])
+                    for sig in signatures:
+                        await self._send_response(taker_nick, "sig", {"signature": sig})
+                    logger.info(
+                        f"CoinJoin with {taker_nick} COMPLETE (sent {len(signatures)} sigs)"
+                    )
+
+                    # Record transaction in history
+                    try:
+                        fee_received = session.offer.calculate_fee(session.amount)
+                        txfee_contribution = session.offer.txfee
+                        our_utxos = list(session.our_utxos.keys())
+
+                        history_entry = create_maker_history_entry(
+                            taker_nick=taker_nick,
+                            cj_amount=session.amount,
+                            fee_received=fee_received,
+                            txfee_contribution=txfee_contribution,
+                            cj_address=session.cj_address,
+                            change_address=session.change_address,
+                            our_utxos=our_utxos,
+                            txid=response.get("txid"),
+                            network=self.config.network.value,
+                        )
+                        append_history_entry(history_entry, data_dir=self.config.data_dir)
+                        net = fee_received - txfee_contribution
+                        logger.debug(f"Recorded CoinJoin in history: net fee {net} sats")
+                    except Exception as e:
+                        logger.warning(f"Failed to record CoinJoin history: {e}")
+
+                    del self.active_sessions[taker_nick]
+                    self._cleanup_session_lock(taker_nick)
+
+                    # Regenerate nick for privacy after successful CoinJoin
+                    # This prevents linking this maker across multiple CoinJoins
+                    await self._regenerate_nick()
+
+                    # Schedule wallet re-sync in background to avoid blocking !push handling
+                    # The transaction hasn't been broadcast yet, so we should not block here
+                    # After re-sync, offers will be updated with the new nick
+                    asyncio.create_task(self._deferred_wallet_resync())
+                else:
+                    logger.error(f"TX verification failed: {response.get('error')}")
+                    del self.active_sessions[taker_nick]
+                    self._cleanup_session_lock(taker_nick)
+
+            except Exception as e:
+                logger.error(f"Failed to handle !tx: {e}")
 
     async def _handle_push(self, taker_nick: str, msg: str) -> None:
         """Handle !push request from taker.
@@ -1815,12 +2053,81 @@ class MakerBot:
         except Exception as e:
             logger.error(f"Failed to send response: {e}")
 
+    def _parse_direct_message(self, data: bytes) -> tuple[str, str, str] | None:
+        """Parse a direct connection message supporting both formats.
+
+        The reference implementation uses OnionCustomMessage format:
+            {"type": 685, "line": "from_nick!to_nick!command data"}
+        Where type 685 = PRIVMSG.
+
+        Our internal format (for future use):
+            {"nick": "sender", "cmd": "command", "data": "..."}
+
+        Returns:
+            (sender_nick, command, message_data) tuple or None if parsing fails.
+        """
+        try:
+            message = json.loads(data.decode("utf-8"))
+        except json.JSONDecodeError:
+            return None
+
+        # Check for reference implementation format: {"type": int, "line": str}
+        if "type" in message and "line" in message:
+            from jmcore.protocol import MessageType
+
+            msg_type = message.get("type")
+            line = message.get("line", "")
+
+            # Only handle PRIVMSG for CoinJoin protocol
+            if msg_type != MessageType.PRIVMSG.value:
+                logger.debug(f"Ignoring non-PRIVMSG type {msg_type} on direct connection")
+                return None
+
+            # Parse line format: from_nick!to_nick!command data
+            parts = line.split(COMMAND_PREFIX)
+            if len(parts) < 3:
+                logger.warning(f"Invalid line format: {line[:50]}...")
+                return None
+
+            sender_nick = parts[0]
+            to_nick = parts[1]
+            rest = COMMAND_PREFIX.join(parts[2:])
+
+            # Check if message is for us
+            if to_nick != self.nick:
+                logger.debug(f"Ignoring message not for us: to={to_nick}, us={self.nick}")
+                return None
+
+            # Strip leading "!" and parse command
+            rest = rest.strip().lstrip("!")
+
+            # Extract command and data
+            cmd_parts = rest.split(" ", 1)
+            cmd = cmd_parts[0]
+            msg_data = cmd_parts[1] if len(cmd_parts) > 1 else ""
+
+            return (sender_nick, cmd, msg_data)
+
+        # Check for our internal format: {"nick": str, "cmd": str, "data": str}
+        elif "nick" in message or "cmd" in message:
+            sender_nick = message.get("nick", "unknown")
+            cmd = message.get("cmd", "")
+            msg_data = message.get("data", "")
+            return (sender_nick, cmd, msg_data)
+
+        return None
+
     async def _on_direct_connection(self, connection: TCPConnection, peer_str: str) -> None:
         """Handle incoming direct connection from a taker via hidden service.
 
-        Direct connections use a simplified protocol compared to directory messages:
-        - Messages are sent as newline-delimited JSON over TCP
-        - Format: {"nick": "sender", "cmd": "command", "data": "..."}
+        Direct connections support two message formats:
+
+        1. Reference implementation format (OnionCustomMessage):
+           {"type": 685, "line": "from_nick!to_nick!command data"}
+           Where type 685 = PRIVMSG.
+
+        2. Our simplified format:
+           {"nick": "sender", "cmd": "command", "data": "..."}
 
         This bypasses the directory server for lower latency once the taker
         knows the maker's onion address (from the peerlist).
@@ -1837,21 +2144,18 @@ class MakerBot:
                         logger.info(f"Direct connection from {peer_str} closed")
                         break
 
-                    # Parse the message
-                    try:
-                        message = json.loads(data.decode("utf-8"))
-                    except json.JSONDecodeError as e:
-                        logger.warning(f"Invalid JSON from {peer_str}: {e}")
+                    # Parse the message (supports both formats)
+                    parsed = self._parse_direct_message(data)
+                    if parsed is None:
+                        logger.warning(f"Failed to parse direct message from {peer_str}")
                         continue
 
-                    sender_nick = message.get("nick", "unknown")
-                    cmd = message.get("cmd", "")
-                    msg_data = message.get("data", "")
+                    sender_nick, cmd, msg_data = parsed
 
                     logger.debug(f"Direct message from {sender_nick}: cmd={cmd}")
 
                     # Track this connection by nick for sending responses
-                    if sender_nick != "unknown":
+                    if sender_nick and sender_nick != "unknown":
                         self.direct_connections[sender_nick] = connection
 
                     # Process the command - reuse existing handlers
