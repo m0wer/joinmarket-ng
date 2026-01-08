@@ -526,6 +526,18 @@ class DirectoryClient:
                     return []
 
         peerlist_str = response["line"]
+        return self._handle_peerlist_response(peerlist_str)
+
+    def _handle_peerlist_response(self, peerlist_str: str) -> list[tuple[str, str, FeatureSet]]:
+        """
+        Process a PEERLIST response and update internal state.
+
+        Args:
+            peerlist_str: Comma-separated list of peer entries
+
+        Returns:
+            List of active peers (nick, location, features)
+        """
         logger.debug(f"Peerlist string: {peerlist_str}")
 
         # Mark peerlist as supported since we got a valid response
@@ -989,6 +1001,14 @@ class DirectoryClient:
                 msg_type = message.get("type")
                 line = message.get("line", "")
 
+                # Handle PEERLIST responses (from periodic or automatic requests)
+                if msg_type == MessageType.PEERLIST.value:
+                    try:
+                        self._handle_peerlist_response(line)
+                    except Exception as e:
+                        logger.debug(f"Failed to process PEERLIST: {e}")
+                    continue
+
                 # Process PUBMSG and PRIVMSG to update offers/bonds cache
                 # Reference implementation sends offer responses to !orderbook via PRIVMSG
                 if msg_type in (MessageType.PUBMSG.value, MessageType.PRIVMSG.value):
@@ -1002,23 +1022,16 @@ class DirectoryClient:
                             # Accept PUBLIC broadcasts or messages addressed to us
                             if to_nick == "PUBLIC" or to_nick == self.nick:
                                 # If we don't have features for this peer, it's a new peer.
-                                # We can try to refresh peerlist, but respect rate limits
-                                # and don't spam if directory doesn't support it.
+                                # Track them with empty features for now - we'll get their features
+                                # from the initial peerlist or from their offer messages
                                 is_new_peer = from_nick not in self.peer_features
                                 current_time = time.time()
 
-                                if is_new_peer and self._peerlist_supported is not False:
-                                    # Only refresh peerlist if we haven't recently
-                                    # (get_peerlist_with_features has its own rate limiting)
-                                    try:
-                                        await self.get_peerlist_with_features()
-                                        if self._peerlist_supported:
-                                            logger.debug(
-                                                f"Refreshed peerlist (new peer: {from_nick}), "
-                                                f"now tracking {len(self.peer_features)} peers"
-                                            )
-                                    except Exception as e:
-                                        logger.debug(f"Failed to refresh peerlist: {e}")
+                                if is_new_peer:
+                                    # Track new peer with empty features
+                                    # Features will be populated from offer messages or peerlist
+                                    self.peer_features[from_nick] = {}
+                                    logger.debug(f"Discovered new peer: {from_nick}")
 
                                     # Request orderbook from new peer (rate-limited)
                                     if (
@@ -1282,15 +1295,18 @@ class DirectoryClient:
 
         removed = 0
         for key in stale_keys:
-            offer_data = self.offers.pop(key, None)
-            if offer_data:
+            removed_offer: OfferWithTimestamp | None = self.offers.pop(key, None)
+            if removed_offer:
                 removed += 1
                 # Clean up bond mapping
-                if offer_data.bond_utxo_key and offer_data.bond_utxo_key in self._bond_to_offers:
-                    self._bond_to_offers[offer_data.bond_utxo_key].discard(key)
+                if (
+                    removed_offer.bond_utxo_key
+                    and removed_offer.bond_utxo_key in self._bond_to_offers
+                ):
+                    self._bond_to_offers[removed_offer.bond_utxo_key].discard(key)
                 logger.debug(
                     f"Removed stale offer from {key[0]} oid={key[1]} "
-                    f"(age={current_time - offer_data.received_at:.0f}s)"
+                    f"(age={current_time - removed_offer.received_at:.0f}s)"
                 )
 
         if removed > 0:
