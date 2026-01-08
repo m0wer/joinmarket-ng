@@ -78,3 +78,36 @@ def test_passphrase_compatibility():
     )
 
     assert seed.hex() == expected_seed_hex, "Should match BIP39 test vector"
+
+
+def test_bip39_mnemonic_import_with_passphrase():
+    """Test importing a specific BIP39 mnemonic with passphrase and verify zpub and address."""
+    # 24-word mnemonic
+    mnemonic = (
+        "actress inmate filter october eagle floor conduct issue rail nominee mixture kid "
+        "tunnel thought list tower lobster route ghost cigar bundle oak fiscal pulse"
+    )
+    passphrase = "test"
+
+    # Generate seed from mnemonic with passphrase
+    seed = mnemonic_to_seed(mnemonic, passphrase)
+    master_key = HDKey.from_seed(seed)
+
+    # Derive BIP84 account key (m/84'/0'/0')
+    account_key = master_key.derive("m/84'/0'/0'")
+
+    # Verify zpub matches expected value
+    zpub = account_key.get_zpub("mainnet")
+    expected_zpub = (
+        "zpub6s3NLrmr3UN8Z5oWuFMozCWGHNKYPvHNB15pmjaVvHhniwa8fxoBwZmtEGro74sk8affDh"
+        "hrehteRWW48DXBTZbUDsutkmTXsGru1TTuNy1"
+    )
+    assert zpub == expected_zpub, f"zpub mismatch: got {zpub}"
+
+    # Derive first receiving address (m/84'/0'/0'/0/0)
+    first_address_key = account_key.derive("m/0/0")
+    first_address = first_address_key.get_address("mainnet")
+
+    # Verify first address matches expected value
+    expected_address = "bc1qw90s2z6etu728elvs0hxh6tda35p465phy9qz4"
+    assert first_address == expected_address, f"Address mismatch: got {first_address}"
