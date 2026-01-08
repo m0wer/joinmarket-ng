@@ -333,7 +333,7 @@ class DirectoryClient:
             f"peerlist_features: {self.directory_peerlist_features})"
         )
 
-    async def get_peerlist(self) -> list[str]:
+    async def get_peerlist(self) -> list[str] | None:
         """
         Fetch the current list of connected peers.
 
@@ -342,7 +342,7 @@ class DirectoryClient:
 
         Returns:
             List of active peer nicks. Returns empty list if directory doesn't
-            support GETPEERLIST.
+            support GETPEERLIST. Returns None if rate-limited (use cached data).
         """
         if not self.connection:
             raise DirectoryClientError("Not connected")
@@ -361,7 +361,7 @@ class DirectoryClient:
                 f"Skipping GETPEERLIST - rate limited "
                 f"(last request {current_time - self._last_peerlist_request_time:.1f}s ago)"
             )
-            return []
+            return None
 
         self._last_peerlist_request_time = current_time
 
@@ -456,7 +456,7 @@ class DirectoryClient:
         Returns:
             List of (nick, location, features) tuples for active peers.
             Features will be empty for directories that don't support peerlist_features.
-            Returns empty list if directory doesn't support GETPEERLIST.
+            Returns empty list if directory doesn't support GETPEERLIST or is rate-limited.
         """
         if not self.connection:
             raise DirectoryClientError("Not connected")
@@ -475,7 +475,7 @@ class DirectoryClient:
                 f"Skipping GETPEERLIST - rate limited "
                 f"(last request {current_time - self._last_peerlist_request_time:.1f}s ago)"
             )
-            return []
+            return []  # Return empty - will use offers for nick tracking
 
         self._last_peerlist_request_time = current_time
 

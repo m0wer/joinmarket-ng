@@ -1262,12 +1262,34 @@ class MakerBot:
                 first_arg = cmd_parts[1].split()[0] if len(cmd_parts) > 1 else ""
                 fingerprint = MessageDeduplicator.make_fingerprint(from_nick, command, first_arg)
             elif msg_type == MessageType.PUBMSG.value:
-                # For public messages, use the whole message as fingerprint
-                fingerprint = MessageDeduplicator.make_fingerprint(
-                    from_nick, "pubmsg", line[len(from_nick) :]
+                # Parse the public message to check if it's !orderbook
+                # Format: nick!PUBLIC!command or nick!PUBLIC!!command
+                parts = line.split(COMMAND_PREFIX)
+                # Check both parts[2] and parts[3] since format can be either:
+                # nick!PUBLIC!orderbook or nick!PUBLIC!!orderbook
+                is_orderbook_request = (
+                    len(parts) >= 3
+                    and parts[1] == "PUBLIC"
+                    and (
+                        parts[2].strip().lstrip("!") == "orderbook"
+                        or (len(parts) >= 4 and parts[3].strip().lstrip("!") == "orderbook")
+                    )
                 )
 
-            # Check for duplicates
+                logger.debug(f"PUBMSG parts={parts}, is_orderbook={is_orderbook_request}")
+
+                # Don't deduplicate !orderbook requests - they have their own rate limiting
+                # and takers may legitimately request the orderbook multiple times
+                if not is_orderbook_request:
+                    # For other public messages, use the whole message as fingerprint
+                    fingerprint = MessageDeduplicator.make_fingerprint(
+                        from_nick, "pubmsg", line[len(from_nick) :]
+                    )
+                else:
+                    fingerprint = None
+                    logger.debug(f"Skipping deduplication for !orderbook from {from_nick}")
+
+            # Check for duplicates (skip for !orderbook which has its own rate limiting)
             if fingerprint:
                 is_dup, first_source, count = self._message_deduplicator.is_duplicate(
                     fingerprint, source

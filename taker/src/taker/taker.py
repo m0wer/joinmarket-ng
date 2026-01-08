@@ -215,15 +215,20 @@ class MultiDirectoryClient:
                 # (not all directories support this, so we fallback to offer-based tracking)
                 try:
                     peerlist = await client.get_peerlist()
-                    if peerlist:
-                        active_nicks = set(peerlist)
-                        self.sync_nicks_with_peerlist(server, active_nicks)
-                        logger.debug(
-                            f"Updated nick tracking for {server}: {len(active_nicks)} active nicks"
-                        )
+                    if peerlist is not None:  # None means rate-limited, don't update tracking
+                        if peerlist:
+                            active_nicks = set(peerlist)
+                            self.sync_nicks_with_peerlist(server, active_nicks)
+                            logger.debug(
+                                f"Updated nick tracking for {server}: "
+                                f"{len(active_nicks)} active nicks"
+                            )
+                        else:
+                            # Fallback: track based on offers (empty peerlist but not rate-limited)
+                            self.sync_nicks_with_peerlist(server, active_makers)
                     else:
-                        # Fallback: track based on offers
-                        self.sync_nicks_with_peerlist(server, active_makers)
+                        # Rate-limited - don't update nick tracking, use previous state
+                        logger.debug(f"Peerlist rate-limited for {server}, using cached nick state")
                 except Exception as e:
                     # Peerlist not supported or failed - track based on offers only
                     logger.debug(f"Peerlist unavailable from {server}, tracking via offers: {e}")
