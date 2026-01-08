@@ -464,3 +464,218 @@ Thresholds are configurable via environment variables if needed (see config.py).
 **"Transaction verification failed"**
 - Safety feature - invalid transaction from taker
 - Your funds are safe, no action needed
+
+## Command Reference
+
+<!-- AUTO-GENERATED HELP START: jm-maker -->
+
+<details>
+<summary><code>jm-maker --help</code></summary>
+
+```
+
+ Usage: jm-maker [OPTIONS] COMMAND [ARGS]...
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ start              Start the maker bot.                                      │
+│ generate-address   Generate a new receive address.                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-maker start --help</code></summary>
+
+```
+
+ Usage: jm-maker start [OPTIONS]
+
+ Start the maker bot.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --mnemonic                      TEXT                   BIP39 mnemonic phrase │
+│                                                        [env var: MNEMONIC]   │
+│ --mnemonic-file         -f      PATH                   Path to mnemonic file │
+│ --password              -p      TEXT                   Password for          │
+│                                                        encrypted mnemonic    │
+│                                                        file                  │
+│ --bip39-passphrase              TEXT                   BIP39 passphrase      │
+│                                                        (13th/25th word)      │
+│                                                        [env var:             │
+│                                                        BIP39_PASSPHRASE]     │
+│ --data-dir              -d      PATH                   Data directory for    │
+│                                                        JoinMarket files      │
+│                                                        (commitment           │
+│                                                        blacklist, history).  │
+│                                                        Defaults to           │
+│                                                        ~/.joinmarket-ng or   │
+│                                                        $JOINMARKET_DATA_DIR  │
+│                                                        if set.               │
+│                                                        [env var:             │
+│                                                        JOINMARKET_DATA_DIR]  │
+│ --network                       [mainnet|testnet|sign  [default: mainnet]    │
+│                                 et|regtest]                                  │
+│ --bitcoin-network               [mainnet|testnet|sign  Bitcoin network for   │
+│                                 et|regtest]            address generation    │
+│                                                        (defaults to          │
+│                                                        --network)            │
+│ --backend-type                  TEXT                   Backend type:         │
+│                                                        full_node | neutrino  │
+│                                                        [default: full_node]  │
+│ --rpc-url                       TEXT                   Bitcoin full node RPC │
+│                                                        URL                   │
+│                                                        [env var:             │
+│                                                        BITCOIN_RPC_URL]      │
+│ --rpc-user                      TEXT                   Bitcoin full node RPC │
+│                                                        username              │
+│                                                        [env var:             │
+│                                                        BITCOIN_RPC_USER]     │
+│ --rpc-password                  TEXT                   Bitcoin full node RPC │
+│                                                        password              │
+│                                                        [env var:             │
+│                                                        BITCOIN_RPC_PASSWORD] │
+│ --neutrino-url                  TEXT                   Neutrino REST API URL │
+│                                                        [env var:             │
+│                                                        NEUTRINO_URL]         │
+│ --min-size                      INTEGER                Minimum CoinJoin size │
+│                                                        in sats               │
+│                                                        [default: 100000]     │
+│ --cj-fee-relative               TEXT                   Relative coinjoin fee │
+│                                                        (e.g., 0.001 = 0.1%). │
+│                                                        Mutually exclusive    │
+│                                                        with                  │
+│                                                        --cj-fee-absolute.    │
+│                                                        [env var:             │
+│                                                        CJ_FEE_RELATIVE]      │
+│ --cj-fee-absolute               INTEGER                Absolute coinjoin fee │
+│                                                        in sats. Mutually     │
+│                                                        exclusive with        │
+│                                                        --cj-fee-relative.    │
+│                                                        [env var:             │
+│                                                        CJ_FEE_ABSOLUTE]      │
+│ --tx-fee-contribution           INTEGER                Tx fee contribution   │
+│                                                        in sats               │
+│                                                        [default: 0]          │
+│ --directory             -D      TEXT                   Directory servers     │
+│                                                        (comma-separated      │
+│                                                        host:port). Defaults  │
+│                                                        to mainnet directory  │
+│                                                        nodes.                │
+│                                                        [env var:             │
+│                                                        DIRECTORY_SERVERS]    │
+│ --tor-socks-host                TEXT                   Tor SOCKS proxy host  │
+│                                                        [env var:             │
+│                                                        TOR_SOCKS_HOST]       │
+│                                                        [default: 127.0.0.1]  │
+│ --tor-socks-port                INTEGER                Tor SOCKS proxy port  │
+│                                                        [env var:             │
+│                                                        TOR_SOCKS_PORT]       │
+│                                                        [default: 9050]       │
+│ --tor-control-host              TEXT                   Tor control port host │
+│                                                        (default: auto-detect │
+│                                                        from TOR_SOCKS_HOST)  │
+│                                                        [env var:             │
+│                                                        TOR_CONTROL_HOST]     │
+│ --tor-control-port              INTEGER                Tor control port      │
+│                                                        [env var:             │
+│                                                        TOR_CONTROL_PORT]     │
+│                                                        [default: 9051]       │
+│ --tor-cookie-path               PATH                   Path to Tor cookie    │
+│                                                        auth file (e.g.,      │
+│                                                        /var/lib/tor/control… │
+│                                                        [env var:             │
+│                                                        TOR_COOKIE_PATH]      │
+│ --disable-tor-control                                  Disable Tor control   │
+│                                                        port integration      │
+│                                                        (maker won't create   │
+│                                                        ephemeral onion)      │
+│ --onion-serving-host            TEXT                   Bind address for      │
+│                                                        incoming connections  │
+│                                                        (0.0.0.0 for Docker)  │
+│                                                        [env var:             │
+│                                                        ONION_SERVING_HOST]   │
+│                                                        [default: 127.0.0.1]  │
+│ --onion-serving-port            INTEGER                Port for incoming     │
+│                                                        .onion connections    │
+│                                                        [env var:             │
+│                                                        ONION_SERVING_PORT]   │
+│                                                        [default: 5222]       │
+│ --tor-target-host               TEXT                   Target hostname for   │
+│                                                        Tor hidden service    │
+│                                                        (use service name in  │
+│                                                        Docker Compose)       │
+│                                                        [env var:             │
+│                                                        TOR_TARGET_HOST]      │
+│                                                        [default: 127.0.0.1]  │
+│ --fidelity-bond-lockt…  -L      INTEGER                Fidelity bond         │
+│                                                        locktimes to scan for │
+│ --fidelity-bond-index   -I      INTEGER                Fidelity bond         │
+│                                                        derivation index      │
+│                                                        (bypasses registry,   │
+│                                                        requires              │
+│                                                        --fidelity-bond-lock… │
+│                                                        Useful for            │
+│                                                        Docker/automated      │
+│                                                        setups without a      │
+│                                                        registry file.        │
+│                                                        [env var:             │
+│                                                        FIDELITY_BOND_INDEX]  │
+│ --fidelity-bond         -B      TEXT                   Specific fidelity     │
+│                                                        bond to use (format:  │
+│                                                        txid:vout). If not    │
+│                                                        specified, the        │
+│                                                        largest bond is       │
+│                                                        selected              │
+│                                                        automatically.        │
+│ --merge-algorithm       -M      TEXT                   UTXO selection        │
+│                                                        strategy: default,    │
+│                                                        gradual, greedy,      │
+│                                                        random                │
+│                                                        [env var:             │
+│                                                        MERGE_ALGORITHM]      │
+│                                                        [default: default]    │
+│ --help                                                 Show this message and │
+│                                                        exit.                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-maker generate-address --help</code></summary>
+
+```
+
+ Usage: jm-maker generate-address [OPTIONS]
+
+ Generate a new receive address.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --mnemonic                  TEXT                    BIP39 mnemonic           │
+│                                                     [env var: MNEMONIC]      │
+│ --mnemonic-file     -f      PATH                    Path to mnemonic file    │
+│ --password          -p      TEXT                    Password for encrypted   │
+│                                                     mnemonic file            │
+│ --bip39-passphrase          TEXT                    BIP39 passphrase         │
+│                                                     (13th/25th word)         │
+│                                                     [env var:                │
+│                                                     BIP39_PASSPHRASE]        │
+│ --network                   [mainnet|testnet|signe  [default: mainnet]       │
+│                             t|regtest]                                       │
+│ --bitcoin-network           [mainnet|testnet|signe  Bitcoin network for      │
+│                             t|regtest]              address generation       │
+│                                                     (defaults to --network)  │
+│ --backend-type              TEXT                    [default: full_node]     │
+│ --help                                              Show this message and    │
+│                                                     exit.                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+
+<!-- AUTO-GENERATED HELP END: jm-maker -->

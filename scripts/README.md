@@ -12,6 +12,12 @@ Utility scripts for JoinMarket NG development and operations.
 - **regtest-miner-jam.sh** - Run Bitcoin Core regtest miner for JAM compatibility testing
 - **regtest-miner.sh** - Run Bitcoin Core regtest miner
 - **run_all_tests.sh** - Execute complete test suite including Docker-based e2e tests
+<<<<<<< Updated upstream
+- **update_readme_help.py** - Automatically update README files with CLI command help sections
+||||||| Stash base
+=======
+- **update_readme_help.py** - Update README files with CLI command help sections (run manually when CLI changes)
+>>>>>>> Stashed changes
 - **update-deps.sh** - Update project dependencies
 
 Run any script with `--help` or `-h` for detailed usage information.

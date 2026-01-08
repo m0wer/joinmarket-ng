@@ -303,3 +303,57 @@ Check container health status:
 docker ps  # Shows (healthy) or (unhealthy)
 docker inspect joinmarket_directory_server | grep -A 10 Health
 ```
+
+## Command Reference
+
+<!-- AUTO-GENERATED HELP START: jm-directory-ctl -->
+
+<details>
+<summary><code>jm-directory-ctl --help</code></summary>
+
+```
+usage: jm-directory-ctl [-h] [--host HOST] [--port PORT] {status,health} ...
+
+JoinMarket Directory Server CLI
+
+positional arguments:
+  {status,health}  Available commands
+    status         Get server status
+    health         Check server health
+
+options:
+  -h, --help       show this help message and exit
+  --host HOST      Health check server host (default: 127.0.0.1)
+  --port PORT      Health check server port (default: 8080)
+```
+
+</details>
+
+<details>
+<summary><code>jm-directory-ctl status --help</code></summary>
+
+```
+usage: jm-directory-ctl status [-h] [--json]
+
+options:
+  -h, --help  show this help message and exit
+  --json      Output as JSON
+```
+
+</details>
+
+<details>
+<summary><code>jm-directory-ctl health --help</code></summary>
+
+```
+usage: jm-directory-ctl health [-h] [--json]
+
+options:
+  -h, --help  show this help message and exit
+  --json      Output as JSON
+```
+
+</details>
+
+
+<!-- AUTO-GENERATED HELP END: jm-directory-ctl -->

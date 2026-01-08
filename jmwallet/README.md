@@ -137,71 +137,372 @@ jm-wallet list-bonds --mnemonic-file ~/.joinmarket-ng/wallets/wallet.mnemonic
 
 ### All Commands
 
-```bash
-jm-wallet --help
-jm-wallet generate --help
-jm-wallet info --help
-jm-wallet list-bonds --help
+For detailed help on any command, see the auto-generated help sections below.
+
+<!-- AUTO-GENERATED HELP START: jm-wallet -->
+
+<details>
+<summary><code>jm-wallet --help</code></summary>
+
 ```
 
-## Features
+ Usage: jm-wallet [OPTIONS] COMMAND [ARGS]...
 
-- BIP32/BIP39/BIP84 HD wallet implementation
-- 5 mixdepth isolation for privacy
-- P2WPKH native segwit addresses (bc1...)
-- Multi-backend: Bitcoin Core RPC or Neutrino SPV
-- No BerkeleyDB dependency (works with Bitcoin Core v23+)
-- Encrypted mnemonic storage
+ JoinMarket Wallet Management
 
-## Wallet Structure
-
-JoinMarket uses mixdepths for privacy isolation:
-
-- **Mixdepth 0-4**: Separate balance pools
-- **Branches per mixdepth**:
-  - Branch 0: External (receive) addresses
-  - Branch 1: Internal (change) addresses
-  - Branch 2: Fidelity bonds (time-locked)
-
-## Security Notes
-
-- Mnemonic files are encrypted with Fernet (symmetric encryption)
-- Files automatically get restrictive permissions (`chmod 600`)
-- Use `.env` files for RPC credentials instead of command-line args
-- Never commit mnemonics or `.env` files to version control
-
-## Using with Maker/Taker Bots
-
-The `jm-wallet` CLI is for wallet management only. For CoinJoin operations:
-
-1. Generate wallet: `jm-wallet generate --save --prompt-password`
-2. Fund addresses: Send Bitcoin to mixdepth addresses
-3. Run bots: Use `jm-maker` or `jm-taker` with same wallet file
-
-## Advanced: Python API
-
-For programmatic access:
-
-```python
-import asyncio
-from jmwallet.backends.neutrino import NeutrinoBackend, NeutrinoConfig
-from jmwallet.wallet.service import WalletService
-
-async def main():
-    config = NeutrinoConfig(base_url="http://localhost:8334", network="mainnet")
-    backend = NeutrinoBackend(config)
-
-    wallet = WalletService(
-        mnemonic="your mnemonic phrase here",
-        backend=backend,
-        network="mainnet",
-    )
-
-    await wallet.sync_all()
-    balance = await wallet.get_total_balance()
-    print(f"Balance: {balance:,} sats")
-
-asyncio.run(main())
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ generate                Generate a new BIP39 mnemonic phrase with secure     │
+│                         entropy.                                             │
+│ info                    Display wallet information and balances by mixdepth. │
+│ list-bonds              List all fidelity bonds in the wallet.               │
+│ generate-bond-address   Generate a fidelity bond (timelocked P2WSH) address. │
+│ send                    Send a simple transaction from wallet to an address. │
+│ history                 View CoinJoin transaction history.                   │
+│ validate                Validate a BIP39 mnemonic phrase.                    │
+│ registry-list           List all fidelity bonds in the registry.             │
+│ registry-show           Show detailed information about a specific fidelity  │
+│                         bond.                                                │
+│ recover-bonds           Recover fidelity bonds by scanning all 960 possible  │
+│                         timelocks.                                           │
+│ registry-sync           Sync fidelity bond funding status from the           │
+│                         blockchain.                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
-See code documentation for full API details.
+</details>
+
+<details>
+<summary><code>jm-wallet generate --help</code></summary>
+
+```
+
+ Usage: jm-wallet generate [OPTIONS]
+
+ Generate a new BIP39 mnemonic phrase with secure entropy.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --words            -w      INTEGER  Number of words (12, 15, 18, 21, or 24)  │
+│                                     [default: 24]                            │
+│ --save             -s               Save to file                             │
+│ --output           -o      PATH     Output file path                         │
+│ --password         -p      TEXT     Password for encryption                  │
+│ --prompt-password                   Prompt for password interactively        │
+│ --help                              Show this message and exit.              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-wallet info --help</code></summary>
+
+```
+
+ Usage: jm-wallet info [OPTIONS]
+
+ Display wallet information and balances by mixdepth.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --mnemonic                         TEXT     BIP39 mnemonic                   │
+│ --mnemonic-file            -f      PATH     Path to mnemonic file            │
+│ --password                 -p      TEXT     Password for encrypted file      │
+│ --bip39-passphrase                 TEXT     BIP39 passphrase (13th/25th      │
+│                                             word)                            │
+│                                             [env var: BIP39_PASSPHRASE]      │
+│ --prompt-bip39-passphrase                   Prompt for BIP39 passphrase      │
+│                                             interactively                    │
+│ --network                  -n      TEXT     Bitcoin network                  │
+│                                             [default: mainnet]               │
+│ --backend                  -b      TEXT     Backend: full_node | neutrino    │
+│                                             [default: full_node]             │
+│ --rpc-url                          TEXT     [env var: BITCOIN_RPC_URL]       │
+│                                             [default: http://127.0.0.1:8332] │
+│ --rpc-user                         TEXT     [env var: BITCOIN_RPC_USER]      │
+│ --rpc-password                     TEXT     [env var: BITCOIN_RPC_PASSWORD]  │
+│ --neutrino-url                     TEXT     [env var: NEUTRINO_URL]          │
+│                                             [default: http://127.0.0.1:8334] │
+│ --extended                 -e               Show detailed address view with  │
+│                                             derivations                      │
+│ --gap                      -g      INTEGER  Max address gap to show in       │
+│                                             extended view                    │
+│                                             [default: 6]                     │
+│ --data-dir                         PATH     Data directory (default:         │
+│                                             ~/.joinmarket-ng or              │
+│                                             $JOINMARKET_DATA_DIR)            │
+│ --log-level                -l      TEXT     [default: INFO]                  │
+│ --help                                      Show this message and exit.      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-wallet list-bonds --help</code></summary>
+
+```
+
+ Usage: jm-wallet list-bonds [OPTIONS]
+
+ List all fidelity bonds in the wallet.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --mnemonic                         TEXT                                      │
+│ --mnemonic-file            -f      PATH                                      │
+│ --password                 -p      TEXT                                      │
+│ --bip39-passphrase                 TEXT     BIP39 passphrase (13th/25th      │
+│                                             word)                            │
+│                                             [env var: BIP39_PASSPHRASE]      │
+│ --prompt-bip39-passphrase                   Prompt for BIP39 passphrase      │
+│ --network                  -n      TEXT     [default: mainnet]               │
+│ --backend                  -b      TEXT     [default: full_node]             │
+│ --rpc-url                          TEXT     [env var: BITCOIN_RPC_URL]       │
+│                                             [default: http://127.0.0.1:8332] │
+│ --rpc-user                         TEXT     [env var: BITCOIN_RPC_USER]      │
+│ --rpc-password                     TEXT     [env var: BITCOIN_RPC_PASSWORD]  │
+│ --locktime                 -L      INTEGER  Locktime(s) to scan for          │
+│ --log-level                -l      TEXT     [default: INFO]                  │
+│ --help                                      Show this message and exit.      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-wallet generate-bond-address --help</code></summary>
+
+```
+
+ Usage: jm-wallet generate-bond-address [OPTIONS]
+
+ Generate a fidelity bond (timelocked P2WSH) address.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --mnemonic                         TEXT                                      │
+│ --mnemonic-file            -f      PATH                                      │
+│ --password                 -p      TEXT                                      │
+│ --bip39-passphrase                 TEXT     BIP39 passphrase (13th/25th      │
+│                                             word)                            │
+│                                             [env var: BIP39_PASSPHRASE]      │
+│ --prompt-bip39-passphrase                   Prompt for BIP39 passphrase      │
+│ --locktime                 -L      INTEGER  Locktime as Unix timestamp       │
+│                                             [default: 0]                     │
+│ --locktime-date            -d      TEXT     Locktime as YYYY-MM (must be 1st │
+│                                             of month)                        │
+│ --index                    -i      INTEGER  Address index [default: 0]       │
+│ --network                  -n      TEXT     [default: mainnet]               │
+│ --data-dir                         PATH     Data directory (default:         │
+│                                             ~/.joinmarket-ng or              │
+│                                             $JOINMARKET_DATA_DIR)            │
+│ --no-save                                   Do not save the bond to the      │
+│                                             registry                         │
+│ --log-level                -l      TEXT     [default: INFO]                  │
+│ --help                                      Show this message and exit.      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-wallet send --help</code></summary>
+
+```
+
+ Usage: jm-wallet send [OPTIONS] DESTINATION
+
+ Send a simple transaction from wallet to an address.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    destination      TEXT  Destination address [required]                   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --amount                   -a      INTEGER  Amount in sats (0 for sweep)     │
+│                                             [default: 0]                     │
+│ --mnemonic                         TEXT                                      │
+│ --mnemonic-file            -f      PATH                                      │
+│ --password                 -p      TEXT                                      │
+│ --bip39-passphrase                 TEXT     BIP39 passphrase (13th/25th      │
+│                                             word)                            │
+│                                             [env var: BIP39_PASSPHRASE]      │
+│ --prompt-bip39-passphrase                   Prompt for BIP39 passphrase      │
+│ --mixdepth                 -m      INTEGER  Source mixdepth [default: 0]     │
+│ --fee-rate                         INTEGER  Fee rate in sat/vB [default: 10] │
+│ --network                  -n      TEXT     [default: mainnet]               │
+│ --rpc-url                          TEXT     [env var: BITCOIN_RPC_URL]       │
+│                                             [default: http://127.0.0.1:8332] │
+│ --rpc-user                         TEXT     [env var: BITCOIN_RPC_USER]      │
+│ --rpc-password                     TEXT     [env var: BITCOIN_RPC_PASSWORD]  │
+│ --broadcast                                 Broadcast the transaction        │
+│                                             [default: True]                  │
+│ --yes                      -y               Skip confirmation prompt         │
+│ --log-level                -l      TEXT     [default: INFO]                  │
+│ --help                                      Show this message and exit.      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-wallet history --help</code></summary>
+
+```
+
+ Usage: jm-wallet history [OPTIONS]
+
+ View CoinJoin transaction history.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --limit     -n      INTEGER  Max entries to show                             │
+│ --role      -r      TEXT     Filter by role (maker/taker)                    │
+│ --stats     -s               Show statistics only                            │
+│ --csv                        Output as CSV                                   │
+│ --data-dir          PATH     Data directory (default: ~/.joinmarket-ng or    │
+│                              $JOINMARKET_DATA_DIR)                           │
+│ --help                       Show this message and exit.                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-wallet validate --help</code></summary>
+
+```
+
+ Usage: jm-wallet validate [OPTIONS] [MNEMONIC_ARG]
+
+ Validate a BIP39 mnemonic phrase.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   mnemonic_arg      [MNEMONIC_ARG]  Mnemonic to validate                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --mnemonic-file  -f      PATH  Path to mnemonic file                         │
+│ --password       -p      TEXT                                                │
+│ --help                         Show this message and exit.                   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-wallet registry-list --help</code></summary>
+
+```
+
+ Usage: jm-wallet registry-list [OPTIONS]
+
+ List all fidelity bonds in the registry.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --data-dir             PATH  Data directory (default: ~/.joinmarket-ng or    │
+│                              $JOINMARKET_DATA_DIR)                           │
+│ --funded-only  -f            Show only funded bonds                          │
+│ --active-only  -a            Show only active (funded & not expired) bonds   │
+│ --json         -j            Output as JSON                                  │
+│ --log-level    -l      TEXT  [default: WARNING]                              │
+│ --help                       Show this message and exit.                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-wallet registry-show --help</code></summary>
+
+```
+
+ Usage: jm-wallet registry-show [OPTIONS] ADDRESS
+
+ Show detailed information about a specific fidelity bond.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    address      TEXT  Bond address to show [required]                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --data-dir           PATH  Data directory (default: ~/.joinmarket-ng or      │
+│                            $JOINMARKET_DATA_DIR)                             │
+│ --json       -j            Output as JSON                                    │
+│ --log-level  -l      TEXT  [default: WARNING]                                │
+│ --help                     Show this message and exit.                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-wallet recover-bonds --help</code></summary>
+
+```
+
+ Usage: jm-wallet recover-bonds [OPTIONS]
+
+ Recover fidelity bonds by scanning all 960 possible timelocks.
+
+ This command scans the blockchain for fidelity bonds at all valid timenumber
+ locktimes (Jan 2020 through Dec 2099). Use this when recovering a wallet from
+ mnemonic and you don't know which locktimes were used for fidelity bonds.
+ The scan checks address index 0 by default (most wallets only use index 0).
+ Use --max-index to scan more addresses per locktime if needed.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --mnemonic                         TEXT                                      │
+│ --mnemonic-file            -f      PATH                                      │
+│ --password                 -p      TEXT                                      │
+│ --bip39-passphrase                 TEXT     BIP39 passphrase (13th/25th      │
+│                                             word)                            │
+│                                             [env var: BIP39_PASSPHRASE]      │
+│ --prompt-bip39-passphrase                   Prompt for BIP39 passphrase      │
+│ --network                  -n      TEXT     [default: mainnet]               │
+│ --rpc-url                          TEXT     [env var: BITCOIN_RPC_URL]       │
+│                                             [default: http://127.0.0.1:8332] │
+│ --rpc-user                         TEXT     [env var: BITCOIN_RPC_USER]      │
+│ --rpc-password                     TEXT     [env var: BITCOIN_RPC_PASSWORD]  │
+│ --max-index                -i      INTEGER  Max address index per locktime   │
+│                                             to scan (default 1)              │
+│                                             [default: 1]                     │
+│ --data-dir                         PATH     Data directory (default:         │
+│                                             ~/.joinmarket-ng or              │
+│                                             $JOINMARKET_DATA_DIR)            │
+│ --log-level                -l      TEXT     [default: INFO]                  │
+│ --help                                      Show this message and exit.      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-wallet registry-sync --help</code></summary>
+
+```
+
+ Usage: jm-wallet registry-sync [OPTIONS]
+
+ Sync fidelity bond funding status from the blockchain.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --mnemonic                         TEXT                                      │
+│ --mnemonic-file            -f      PATH                                      │
+│ --password                 -p      TEXT                                      │
+│ --bip39-passphrase                 TEXT  BIP39 passphrase (13th/25th word)   │
+│                                          [env var: BIP39_PASSPHRASE]         │
+│ --prompt-bip39-passphrase                Prompt for BIP39 passphrase         │
+│ --network                  -n      TEXT  [default: mainnet]                  │
+│ --rpc-url                          TEXT  [env var: BITCOIN_RPC_URL]          │
+│                                          [default: http://127.0.0.1:8332]    │
+│ --rpc-user                         TEXT  [env var: BITCOIN_RPC_USER]         │
+│ --rpc-password                     TEXT  [env var: BITCOIN_RPC_PASSWORD]     │
+│ --data-dir                         PATH  Data directory (default:            │
+│                                          ~/.joinmarket-ng or                 │
+│                                          $JOINMARKET_DATA_DIR)               │
+│ --log-level                -l      TEXT  [default: INFO]                     │
+│ --help                                   Show this message and exit.         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+
+<!-- AUTO-GENERATED HELP END: jm-wallet -->
