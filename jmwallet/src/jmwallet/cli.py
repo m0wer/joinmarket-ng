@@ -351,6 +351,49 @@ def _resolve_mnemonic(
     )
 
 
+def _resolve_bip39_passphrase(
+    bip39_passphrase: str | None = None,
+    prompt_bip39_passphrase: bool = False,
+) -> str:
+    """
+    Resolve BIP39 passphrase from argument, environment variable, or prompt.
+
+    Priority:
+    1. --bip39-passphrase argument
+    2. BIP39_PASSPHRASE environment variable
+    3. Interactive prompt (if --prompt-bip39-passphrase is set)
+    4. Empty string (default - no passphrase)
+
+    Args:
+        bip39_passphrase: BIP39 passphrase from command line argument
+        prompt_bip39_passphrase: Whether to prompt for passphrase interactively
+
+    Returns:
+        The resolved BIP39 passphrase (empty string if none provided)
+    """
+    # If explicitly provided via argument, use it
+    if bip39_passphrase is not None:
+        return bip39_passphrase
+
+    # Check environment variable
+    env_passphrase = os.environ.get("BIP39_PASSPHRASE")
+    if env_passphrase is not None:
+        return env_passphrase
+
+    # Prompt if requested
+    if prompt_bip39_passphrase:
+        passphrase = typer.prompt(
+            "Enter BIP39 passphrase (13th/25th word) - press Enter for none",
+            default="",
+            hide_input=True,
+            show_default=False,
+        )
+        return passphrase
+
+    # Default: no passphrase
+    return ""
+
+
 @app.command()
 def info(
     mnemonic: Annotated[str | None, typer.Option("--mnemonic", help="BIP39 mnemonic")] = None,
@@ -368,6 +411,13 @@ def info(
             help="BIP39 passphrase (13th/25th word)",
         ),
     ] = None,
+    prompt_bip39_passphrase: Annotated[
+        bool,
+        typer.Option(
+            "--prompt-bip39-passphrase",
+            help="Prompt for BIP39 passphrase interactively",
+        ),
+    ] = False,
     network: Annotated[str, typer.Option("--network", "-n", help="Bitcoin network")] = "mainnet",
     backend_type: Annotated[
         str, typer.Option("--backend", "-b", help="Backend: full_node | neutrino")
@@ -406,6 +456,9 @@ def info(
         logger.error(str(e))
         raise typer.Exit(1)
 
+    # Resolve BIP39 passphrase
+    resolved_bip39_passphrase = _resolve_bip39_passphrase(bip39_passphrase, prompt_bip39_passphrase)
+
     asyncio.run(
         _show_wallet_info(
             resolved_mnemonic,
@@ -415,7 +468,7 @@ def info(
             rpc_user,
             rpc_password,
             neutrino_url,
-            bip39_passphrase or "",
+            resolved_bip39_passphrase,
             extended=extended,
             gap_limit=gap,
             data_dir=data_dir,
@@ -618,6 +671,9 @@ def list_bonds(
             help="BIP39 passphrase (13th/25th word)",
         ),
     ] = None,
+    prompt_bip39_passphrase: Annotated[
+        bool, typer.Option("--prompt-bip39-passphrase", help="Prompt for BIP39 passphrase")
+    ] = False,
     network: Annotated[str, typer.Option("--network", "-n")] = "mainnet",
     backend_type: Annotated[str, typer.Option("--backend", "-b")] = "full_node",
     rpc_url: Annotated[
@@ -641,6 +697,9 @@ def list_bonds(
         logger.error(str(e))
         raise typer.Exit(1)
 
+    # Resolve BIP39 passphrase
+    resolved_bip39_passphrase = _resolve_bip39_passphrase(bip39_passphrase, prompt_bip39_passphrase)
+
     asyncio.run(
         _list_fidelity_bonds(
             resolved_mnemonic,
@@ -650,7 +709,7 @@ def list_bonds(
             rpc_user,
             rpc_password,
             locktimes or [],
-            bip39_passphrase or "",
+            resolved_bip39_passphrase,
         )
     )
 
@@ -762,6 +821,9 @@ def generate_bond_address(
             help="BIP39 passphrase (13th/25th word)",
         ),
     ] = None,
+    prompt_bip39_passphrase: Annotated[
+        bool, typer.Option("--prompt-bip39-passphrase", help="Prompt for BIP39 passphrase")
+    ] = False,
     locktime: Annotated[
         int, typer.Option("--locktime", "-L", help="Locktime as Unix timestamp")
     ] = 0,
@@ -794,6 +856,9 @@ def generate_bond_address(
     except (FileNotFoundError, ValueError) as e:
         logger.error(str(e))
         raise typer.Exit(1)
+
+    # Resolve BIP39 passphrase
+    resolved_bip39_passphrase = _resolve_bip39_passphrase(bip39_passphrase, prompt_bip39_passphrase)
 
     # Parse locktime
     if locktime_date:
@@ -830,7 +895,7 @@ def generate_bond_address(
     )
     from jmwallet.wallet.service import FIDELITY_BOND_BRANCH
 
-    seed = mnemonic_to_seed(resolved_mnemonic, bip39_passphrase or "")
+    seed = mnemonic_to_seed(resolved_mnemonic, resolved_bip39_passphrase)
     master_key = HDKey.from_seed(seed)
 
     coin_type = 0 if network == "mainnet" else 1
@@ -913,6 +978,9 @@ def send(
             help="BIP39 passphrase (13th/25th word)",
         ),
     ] = None,
+    prompt_bip39_passphrase: Annotated[
+        bool, typer.Option("--prompt-bip39-passphrase", help="Prompt for BIP39 passphrase")
+    ] = False,
     mixdepth: Annotated[int, typer.Option("--mixdepth", "-m", help="Source mixdepth")] = 0,
     fee_rate: Annotated[int, typer.Option("--fee-rate", help="Fee rate in sat/vB")] = 10,
     network: Annotated[str, typer.Option("--network", "-n")] = "mainnet",
@@ -938,6 +1006,9 @@ def send(
         logger.error(str(e))
         raise typer.Exit(1)
 
+    # Resolve BIP39 passphrase
+    resolved_bip39_passphrase = _resolve_bip39_passphrase(bip39_passphrase, prompt_bip39_passphrase)
+
     asyncio.run(
         _send_transaction(
             resolved_mnemonic,
@@ -951,7 +1022,7 @@ def send(
             rpc_password,
             broadcast,
             yes,
-            bip39_passphrase or "",
+            resolved_bip39_passphrase,
         )
     )
 
@@ -1583,6 +1654,9 @@ def registry_sync(
             help="BIP39 passphrase (13th/25th word)",
         ),
     ] = None,
+    prompt_bip39_passphrase: Annotated[
+        bool, typer.Option("--prompt-bip39-passphrase", help="Prompt for BIP39 passphrase")
+    ] = False,
     network: Annotated[str, typer.Option("--network", "-n")] = "mainnet",
     rpc_url: Annotated[
         str, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")
@@ -1609,6 +1683,9 @@ def registry_sync(
         logger.error(str(e))
         raise typer.Exit(1)
 
+    # Resolve BIP39 passphrase
+    resolved_bip39_passphrase = _resolve_bip39_passphrase(bip39_passphrase, prompt_bip39_passphrase)
+
     from jmcore.paths import get_default_data_dir
 
     from jmwallet.wallet.bond_registry import load_registry
@@ -1630,7 +1707,7 @@ def registry_sync(
             rpc_user,
             rpc_password,
             resolved_data_dir,
-            bip39_passphrase or "",
+            resolved_bip39_passphrase,
         )
     )
 
