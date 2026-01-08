@@ -389,28 +389,10 @@ class NeutrinoBackend(BlockchainBackend):
         """
         Estimate fee in sat/vbyte for target confirmation blocks.
 
-        Neutrino can estimate fees based on observed mempool/block data.
-        Falls back to reasonable defaults if estimation unavailable.
-
-        Note: Neutrino's fee estimation is limited compared to full nodes.
+        Neutrino does not support fee estimation - returns conservative defaults.
         Use can_estimate_fee() to check if reliable estimation is available.
         """
-        try:
-            result = await self._api_call(
-                "GET",
-                "v1/fees/estimate",
-                params={"target_blocks": target_blocks},
-            )
-
-            fee_rate = result.get("fee_rate", 0)
-            if fee_rate > 0:
-                logger.debug(f"Estimated fee for {target_blocks} blocks: {fee_rate} sat/vB")
-                return float(fee_rate)
-
-        except Exception as e:
-            logger.warning(f"Fee estimation failed: {e}")
-
-        # Fallback fee rates based on target (conservative defaults)
+        # Neutrino cannot estimate fees - return conservative defaults
         if target_blocks <= 1:
             return 5.0
         elif target_blocks <= 3:
