@@ -1,0 +1,144 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # Run required checks before creating release
+  pre-commit:
+    uses: ./.github/workflows/pre-commit.yaml
+
+  ci:
+    uses: ./.github/workflows/ci.yaml
+
+  create-release:
+    needs: [pre-commit, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Get version
+        id: get_version
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION=$(git describe --tags --always)
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Version: ${VERSION}"
+
+      - name: Extract release notes from CHANGELOG
+        id: extract_notes
+        run: |
+          VERSION=${{ steps.get_version.outputs.version }}
+          # Extract notes for this version from CHANGELOG.md
+          if [ -f CHANGELOG.md ]; then
+            # Get content between version header and next version or end
+            NOTES=$(awk "/## \[${VERSION}\]/{flag=1; next} /## \[/{flag=0} flag" CHANGELOG.md)
+            if [ -z "$NOTES" ]; then
+              NOTES="Release ${VERSION}"$'\n\n'"See [CHANGELOG.md](CHANGELOG.md) for details."
+            fi
+          else
+            NOTES="Release ${VERSION}"
+          fi
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create ${{ steps.get_version.outputs.version }} \
+            --title "${{ steps.get_version.outputs.version }}" \
+            --notes-file - <<'EOF'
+          ${{ steps.extract_notes.outputs.notes }}
+          EOF
+
+  publish-docker:
+    needs: create-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: directory-server
+            dockerfile: ./directory_server/Dockerfile
+            image: directory-server
+            target: production
+          - name: directory-server-debug
+            dockerfile: ./directory_server/Dockerfile
+            image: directory-server
+            target: debug
+            tag_suffix: "-debug"
+          - name: orderbook-watcher
+            dockerfile: ./orderbook_watcher/Dockerfile
+            image: orderbook-watcher
+          - name: maker
+            dockerfile: ./maker/Dockerfile
+            image: maker
+          - name: taker
+            dockerfile: ./taker/Dockerfile
+            image: taker
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}
+          flavor: |
+            suffix=${{ matrix.tag_suffix || '' }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target || '' }}
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache
+            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:latest
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+            VERSION=${{ needs.create-release.outputs.version }}
