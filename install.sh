@@ -109,6 +109,169 @@ check_system_dependencies() {
     fi
 }
 
+# Check and setup Tor
+setup_tor() {
+    print_header "Setting Up Tor"
+
+    local os_type=""
+    local tor_installed=false
+
+    # Detect OS
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        os_type="linux"
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        os_type="macos"
+    fi
+
+    # Check if Tor is installed
+    if command -v tor &> /dev/null; then
+        tor_installed=true
+        print_success "Tor is already installed"
+    else
+        print_warning "Tor is not installed"
+        echo ""
+        echo "JoinMarket-NG requires Tor for privacy and anonymity."
+        echo ""
+        read -p "Do you want to install Tor now? [Y/n] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+            print_info "Installing Tor..."
+            if [[ "$os_type" == "linux" ]]; then
+                if command -v apt &> /dev/null; then
+                    sudo apt update
+                    sudo apt install -y tor
+                    tor_installed=true
+                else
+                    print_warning "Automatic Tor installation not supported on this system"
+                    echo "Please install Tor manually and re-run this script"
+                fi
+            elif [[ "$os_type" == "macos" ]]; then
+                if command -v brew &> /dev/null; then
+                    brew install tor
+                    tor_installed=true
+                else
+                    print_warning "Homebrew not found. Please install from https://brew.sh"
+                    echo "Then run: brew install tor"
+                fi
+            fi
+        else
+            print_warning "Skipping Tor installation"
+            echo "You will need to install Tor manually before using JoinMarket-NG"
+            return 0
+        fi
+    fi
+
+    if [ "$tor_installed" = false ]; then
+        print_warning "Tor installation was not completed"
+        return 0
+    fi
+
+    # Configure Tor for JoinMarket use
+    print_info "Configuring Tor for JoinMarket..."
+
+    local torrc_path=""
+    local need_config=false
+
+    # Determine torrc path
+    if [[ "$os_type" == "linux" ]]; then
+        torrc_path="/etc/tor/torrc"
+    elif [[ "$os_type" == "macos" ]]; then
+        if [ -d "$(brew --prefix)/etc/tor" ]; then
+            torrc_path="$(brew --prefix)/etc/tor/torrc"
+        else
+            print_warning "Could not find Tor configuration directory"
+            return 0
+        fi
+    fi
+
+    # Check if torrc exists and if it has the required configuration
+    if [ -f "$torrc_path" ]; then
+        if ! grep -q "^ControlPort 127.0.0.1:9051" "$torrc_path" 2>/dev/null; then
+            need_config=true
+        fi
+    else
+        need_config=true
+    fi
+
+    if [ "$need_config" = true ]; then
+        echo ""
+        echo "Tor needs to be configured with control port access for maker bots"
+        echo "to create ephemeral hidden services."
+        echo ""
+        echo "Required configuration (localhost-only):"
+        echo "  SocksPort 127.0.0.1:9050"
+        echo "  ControlPort 127.0.0.1:9051"
+        echo "  CookieAuthentication 1"
+        echo ""
+        read -p "Do you want to configure Tor now? [Y/n] " -n 1 -r
+        echo
+
+        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+            print_info "Configuring Tor..."
+
+            # Create backup of existing torrc
+            if [ -f "$torrc_path" ]; then
+                sudo cp "$torrc_path" "${torrc_path}.backup.$(date +%Y%m%d_%H%M%S)"
+                print_info "Created backup: ${torrc_path}.backup.$(date +%Y%m%d_%H%M%S)"
+            fi
+
+            # Append JoinMarket configuration
+            sudo bash -c "cat >> $torrc_path" << 'EOF'
+
+## JoinMarket Configuration
+# SOCKS proxy for clients (bound to localhost only)
+SocksPort 127.0.0.1:9050
+
+# Control port for maker bots to create ephemeral hidden services (localhost only)
+ControlPort 127.0.0.1:9051
+CookieAuthentication 1
+EOF
+
+            print_success "Tor configuration updated"
+
+            # Restart Tor to apply changes
+            print_info "Restarting Tor..."
+            if [[ "$os_type" == "linux" ]]; then
+                if command -v systemctl &> /dev/null; then
+                    sudo systemctl restart tor
+                    sudo systemctl enable tor
+                    print_success "Tor restarted and enabled"
+                else
+                    print_warning "Could not restart Tor automatically"
+                    echo "Please restart Tor manually: sudo service tor restart"
+                fi
+            elif [[ "$os_type" == "macos" ]]; then
+                if brew services list | grep -q "^tor.*started"; then
+                    brew services restart tor
+                else
+                    brew services start tor
+                fi
+                print_success "Tor started"
+            fi
+
+            # Verify Tor is running
+            sleep 2
+            if nc -z 127.0.0.1 9050 2>/dev/null; then
+                print_success "Tor SOCKS proxy is accessible on 127.0.0.1:9050"
+            else
+                print_warning "Could not verify Tor SOCKS proxy"
+            fi
+
+            if nc -z 127.0.0.1 9051 2>/dev/null; then
+                print_success "Tor control port is accessible on 127.0.0.1:9051"
+            else
+                print_warning "Could not verify Tor control port"
+            fi
+        else
+            print_warning "Skipping Tor configuration"
+            echo ""
+            echo "You will need to manually configure Tor. See INSTALL.md for instructions."
+        fi
+    else
+        print_success "Tor is already configured for JoinMarket"
+    fi
+}
+
 # Check Python version
 check_python_version() {
     print_info "Checking Python version..."
@@ -382,12 +545,14 @@ Options:
   -c, --core-only         Install core libraries only
   -d, --dev               Install development dependencies
   --no-dev                Skip development dependencies (default)
+  --skip-tor              Skip Tor installation and configuration
 
 Examples:
   $0                      Interactive installation
   $0 -y                   Install everything automatically
   $0 -m                   Install maker only
   $0 -t -d                Install taker with dev dependencies
+  $0 --skip-tor           Install without setting up Tor
 
 EOF
 }
@@ -398,6 +563,7 @@ parse_args() {
     INSTALL_MAKER=false
     INSTALL_TAKER=false
     INSTALL_DEV=false
+    SKIP_TOR=false
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -437,6 +603,10 @@ parse_args() {
                 INSTALL_DEV=false
                 shift
                 ;;
+            --skip-tor)
+                SKIP_TOR=true
+                shift
+                ;;
             *)
                 print_error "Unknown option: $1"
                 echo "Use -h or --help for usage information"
@@ -455,6 +625,13 @@ main() {
 
     # Check system dependencies
     check_system_dependencies
+
+    # Setup Tor (unless --skip-tor is used)
+    if [ "$SKIP_TOR" = false ]; then
+        setup_tor
+    else
+        print_warning "Skipping Tor setup (--skip-tor flag used)"
+    fi
 
     # Check Python version
     check_python_version

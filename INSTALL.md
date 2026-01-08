@@ -7,7 +7,7 @@ This guide walks you through installing JoinMarket-NG on Linux, macOS, and Raspb
 - **Python**: 3.11 or higher (3.14 recommended)
 - **Operating System**: Linux, macOS, or Raspberry Pi OS
 - **Disk Space**: ~100MB for the software, plus blockchain backend storage
-- **Network**: Internet connection (Tor will be configured automatically)
+- **Network**: Internet connection (Tor will be installed and configured automatically by the installer)
 
 ## Quick Installation (Recommended)
 
@@ -51,6 +51,12 @@ cd joinmarket-ng
 
 The script will:
 - Check for required system dependencies
+- **Install and configure Tor automatically** (asks for confirmation)
+  - Installs Tor if not present
+  - Configures localhost-only SOCKS proxy (127.0.0.1:9050)
+  - Configures localhost-only control port (127.0.0.1:9051) for maker bots
+  - Creates backup of existing Tor configuration
+  - Restarts Tor service automatically
 - Check Python version (3.11+ required)
 - Create a Python virtual environment at `jmvenv/`
 - Install all dependencies for core components
@@ -58,6 +64,8 @@ The script will:
 - Set up the basic directory structure
 
 **Note**: You can run `./install.sh` multiple times safely. If you accidentally exit the script (e.g., with Ctrl+C), simply run it again to resume or change your component selection.
+
+**Skip Tor Setup**: If you want to configure Tor manually later, use `./install.sh --skip-tor`
 
 ### 4. Activate the Environment
 
@@ -242,50 +250,139 @@ Alternatively, download pre-built binaries from [m0wer/neutrino-api releases](ht
 
 ## Tor Setup
 
-JoinMarket-NG requires Tor for privacy. Installation varies by component:
+JoinMarket-NG requires Tor for privacy and anonymity. The installation script (`./install.sh`) will **automatically install and configure Tor** for you with localhost-only bindings for security.
 
-### For Takers and Orderbook Watchers
+### Automated Setup (Recommended)
 
-Only SOCKS proxy needed (default Tor installation):
+When you run `./install.sh`, it will:
 
+1. **Detect and install Tor** if not already present
+   - Linux: Uses `apt install tor`
+   - macOS: Uses `brew install tor`
+
+2. **Configure Tor** with localhost-only bindings:
+   ```conf
+   # SOCKS proxy for clients (bound to localhost only)
+   SocksPort 127.0.0.1:9050
+
+   # Control port for maker bots (localhost only)
+   ControlPort 127.0.0.1:9051
+   CookieAuthentication 1
+   ```
+
+3. **Restart Tor** and verify connectivity
+
+4. **Create backups** of existing configuration before making changes
+
+The automated setup ensures:
+- **Security**: All ports bound to localhost (127.0.0.1) only, not accessible from network
+- **Compatibility**: Works for all JoinMarket components (makers, takers, orderbook watchers)
+- **Safety**: Backs up existing configuration before modifications
+
+### Manual Setup
+
+If you prefer manual installation or used `./install.sh --skip-tor`, follow these steps:
+
+#### Install Tor
+
+**Linux (Debian/Ubuntu/Raspberry Pi OS):**
 ```bash
-# Linux (Debian/Ubuntu)
-sudo apt install tor
-sudo systemctl start tor
-sudo systemctl enable tor
-
-# macOS
-brew install tor
-brew services start tor
+sudo apt update
+sudo apt install -y tor
 ```
 
-Verify Tor is running: `curl --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/api/ip`
+**macOS:**
+```bash
+brew install tor
+```
 
-### For Makers
+#### Configure Tor
 
-Makers need control port access to create ephemeral hidden services:
+Edit the Tor configuration file:
+- **Linux**: `/etc/tor/torrc`
+- **macOS**: `$(brew --prefix)/etc/tor/torrc` (usually `/opt/homebrew/etc/tor/torrc`)
 
-1. Edit `/etc/tor/torrc` (or `$(brew --prefix)/etc/tor/torrc` on macOS):
+Add the following configuration (localhost-only):
 
 ```conf
+## JoinMarket Configuration
+# SOCKS proxy for clients (bound to localhost only)
 SocksPort 127.0.0.1:9050
+
+# Control port for maker bots to create ephemeral hidden services (localhost only)
 ControlPort 127.0.0.1:9051
 CookieAuthentication 1
 ```
 
-2. Restart Tor:
+**Security Note**: The configuration above binds all ports to `127.0.0.1` (localhost only), meaning they are NOT accessible from the network. This is the recommended secure configuration for local development and production use.
 
+#### Start Tor
+
+**Linux:**
 ```bash
-# Linux
-sudo systemctl restart tor
-
-# macOS
-brew services restart tor
+sudo systemctl start tor
+sudo systemctl enable tor  # Start on boot
 ```
 
-3. Verify control port: `nc -z 127.0.0.1 9051 && echo "Control port accessible"`
+**macOS:**
+```bash
+brew services start tor
+```
 
-**Raspberry Pi Note**: Default Tor package works fine, just edit `/etc/tor/torrc` as above.
+#### Verify Setup
+
+Test SOCKS proxy (works for all components):
+```bash
+curl --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/api/ip
+```
+
+Test control port (needed for makers):
+```bash
+nc -z 127.0.0.1 9051 && echo "Control port accessible"
+```
+
+### Configuration Details
+
+#### For Takers and Orderbook Watchers
+
+Only SOCKS proxy access needed:
+- **SOCKS Host**: 127.0.0.1
+- **SOCKS Port**: 9050
+
+This is automatically detected by default in JoinMarket-NG.
+
+#### For Makers and Directory Servers
+
+Require both SOCKS proxy and control port:
+- **SOCKS Host**: 127.0.0.1
+- **SOCKS Port**: 9050
+- **Control Port Host**: 127.0.0.1
+- **Control Port**: 9051
+- **Authentication**: Cookie-based (CookieAuthentication 1)
+
+Makers use the control port to create **ephemeral hidden services** dynamically at startup, allowing them to be reachable via .onion addresses without pre-configuring hidden services in torrc.
+
+### Docker Environments
+
+The automated setup configures Tor for localhost access. For Docker deployments, see the test configurations in `tests/e2e/reference/tor/conf/torrc` for examples of network-accessible configurations (binding to 0.0.0.0).
+
+**Warning**: Only bind to 0.0.0.0 in isolated Docker networks. For local installations, always use 127.0.0.1.
+
+### Troubleshooting
+
+**"Could not connect to Tor SOCKS proxy"**
+- Verify Tor is running: `systemctl status tor` (Linux) or `brew services list` (macOS)
+- Check SOCKS port is accessible: `nc -z 127.0.0.1 9050`
+
+**"Could not authenticate to Tor control port"**
+- Ensure CookieAuthentication is enabled in torrc
+- Check cookie file permissions: `/var/lib/tor/control_auth_cookie` (Linux) or `/var/run/tor/control.authcookie` (macOS)
+- You may need to add your user to the `debian-tor` group (Linux): `sudo usermod -a -G debian-tor $USER`
+
+**"Control port not accessible"**
+- Verify ControlPort is configured in torrc
+- Restart Tor after configuration changes
+- Check port is listening: `nc -z 127.0.0.1 9051`
 
 ## Next Steps
 
