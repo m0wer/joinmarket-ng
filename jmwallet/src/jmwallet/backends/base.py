@@ -70,8 +70,23 @@ class BlockchainBackend(ABC):
         """Get transaction by txid"""
 
     @abstractmethod
-    async def estimate_fee(self, target_blocks: int) -> int:
-        """Estimate fee in sat/vbyte for target confirmation blocks"""
+    async def estimate_fee(self, target_blocks: int) -> float:
+        """Estimate fee in sat/vbyte for target confirmation blocks.
+
+        Returns:
+            Fee rate in sat/vB. Can be fractional (e.g., 0.5 sat/vB).
+        """
+
+    def can_estimate_fee(self) -> bool:
+        """Check if this backend can perform fee estimation.
+
+        Full node backends (Bitcoin Core) can estimate fees.
+        Light client backends (Neutrino) typically cannot.
+
+        Returns:
+            True if backend supports fee estimation, False otherwise.
+        """
+        return True
 
     @abstractmethod
     async def get_block_height(self) -> int:

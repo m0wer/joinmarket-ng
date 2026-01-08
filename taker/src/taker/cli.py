@@ -187,6 +187,22 @@ def coinjoin(
     max_rel_fee: Annotated[
         str, typer.Option("--max-rel-fee", help="Max relative fee (0.001=0.1%)")
     ] = "0.001",
+    fee_rate: Annotated[
+        float | None,
+        typer.Option(
+            "--fee-rate",
+            help="Manual fee rate in sat/vB (e.g. 1.5). Mutually exclusive with --block-target.",
+        ),
+    ] = None,
+    block_target: Annotated[
+        int | None,
+        typer.Option(
+            "--block-target",
+            help="Target blocks for fee estimation (1-1008). "
+            "Defaults to 3 when using full node. "
+            "Cannot be used with neutrino backend.",
+        ),
+    ] = None,
     bondless_makers_allowance: Annotated[
         float,
         typer.Option(
@@ -274,6 +290,8 @@ def coinjoin(
         mixdepth=mixdepth,
         counterparty_count=counterparties,
         max_cj_fee=MaxCjFee(abs_fee=max_abs_fee, rel_fee=max_rel_fee),
+        fee_rate=fee_rate,
+        fee_block_target=block_target,
         bondless_makers_allowance=bondless_makers_allowance,
         bond_value_exponent=bond_value_exponent,
         bondless_makers_allowance_require_zero_fee=bondless_require_zero_fee,

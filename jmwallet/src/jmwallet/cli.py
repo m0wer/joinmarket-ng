@@ -992,7 +992,22 @@ def send(
         bool, typer.Option("--prompt-bip39-passphrase", help="Prompt for BIP39 passphrase")
     ] = False,
     mixdepth: Annotated[int, typer.Option("--mixdepth", "-m", help="Source mixdepth")] = 0,
-    fee_rate: Annotated[int, typer.Option("--fee-rate", help="Fee rate in sat/vB")] = 10,
+    fee_rate: Annotated[
+        float | None,
+        typer.Option(
+            "--fee-rate",
+            help="Manual fee rate in sat/vB (e.g. 1.5). "
+            "Mutually exclusive with --block-target. "
+            "Defaults to 3-block estimation.",
+        ),
+    ] = None,
+    block_target: Annotated[
+        int | None,
+        typer.Option(
+            "--block-target",
+            help="Target blocks for fee estimation (1-1008). Defaults to 3.",
+        ),
+    ] = None,
     network: Annotated[str, typer.Option("--network", "-n")] = "mainnet",
     rpc_url: Annotated[
         str, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")
@@ -1010,6 +1025,11 @@ def send(
     """Send a simple transaction from wallet to an address."""
     setup_logging(log_level)
 
+    # Validate mutual exclusivity
+    if fee_rate is not None and block_target is not None:
+        logger.error("Cannot specify both --fee-rate and --block-target")
+        raise typer.Exit(1)
+
     try:
         resolved_mnemonic = _resolve_mnemonic(mnemonic, mnemonic_file, password, True)
     except (FileNotFoundError, ValueError) as e:
@@ -1026,6 +1046,7 @@ def send(
             amount,
             mixdepth,
             fee_rate,
+            block_target,
             network,
             rpc_url,
             rpc_user,
@@ -1042,7 +1063,8 @@ async def _send_transaction(
     destination: str,
     amount: int,
     mixdepth: int,
-    fee_rate: int,
+    fee_rate: float | None,
+    block_target: int | None,
     network: str,
     rpc_url: str,
     rpc_user: str,
@@ -1052,6 +1074,8 @@ async def _send_transaction(
     bip39_passphrase: str = "",
 ) -> None:
     """Send transaction implementation."""
+    import math
+
     from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
     from jmwallet.wallet.service import WalletService
     from jmwallet.wallet.signing import (
@@ -1064,6 +1088,16 @@ async def _send_transaction(
     )
 
     backend = BitcoinCoreBackend(rpc_url=rpc_url, rpc_user=rpc_user, rpc_password=rpc_password)
+
+    # Resolve fee rate
+    if fee_rate is not None:
+        resolved_fee_rate = fee_rate
+        logger.info(f"Using manual fee rate: {resolved_fee_rate:.2f} sat/vB")
+    else:
+        # Use backend fee estimation
+        target = block_target if block_target is not None else 3
+        resolved_fee_rate = await backend.estimate_fee(target)
+        logger.info(f"Fee estimation for {target} blocks: {resolved_fee_rate:.2f} sat/vB")
 
     wallet = WalletService(
         mnemonic=mnemonic,
@@ -1117,7 +1151,7 @@ async def _send_transaction(
             output_types.append("p2wpkh")  # Change is always P2WPKH
 
         estimated_vsize = estimate_vsize(input_types, output_types)
-        estimated_fee = estimated_vsize * fee_rate
+        estimated_fee = math.ceil(estimated_vsize * resolved_fee_rate)
 
         if amount == 0:
             # Sweep: subtract fee from send amount
@@ -1138,7 +1172,7 @@ async def _send_transaction(
                 # Re-estimate without change output
                 output_types.pop()  # Remove change output
                 estimated_vsize = estimate_vsize(input_types, output_types)
-                estimated_fee = estimated_vsize * fee_rate
+                estimated_fee = math.ceil(estimated_vsize * resolved_fee_rate)
 
         num_outputs = len(output_types)
 
@@ -1146,7 +1180,7 @@ async def _send_transaction(
         from jmcore.bitcoin import format_amount
 
         logger.info(f"Sending {format_amount(send_amount)} to {destination}")
-        logger.info(f"Fee: {format_amount(estimated_fee)} ({fee_rate} sat/vB)")
+        logger.info(f"Fee: {format_amount(estimated_fee)} ({resolved_fee_rate:.2f} sat/vB)")
         if change_amount > 0:
             logger.info(f"Change: {format_amount(change_amount)}")
 
@@ -1162,7 +1196,7 @@ async def _send_transaction(
                 additional_info={
                     "Source Mixdepth": mixdepth,
                     "Change": format_amount(change_amount) if change_amount > 0 else "None",
-                    "Fee Rate": f"{fee_rate} sat/vB",
+                    "Fee Rate": f"{resolved_fee_rate:.2f} sat/vB",
                 },
                 skip_confirmation=skip_confirmation,
             )

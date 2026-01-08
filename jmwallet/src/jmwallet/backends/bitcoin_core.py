@@ -358,23 +358,23 @@ class BitcoinCoreBackend(BlockchainBackend):
             logger.warning(f"Failed to fetch transaction {txid}: {e}")
             return None
 
-    async def estimate_fee(self, target_blocks: int) -> int:
+    async def estimate_fee(self, target_blocks: int) -> float:
         try:
             result = await self._rpc_call("estimatesmartfee", [target_blocks])
 
             if "feerate" in result:
                 btc_per_kb = result["feerate"]
-                # Convert BTC/kB to sat/vB
-                sat_per_vbyte = round(btc_to_sats(btc_per_kb) / 1000)
+                # Convert BTC/kB to sat/vB (keep precision for sub-sat rates)
+                sat_per_vbyte = btc_to_sats(btc_per_kb) / 1000
                 logger.debug(f"Estimated fee for {target_blocks} blocks: {sat_per_vbyte} sat/vB")
                 return sat_per_vbyte
             else:
                 logger.warning("Fee estimation unavailable, using fallback")
-                return 10
+                return 1.0
 
         except Exception as e:
             logger.warning(f"Failed to estimate fee: {e}, using fallback")
-            return 10
+            return 1.0
 
     async def get_block_height(self) -> int:
         try:

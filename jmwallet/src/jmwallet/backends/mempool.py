@@ -117,27 +117,27 @@ class MempoolBackend(BlockchainBackend):
             logger.warning(f"Failed to fetch transaction {txid}: {e}")
             return None
 
-    async def estimate_fee(self, target_blocks: int) -> int:
+    async def estimate_fee(self, target_blocks: int) -> float:
         try:
             response = await self.client.get(f"{self.base_url}/v1/fees/recommended")
             response.raise_for_status()
             data = response.json()
 
             if target_blocks <= 1:
-                fee_rate = data.get("fastestFee", 10)
+                fee_rate = data.get("fastestFee", 1)
             elif target_blocks <= 3:
-                fee_rate = data.get("halfHourFee", 5)
+                fee_rate = data.get("halfHourFee", 1)
             elif target_blocks <= 6:
-                fee_rate = data.get("hourFee", 3)
+                fee_rate = data.get("hourFee", 1)
             else:
                 fee_rate = data.get("minimumFee", 1)
 
             logger.debug(f"Estimated fee for {target_blocks} blocks: {fee_rate} sat/vB")
-            return int(fee_rate)
+            return float(fee_rate)
 
         except httpx.HTTPError as e:
             logger.warning(f"Failed to estimate fee: {e}, using fallback")
-            return 10
+            return 1.0
 
     async def get_block_height(self) -> int:
         try:

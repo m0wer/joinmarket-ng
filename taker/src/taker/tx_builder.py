@@ -393,7 +393,7 @@ def calculate_tx_fee(
     num_taker_inputs: int,
     num_maker_inputs: int,
     num_outputs: int,
-    fee_rate: int,
+    fee_rate: float,
 ) -> int:
     """
     Calculate transaction fee based on estimated vsize.
@@ -401,6 +401,12 @@ def calculate_tx_fee(
     SegWit P2WPKH inputs: ~68 vbytes each
     P2WPKH outputs: 31 vbytes each
     Overhead: ~11 vbytes
+
+    Args:
+        fee_rate: Fee rate in sat/vB (can be fractional, e.g. 0.5)
+
+    Returns:
+        Fee in satoshis (rounded up to ensure minimum relay fee)
     """
     # Estimate virtual size
     input_vsize = (num_taker_inputs + num_maker_inputs) * 68
@@ -409,7 +415,10 @@ def calculate_tx_fee(
 
     vsize = input_vsize + output_vsize + overhead
 
-    return vsize * fee_rate
+    # Round up to ensure we pay at least the minimum
+    import math
+
+    return math.ceil(vsize * fee_rate)
 
 
 def build_coinjoin_tx(

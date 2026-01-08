@@ -475,6 +475,9 @@ class Taker:
         # Schedule for tumbler-style operations
         self.schedule: Schedule | None = None
 
+        # Cached fee rate for the current CoinJoin (set in _resolve_fee_rate)
+        self._fee_rate: float | None = None
+
         # Background task tracking
         self.running = False
         self._background_tasks: list[asyncio.Task[None]] = []
@@ -720,6 +723,14 @@ class Taker:
                 dest_index = self.wallet.get_next_address_index(dest_mixdepth, 0)
                 destination = self.wallet.get_receive_address(dest_mixdepth, dest_index)
                 logger.info(f"Using internal address: {destination}")
+
+            # Resolve fee rate early (before any fee estimation calls)
+            try:
+                await self._resolve_fee_rate()
+            except ValueError as e:
+                logger.error(str(e))
+                self.state = TakerState.FAILED
+                return None
 
             # Fetch orderbook
             logger.info("Fetching orderbook...")
@@ -1535,11 +1546,79 @@ class Taker:
             return False
 
     def _estimate_tx_fee(self, num_inputs: int, num_outputs: int) -> int:
-        """Estimate transaction fee."""
+        """Estimate transaction fee.
+
+        Uses the cached fee rate from _resolve_fee_rate() which must be called
+        before this method. The fee rate is determined by:
+        1. Manual fee_rate if specified in config
+        2. Backend fee estimation with fee_block_target (default 3 blocks)
+        3. Fallback to 1 sat/vB if estimation fails
+        """
         # P2WPKH: ~68 vbytes per input, 31 vbytes per output, ~11 overhead
         vsize = num_inputs * 68 + num_outputs * 31 + 11
-        fee_rate = 10  # sat/vbyte, should come from backend
-        return int(vsize * fee_rate * self.config.tx_fee_factor)
+        fee_rate = self._fee_rate if self._fee_rate is not None else 1.0
+        import math
+
+        return math.ceil(vsize * fee_rate * self.config.tx_fee_factor)
+
+    async def _resolve_fee_rate(self) -> float:
+        """
+        Resolve the fee rate to use for the current CoinJoin.
+
+        Priority:
+        1. Manual fee_rate from config
+        2. Backend fee estimation with fee_block_target
+        3. Default 3-block estimation if backend supports it
+        4. Fallback to 1 sat/vB
+
+        Returns:
+            Fee rate in sat/vB (cached in self._fee_rate)
+
+        Raises:
+            ValueError: If fee_block_target specified with neutrino backend
+        """
+        # If already resolved, return cached value
+        if self._fee_rate is not None:
+            return self._fee_rate
+
+        # 1. Manual fee rate takes priority
+        if self.config.fee_rate is not None:
+            self._fee_rate = self.config.fee_rate
+            logger.info(f"Using manual fee rate: {self._fee_rate:.2f} sat/vB")
+            return self._fee_rate
+
+        # 2. Block target specified - check backend capability
+        if self.config.fee_block_target is not None:
+            if not self.backend.can_estimate_fee():
+                raise ValueError(
+                    "Cannot use --block-target with neutrino backend. "
+                    "Fee estimation requires a full node. "
+                    "Use --fee-rate to specify a manual rate instead."
+                )
+            self._fee_rate = await self.backend.estimate_fee(self.config.fee_block_target)
+            logger.info(
+                f"Fee estimation for {self.config.fee_block_target} blocks: "
+                f"{self._fee_rate:.2f} sat/vB"
+            )
+            return self._fee_rate
+
+        # 3. Default: 3-block estimation if backend supports it
+        if self.backend.can_estimate_fee():
+            default_target = 3
+            self._fee_rate = await self.backend.estimate_fee(default_target)
+            logger.info(
+                f"Fee estimation for {default_target} blocks (default): {self._fee_rate:.2f} sat/vB"
+            )
+            return self._fee_rate
+
+        # 4. Fallback for neutrino without manual fee
+        self._fee_rate = 1.0
+        logger.warning(
+            "No fee estimation available (neutrino backend). "
+            "Using fallback rate: 1.0 sat/vB. "
+            "Consider using --fee-rate for production."
+        )
+        return self._fee_rate
 
     def _get_taker_cj_output_index(self) -> int | None:
         """
