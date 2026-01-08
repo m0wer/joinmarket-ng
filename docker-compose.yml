@@ -831,7 +831,7 @@ services:
   # ============================================================================
 
   neutrino:
-    image: ghcr.io/m0wer/neutrino-api:0.4
+    image: ghcr.io/m0wer/neutrino-api:latest
     container_name: jm-neutrino
     restart: unless-stopped
     logging:
