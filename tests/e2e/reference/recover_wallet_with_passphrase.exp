@@ -1,0 +1,134 @@
+#!/usr/bin/expect -f
+#
+# Automates JoinMarket wallet recovery with BIP39 passphrase for testing purposes
+#
+# Usage: expect recover_wallet_with_passphrase.exp <mnemonic> <bip39_passphrase> <wallet_password> <wallet_name>
+#
+# Arguments:
+#   mnemonic         - 12-word BIP39 recovery phrase (space-separated in quotes)
+#   bip39_passphrase - BIP39 passphrase (13th word, can be empty string "")
+#   wallet_password  - Encryption password for the wallet file
+#   wallet_name      - Wallet filename (e.g., test_wallet.jmdat)
+#
+
+set timeout 180
+set mnemonic [lindex $argv 0]
+set bip39_passphrase [lindex $argv 1]
+set wallet_password [lindex $argv 2]
+set wallet_name [lindex $argv 3]
+
+if {$mnemonic eq ""} {
+    puts "Error: mnemonic is required"
+    exit 1
+}
+
+if {$wallet_password eq ""} {
+    set wallet_password "testpassword123"
+}
+
+if {$wallet_name eq ""} {
+    set wallet_name "recovered_wallet.jmdat"
+}
+
+# Start wallet-tool.py recover
+spawn python3 /src/scripts/wallet-tool.py --datadir=/root/.joinmarket-ng recover
+
+# Wait for mnemonic prompt and enter recovery phrase
+expect {
+    -re "(Input|Enter).*mnemonic.*recovery.*phrase" {
+        send "$mnemonic\r"
+    }
+    timeout {
+        puts "Timeout waiting for mnemonic prompt"
+        exit 1
+    }
+}
+
+# Wait for BIP39 extension/passphrase prompt
+expect {
+    -re "(Input|Enter).*mnemonic.*extension" {
+        send "$bip39_passphrase\r"
+    }
+    -re "(Input|Enter).*passphrase" {
+        # Some versions ask for passphrase instead of extension
+        send "$bip39_passphrase\r"
+    }
+    timeout {
+        puts "Timeout waiting for BIP39 passphrase prompt"
+        exit 1
+    }
+}
+
+# Enter wallet encryption passphrase
+expect {
+    -re "(Enter|Input).*wallet.*passphrase" {
+        send "$wallet_password\r"
+    }
+    -re "(Enter|Input).*passphrase" {
+        send "$wallet_password\r"
+    }
+    timeout {
+        puts "Timeout waiting for wallet passphrase prompt"
+        exit 1
+    }
+}
+
+# Re-enter wallet encryption passphrase
+expect {
+    -re "(Reenter|Confirm|Re-enter|repeat).*passphrase" {
+        send "$wallet_password\r"
+    }
+    timeout {
+        puts "Timeout waiting for passphrase confirmation"
+        exit 1
+    }
+}
+
+# Wallet file name
+expect {
+    -re "(Input|Enter).*wallet.*file.*name" {
+        send "$wallet_name\r"
+    }
+    timeout {
+        puts "Timeout waiting for wallet file name prompt"
+        exit 1
+    }
+}
+
+# Question: Would you like this wallet to support fidelity bonds?
+expect {
+    "fidelity bonds" {
+        # YES - we need fidelity bond support for this test
+        send "y\r"
+    }
+    timeout {
+        puts "Timeout waiting for fidelity bonds question"
+        exit 1
+    }
+}
+
+# Wait for completion
+expect {
+    "Wallet saved" {
+        puts "\n\nWallet recovered successfully!"
+    }
+    "wallet created" {
+        puts "\n\nWallet recovered successfully!"
+    }
+    "recovery" {
+        puts "\n\nWallet recovered successfully!"
+    }
+    "success" {
+        puts "\n\nWallet recovered successfully!"
+    }
+    timeout {
+        puts "Timeout waiting for wallet recovery completion"
+        exit 1
+    }
+}
+
+# Wait for the process to finish
+expect eof
+
+puts "Wallet recovery completed: $wallet_name"
+exit 0

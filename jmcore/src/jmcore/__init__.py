@@ -86,6 +86,23 @@ from jmcore.protocol import (
     peer_supports_neutrino_compat,
 )
 from jmcore.rate_limiter import RateLimiter, TokenBucket
+from jmcore.timenumber import (
+    TIMELOCK_EPOCH,
+    TIMELOCK_EPOCH_TIMESTAMP,
+    TIMELOCK_EPOCH_YEAR,
+    TIMELOCK_ERA_YEARS,
+    TIMENUMBER_COUNT,
+    format_locktime_date,
+    get_all_locktimes,
+    get_all_timenumbers,
+    get_future_locktimes,
+    get_nearest_valid_locktime,
+    is_valid_locktime,
+    parse_locktime_date,
+    timenumber_to_timestamp,
+    timestamp_to_timenumber,
+    validate_locktime,
+)
 from jmcore.tor_control import (
     EphemeralHiddenService,
     TorAuthenticationError,
@@ -160,6 +177,22 @@ __all__ = [
     "TorControlClient",
     "TorControlError",
     "TorHiddenServiceError",
+    # Timenumber (fidelity bonds)
+    "TIMENUMBER_COUNT",
+    "TIMELOCK_EPOCH",
+    "TIMELOCK_EPOCH_TIMESTAMP",
+    "TIMELOCK_EPOCH_YEAR",
+    "TIMELOCK_ERA_YEARS",
+    "format_locktime_date",
+    "get_all_locktimes",
+    "get_all_timenumbers",
+    "get_future_locktimes",
+    "get_nearest_valid_locktime",
+    "is_valid_locktime",
+    "parse_locktime_date",
+    "timenumber_to_timestamp",
+    "timestamp_to_timenumber",
+    "validate_locktime",
     # Bitcoin utilities (consolidated)
     "ParsedTransaction",
     "TxInput",

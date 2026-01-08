@@ -829,9 +829,7 @@ def generate_bond_address(
     ] = 0,
     locktime_date: Annotated[
         str | None,
-        typer.Option(
-            "--locktime-date", "-d", help="Locktime as date (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)"
-        ),
+        typer.Option("--locktime-date", "-d", help="Locktime as YYYY-MM (must be 1st of month)"),
     ] = None,
     index: Annotated[int, typer.Option("--index", "-i", help="Address index")] = 0,
     network: Annotated[str, typer.Option("--network", "-n")] = "mainnet",
@@ -860,23 +858,35 @@ def generate_bond_address(
     # Resolve BIP39 passphrase
     resolved_bip39_passphrase = _resolve_bip39_passphrase(bip39_passphrase, prompt_bip39_passphrase)
 
-    # Parse locktime
+    # Parse and validate locktime
+    from jmcore.timenumber import is_valid_locktime, parse_locktime_date
+
     if locktime_date:
         try:
-            # Try full datetime format first
-            try:
-                dt = datetime.strptime(locktime_date, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                # Try date-only format
-                dt = datetime.strptime(locktime_date, "%Y-%m-%d")
-            locktime = int(dt.timestamp())
-        except ValueError:
-            logger.error(f"Invalid date format: {locktime_date}")
-            logger.info("Use format: YYYY-MM-DD or YYYY-MM-DD HH:MM:SS")
+            # Use timenumber module for proper parsing and validation
+            locktime = parse_locktime_date(locktime_date)
+        except ValueError as e:
+            logger.error(f"Invalid locktime date: {e}")
+            logger.info("Use format: YYYY-MM or YYYY-MM-DD (must be 1st of month)")
+            logger.info("Valid range: 2020-01 to 2099-12")
             raise typer.Exit(1)
 
     if locktime <= 0:
         logger.error("Locktime is required. Use --locktime or --locktime-date")
+        raise typer.Exit(1)
+
+    # Validate locktime is a valid timenumber (1st of month, midnight UTC)
+    if not is_valid_locktime(locktime):
+        from jmcore.timenumber import get_nearest_valid_locktime
+
+        suggested = get_nearest_valid_locktime(locktime, round_up=True)
+        suggested_dt = datetime.fromtimestamp(suggested)
+        logger.warning(
+            f"Locktime {locktime} is not a valid fidelity bond locktime "
+            f"(must be 1st of month at midnight UTC)"
+        )
+        logger.info(f"Suggested locktime: {suggested} ({suggested_dt.strftime('%Y-%m-%d')})")
+        logger.info("Use --locktime-date YYYY-MM for correct format")
         raise typer.Exit(1)
 
     # Validate locktime is in the future
@@ -1639,6 +1649,228 @@ def registry_show(
     print()
     print(f"Created:      {bond.created_at}")
     print("=" * 80 + "\n")
+
+
+@app.command("recover-bonds")
+def recover_bonds(
+    mnemonic: Annotated[str | None, typer.Option("--mnemonic")] = None,
+    mnemonic_file: Annotated[Path | None, typer.Option("--mnemonic-file", "-f")] = None,
+    password: Annotated[str | None, typer.Option("--password", "-p")] = None,
+    bip39_passphrase: Annotated[
+        str | None,
+        typer.Option(
+            "--bip39-passphrase",
+            envvar="BIP39_PASSPHRASE",
+            help="BIP39 passphrase (13th/25th word)",
+        ),
+    ] = None,
+    prompt_bip39_passphrase: Annotated[
+        bool, typer.Option("--prompt-bip39-passphrase", help="Prompt for BIP39 passphrase")
+    ] = False,
+    network: Annotated[str, typer.Option("--network", "-n")] = "mainnet",
+    rpc_url: Annotated[
+        str, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")
+    ] = "http://127.0.0.1:8332",
+    rpc_user: Annotated[str, typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER")] = "",
+    rpc_password: Annotated[
+        str, typer.Option("--rpc-password", envvar="BITCOIN_RPC_PASSWORD")
+    ] = "",
+    max_index: Annotated[
+        int,
+        typer.Option(
+            "--max-index", "-i", help="Max address index per locktime to scan (default 1)"
+        ),
+    ] = 1,
+    data_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-dir",
+            help="Data directory (default: ~/.joinmarket-ng or $JOINMARKET_DATA_DIR)",
+        ),
+    ] = None,
+    log_level: Annotated[str, typer.Option("--log-level", "-l")] = "INFO",
+) -> None:
+    """
+    Recover fidelity bonds by scanning all 960 possible timelocks.
+
+    This command scans the blockchain for fidelity bonds at all valid
+    timenumber locktimes (Jan 2020 through Dec 2099). Use this when
+    recovering a wallet from mnemonic and you don't know which locktimes
+    were used for fidelity bonds.
+
+    The scan checks address index 0 by default (most wallets only use index 0).
+    Use --max-index to scan more addresses per locktime if needed.
+    """
+    setup_logging(log_level)
+
+    try:
+        resolved_mnemonic = _resolve_mnemonic(mnemonic, mnemonic_file, password, True)
+    except (FileNotFoundError, ValueError) as e:
+        logger.error(str(e))
+        raise typer.Exit(1)
+
+    # Resolve BIP39 passphrase
+    resolved_bip39_passphrase = _resolve_bip39_passphrase(bip39_passphrase, prompt_bip39_passphrase)
+
+    from jmcore.paths import get_default_data_dir
+
+    resolved_data_dir = data_dir if data_dir else get_default_data_dir()
+
+    asyncio.run(
+        _recover_bonds_async(
+            resolved_mnemonic,
+            network,
+            rpc_url,
+            rpc_user,
+            rpc_password,
+            max_index,
+            resolved_data_dir,
+            resolved_bip39_passphrase,
+        )
+    )
+
+
+async def _recover_bonds_async(
+    mnemonic: str,
+    network: str,
+    rpc_url: str,
+    rpc_user: str,
+    rpc_password: str,
+    max_index: int,
+    data_dir: Path,
+    bip39_passphrase: str = "",
+) -> None:
+    """Async implementation of fidelity bond recovery."""
+    from jmcore.timenumber import TIMENUMBER_COUNT
+
+    from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
+    from jmwallet.wallet.bond_registry import (
+        create_bond_info,
+        load_registry,
+        save_registry,
+    )
+    from jmwallet.wallet.service import FIDELITY_BOND_BRANCH, WalletService
+
+    backend = BitcoinCoreBackend(rpc_url=rpc_url, rpc_user=rpc_user, rpc_password=rpc_password)
+
+    wallet = WalletService(
+        mnemonic=mnemonic,
+        backend=backend,
+        network=network,
+        mixdepth_count=5,
+        passphrase=bip39_passphrase,
+        data_dir=data_dir,
+    )
+
+    print("\nScanning for fidelity bonds...")
+    print(f"Timelocks to scan: {TIMENUMBER_COUNT} (Jan 2020 - Dec 2099)")
+    print(f"Addresses per timelock: {max_index}")
+    print(f"Total addresses: {TIMENUMBER_COUNT * max_index:,}")
+    print("-" * 60)
+
+    # Progress callback
+    def progress_callback(current: int, total: int) -> None:
+        percent = (current / total) * 100
+        print(f"\rProgress: {current}/{total} timelocks ({percent:.1f}%)...", end="", flush=True)
+
+    try:
+        # Discover fidelity bonds
+        discovered_utxos = await wallet.discover_fidelity_bonds(
+            max_index=max_index,
+            progress_callback=progress_callback,
+        )
+
+        print()  # Newline after progress
+        print("-" * 60)
+
+        if not discovered_utxos:
+            print("\nNo fidelity bonds found.")
+            print("If you expected to find bonds, try increasing --max-index")
+            return
+
+        print(f"\nDiscovered {len(discovered_utxos)} fidelity bond(s):")
+        print()
+
+        # Load registry and add discovered bonds
+        registry = load_registry(data_dir)
+        new_bonds = 0
+
+        from jmcore.bitcoin import format_amount
+        from jmcore.timenumber import format_locktime_date
+
+        coin_type = 0 if network == "mainnet" else 1
+
+        for utxo in discovered_utxos:
+            # Extract index and locktime from path
+            # Path format: m/84'/coin'/0'/2/index:locktime
+            path_parts = utxo.path.split("/")
+            index_locktime = path_parts[-1]
+            if ":" in index_locktime:
+                idx_str, locktime_str = index_locktime.split(":")
+                idx = int(idx_str)
+                locktime = int(locktime_str)
+            else:
+                idx = int(index_locktime)
+                locktime = utxo.locktime or 0
+
+            # Show discovered bond
+            locktime_date = format_locktime_date(locktime) if locktime else "unknown"
+            print(f"  Address:   {utxo.address}")
+            print(f"  Value:     {format_amount(utxo.value)}")
+            print(f"  Locktime:  {locktime_date}")
+            print(f"  TXID:      {utxo.txid}:{utxo.vout}")
+            print()
+
+            # Check if already in registry
+            existing = registry.get_bond_by_address(utxo.address)
+            if existing:
+                # Update UTXO info
+                registry.update_utxo_info(
+                    address=utxo.address,
+                    txid=utxo.txid,
+                    vout=utxo.vout,
+                    value=utxo.value,
+                    confirmations=utxo.confirmations,
+                )
+            else:
+                # Add new bond to registry
+                # Get the key and script for the bond
+                key = wallet.get_fidelity_bond_key(idx, locktime)
+                pubkey_hex = key.get_public_key_bytes(compressed=True).hex()
+
+                from jmcore.btc_script import mk_freeze_script
+
+                witness_script = mk_freeze_script(pubkey_hex, locktime)
+                path = f"m/84'/{coin_type}'/0'/{FIDELITY_BOND_BRANCH}/{idx}"
+
+                bond_info = create_bond_info(
+                    address=utxo.address,
+                    locktime=locktime,
+                    index=idx,
+                    path=path,
+                    pubkey_hex=pubkey_hex,
+                    witness_script=witness_script,
+                    network=network,
+                )
+                # Set UTXO info
+                bond_info.txid = utxo.txid
+                bond_info.vout = utxo.vout
+                bond_info.value = utxo.value
+                bond_info.confirmations = utxo.confirmations
+
+                registry.add_bond(bond_info)
+                new_bonds += 1
+
+        # Save registry
+        save_registry(registry, data_dir)
+
+        print("-" * 60)
+        print(f"Added {new_bonds} new bond(s) to registry")
+        print(f"Updated {len(discovered_utxos) - new_bonds} existing bond(s)")
+        print(f"Registry saved to: {data_dir / 'fidelity_bonds.json'}")
+
+    finally:
+        await wallet.close()
 
 
 @app.command("registry-sync")

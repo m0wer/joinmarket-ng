@@ -399,6 +399,112 @@ class WalletService:
 
         return utxos
 
+    async def discover_fidelity_bonds(
+        self,
+        max_index: int = 1,
+        progress_callback: Any | None = None,
+    ) -> list[UTXOInfo]:
+        """
+        Discover fidelity bonds by scanning all 960 possible locktimes.
+
+        This is used during wallet recovery when the user doesn't know which
+        locktimes they used. It generates addresses for all valid timenumbers
+        (0-959, representing Jan 2020 through Dec 2099) and scans for UTXOs.
+
+        The scan is optimized by:
+        1. Using index=0 only (most users only use one address per locktime)
+        2. Batching address generation and UTXO queries
+        3. Optionally extending index range only for locktimes with funds
+
+        Args:
+            max_index: Maximum address index to scan per locktime (default 1).
+                      Higher values increase scan time linearly.
+            progress_callback: Optional callback(timenumber, total) for progress updates
+
+        Returns:
+            List of discovered fidelity bond UTXOs
+        """
+        from jmcore.timenumber import TIMENUMBER_COUNT, timenumber_to_timestamp
+
+        logger.info(
+            f"Starting fidelity bond discovery scan "
+            f"({TIMENUMBER_COUNT} timelocks × {max_index} index(es))"
+        )
+
+        discovered_utxos: list[UTXOInfo] = []
+        batch_size = 100  # Process timenumbers in batches
+
+        # Initialize locktime cache if needed
+        if not hasattr(self, "fidelity_bond_locktime_cache"):
+            self.fidelity_bond_locktime_cache = {}
+
+        for batch_start in range(0, TIMENUMBER_COUNT, batch_size):
+            batch_end = min(batch_start + batch_size, TIMENUMBER_COUNT)
+            addresses: list[str] = []
+            address_to_locktime: dict[str, tuple[int, int]] = {}  # address -> (locktime, index)
+
+            # Generate addresses for this batch of timenumbers
+            for timenumber in range(batch_start, batch_end):
+                locktime = timenumber_to_timestamp(timenumber)
+                for idx in range(max_index):
+                    address = self.get_fidelity_bond_address(idx, locktime)
+                    addresses.append(address)
+                    address_to_locktime[address] = (locktime, idx)
+
+            # Fetch UTXOs for all addresses in batch
+            try:
+                backend_utxos = await self.backend.get_utxos(addresses)
+            except Exception as e:
+                logger.error(f"Failed to scan batch {batch_start}-{batch_end}: {e}")
+                continue
+
+            # Process found UTXOs
+            for utxo in backend_utxos:
+                if utxo.address in address_to_locktime:
+                    locktime, idx = address_to_locktime[utxo.address]
+                    path = f"{self.root_path}/0'/{FIDELITY_BOND_BRANCH}/{idx}:{locktime}"
+
+                    utxo_info = UTXOInfo(
+                        txid=utxo.txid,
+                        vout=utxo.vout,
+                        value=utxo.value,
+                        address=utxo.address,
+                        confirmations=utxo.confirmations,
+                        scriptpubkey=utxo.scriptpubkey,
+                        path=path,
+                        mixdepth=0,
+                        height=utxo.height,
+                        locktime=locktime,
+                    )
+                    discovered_utxos.append(utxo_info)
+
+                    from jmcore.timenumber import format_locktime_date
+
+                    logger.info(
+                        f"Discovered fidelity bond: {utxo.txid}:{utxo.vout} "
+                        f"value={utxo.value:,} sats, locktime={format_locktime_date(locktime)}"
+                    )
+
+            # Progress callback
+            if progress_callback:
+                progress_callback(batch_end, TIMENUMBER_COUNT)
+
+        # Add discovered UTXOs to mixdepth 0 cache
+        if discovered_utxos:
+            if 0 not in self.utxo_cache:
+                self.utxo_cache[0] = []
+            # Avoid duplicates
+            existing_outpoints = {(u.txid, u.vout) for u in self.utxo_cache[0]}
+            for utxo in discovered_utxos:
+                if (utxo.txid, utxo.vout) not in existing_outpoints:
+                    self.utxo_cache[0].append(utxo)
+
+            logger.info(f"Discovery complete: found {len(discovered_utxos)} fidelity bond(s)")
+        else:
+            logger.info("Discovery complete: no fidelity bonds found")
+
+        return discovered_utxos
+
     async def sync_all(
         self, fidelity_bond_addresses: list[tuple[str, int, int]] | None = None
     ) -> dict[int, list[UTXOInfo]]:

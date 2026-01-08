@@ -213,7 +213,7 @@ class BitcoinCoreBackend(BlockchainBackend):
             return utxos
 
         # Process in batches to avoid huge RPC requests
-        batch_size = 100
+        batch_size: int = 1000
         for i in range(0, len(addresses), batch_size):
             chunk = addresses[i : i + batch_size]
             descriptors = [f"addr({addr})" for addr in chunk]
