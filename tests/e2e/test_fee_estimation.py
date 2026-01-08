@@ -144,15 +144,19 @@ class TestNeutrinoFeeEstimation:
         """Test that Neutrino backend reports it cannot estimate fees."""
         assert neutrino_backend.can_estimate_fee() is False
 
-    async def test_estimate_fee_returns_fallback_float(self, neutrino_backend):
+    async def test_estimate_fee_returns_float(self, neutrino_backend):
         """Test that Neutrino returns float fallback values."""
         fee = await neutrino_backend.estimate_fee(target_blocks=3)
 
         assert isinstance(fee, float), f"Fee should be float, got {type(fee)}"
-        logger.info(f"Neutrino 3-block fee (fallback): {fee} sat/vB")
+        assert fee == 2.0, "3-block should return 2.0 sat/vB fallback"
+        logger.info(f"Neutrino 3-block fee: {fee} sat/vB")
 
     async def test_neutrino_fallback_values(self, neutrino_backend):
-        """Test Neutrino fallback values for different targets."""
+        """Test Neutrino fallback values for different targets.
+
+        Neutrino cannot estimate fees and always returns hardcoded fallbacks.
+        """
         fee_1 = await neutrino_backend.estimate_fee(target_blocks=1)
         fee_3 = await neutrino_backend.estimate_fee(target_blocks=3)
         fee_6 = await neutrino_backend.estimate_fee(target_blocks=6)
@@ -163,7 +167,7 @@ class TestNeutrinoFeeEstimation:
             f"6-block={fee_6}, 12-block={fee_12} sat/vB"
         )
 
-        # Verify fallback values (from neutrino.py)
+        # Verify exact fallback values (from neutrino.py)
         assert fee_1 == 5.0, "1-block fallback should be 5.0"
         assert fee_3 == 2.0, "3-block fallback should be 2.0"
         assert fee_6 == 1.0, "6-block fallback should be 1.0"
