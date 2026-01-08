@@ -282,6 +282,8 @@ def fresh_docker_makers():
     """
     import subprocess
 
+    from jmcore.paths import get_used_commitments_path
+
     try:
         # Stop any non-e2e profile makers that might be running
         # This prevents stale offers from interfering with tests
@@ -291,6 +293,14 @@ def fresh_docker_makers():
             text=True,
             timeout=10,
         )
+
+        # Clear the taker's used commitments on the host machine
+        # The in-process taker uses ~/.joinmarket-ng/cmtdata/commitments.json
+        # Without clearing this, the taker may exhaust PoDLE indices for its UTXOs
+        taker_commitments = get_used_commitments_path()
+        if taker_commitments.exists():
+            taker_commitments.unlink()
+            logger.info(f"Cleared taker used commitments: {taker_commitments}")
 
         # Clear commitment blacklists for both makers before restarting
         for maker in ["jm-maker1", "jm-maker2"]:
