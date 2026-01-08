@@ -278,7 +278,9 @@ class TestNeutrinoCoinJoin:
     """
 
     @pytest.mark.slow
-    async def test_coinjoin_with_neutrino_maker(self, neutrino_backend):
+    async def test_coinjoin_with_neutrino_maker(
+        self, neutrino_backend, fresh_docker_makers
+    ):
         """Test that a maker using neutrino can participate in CoinJoin.
 
         This test verifies:
@@ -286,6 +288,9 @@ class TestNeutrinoCoinJoin:
         - Docker neutrino maker (jm-maker-neutrino) is running and has offers
         - Taker can initiate CoinJoin with the neutrino-based maker
         - Complete CoinJoin transaction succeeds
+
+        The fresh_docker_makers fixture clears both maker commitment blacklists
+        and the taker's used commitments to ensure fresh PoDLE indices are available.
 
         Requires: docker compose --profile neutrino up -d
         """
@@ -460,7 +465,9 @@ class TestNeutrinoCoinJoin:
 
     @pytest.mark.slow
     @pytest.mark.flaky(reruns=3, reruns_delay=10)
-    async def test_coinjoin_with_neutrino_taker(self, neutrino_backend):
+    async def test_coinjoin_with_neutrino_taker(
+        self, neutrino_backend, fresh_docker_makers
+    ):
         """Test that a taker using neutrino can initiate CoinJoin.
 
         This test verifies:
@@ -472,9 +479,8 @@ class TestNeutrinoCoinJoin:
         This complements test_coinjoin_with_neutrino_maker by testing the
         opposite configuration: neutrino taker + Bitcoin Core maker.
 
-        Note: This test is marked flaky because Docker makers may have stale UTXOs
-        if a previous coinjoin consumed them. The reruns allow the makers time to
-        resync their wallet and update their offers.
+        The fresh_docker_makers fixture clears both maker commitment blacklists
+        and the taker's used commitments to ensure fresh PoDLE indices are available.
 
         Requires: docker compose --profile neutrino up -d (for both neutrino backend
         and jm-maker1/jm-maker2 makers)
