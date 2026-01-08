@@ -347,7 +347,7 @@ services:
       - TX_FEE_CONTRIBUTION=500
       - CJ_FEE_RELATIVE=0.0003
       # Fidelity bond configuration (manual specification without registry)
-      - FIDELITY_BOND_LOCKTIMES=4102444800
+      - FIDELITY_BOND_LOCKTIMES=4099766400
       - FIDELITY_BOND_INDEX=0
     volumes:
       - maker1-data:/home/jm/.joinmarket-ng
