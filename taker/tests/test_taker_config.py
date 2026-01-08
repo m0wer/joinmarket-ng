@@ -131,6 +131,64 @@ class TestTakerConfig:
         with pytest.raises(ValidationError):
             TakerConfig(mnemonic=sample_mnemonic, rescan_interval_sec=30)
 
+    def test_fee_rate_default_is_none(self, sample_mnemonic: str) -> None:
+        """Test that fee_rate defaults to None (use estimation)."""
+        config = TakerConfig(mnemonic=sample_mnemonic)
+        assert config.fee_rate is None
+
+    def test_fee_rate_custom(self, sample_mnemonic: str) -> None:
+        """Test setting custom fee rate."""
+        config = TakerConfig(mnemonic=sample_mnemonic, fee_rate=1.5)
+        assert config.fee_rate == 1.5
+
+    def test_fee_rate_sub_sat(self, sample_mnemonic: str) -> None:
+        """Test sub-1 sat/vB fee rate is allowed."""
+        config = TakerConfig(mnemonic=sample_mnemonic, fee_rate=0.5)
+        assert config.fee_rate == 0.5
+
+    def test_fee_rate_must_be_positive(self, sample_mnemonic: str) -> None:
+        """Test that fee_rate must be positive if set."""
+        with pytest.raises(ValidationError):
+            TakerConfig(mnemonic=sample_mnemonic, fee_rate=0)
+
+        with pytest.raises(ValidationError):
+            TakerConfig(mnemonic=sample_mnemonic, fee_rate=-1.0)
+
+    def test_fee_block_target_default_is_none(self, sample_mnemonic: str) -> None:
+        """Test that fee_block_target defaults to None (use default 3)."""
+        config = TakerConfig(mnemonic=sample_mnemonic)
+        assert config.fee_block_target is None
+
+    def test_fee_block_target_custom(self, sample_mnemonic: str) -> None:
+        """Test setting custom block target."""
+        config = TakerConfig(mnemonic=sample_mnemonic, fee_block_target=6)
+        assert config.fee_block_target == 6
+
+    def test_fee_block_target_bounds(self, sample_mnemonic: str) -> None:
+        """Test block target must be between 1 and 1008."""
+        # Valid minimum
+        config = TakerConfig(mnemonic=sample_mnemonic, fee_block_target=1)
+        assert config.fee_block_target == 1
+
+        # Valid maximum
+        config = TakerConfig(mnemonic=sample_mnemonic, fee_block_target=1008)
+        assert config.fee_block_target == 1008
+
+        # Invalid - too low
+        with pytest.raises(ValidationError):
+            TakerConfig(mnemonic=sample_mnemonic, fee_block_target=0)
+
+        # Invalid - too high
+        with pytest.raises(ValidationError):
+            TakerConfig(mnemonic=sample_mnemonic, fee_block_target=1009)
+
+    def test_fee_rate_and_block_target_mutually_exclusive(self, sample_mnemonic: str) -> None:
+        """Test that fee_rate and fee_block_target cannot both be set."""
+        with pytest.raises(ValidationError) as excinfo:
+            TakerConfig(mnemonic=sample_mnemonic, fee_rate=2.0, fee_block_target=3)
+
+        assert "Cannot specify both fee_rate and fee_block_target" in str(excinfo.value)
+
 
 class TestScheduleEntry:
     """Tests for ScheduleEntry model."""

@@ -60,6 +60,18 @@ class TakerConfig(WalletConfig):
     tx_fee_factor: float = Field(
         default=3.0, ge=1.0, description="Multiply estimated fee by this factor"
     )
+    fee_rate: float | None = Field(
+        default=None,
+        gt=0.0,
+        description="Manual fee rate in sat/vB (mutually exclusive with fee_block_target)",
+    )
+    fee_block_target: int | None = Field(
+        default=None,
+        ge=1,
+        le=1008,
+        description="Target blocks for fee estimation (mutually exclusive with fee_rate). "
+        "Defaults to 3 when connected to full node.",
+    )
     bondless_makers_allowance: float = Field(
         default=0.0,
         ge=0.0,
@@ -123,6 +135,16 @@ class TakerConfig(WalletConfig):
         """If bitcoin_network is not set, default to the protocol network."""
         if self.bitcoin_network is None:
             object.__setattr__(self, "bitcoin_network", self.network)
+        return self
+
+    @model_validator(mode="after")
+    def validate_fee_options(self) -> TakerConfig:
+        """Ensure fee_rate and fee_block_target are mutually exclusive."""
+        if self.fee_rate is not None and self.fee_block_target is not None:
+            raise ValueError(
+                "Cannot specify both fee_rate and fee_block_target. "
+                "Use fee_rate for manual rate, or fee_block_target for estimation."
+            )
         return self
 
 

@@ -385,12 +385,15 @@ class NeutrinoBackend(BlockchainBackend):
             logger.warning(f"Error verifying tx output {txid}:{vout}: {e}")
             return False
 
-    async def estimate_fee(self, target_blocks: int) -> int:
+    async def estimate_fee(self, target_blocks: int) -> float:
         """
         Estimate fee in sat/vbyte for target confirmation blocks.
 
         Neutrino can estimate fees based on observed mempool/block data.
         Falls back to reasonable defaults if estimation unavailable.
+
+        Note: Neutrino's fee estimation is limited compared to full nodes.
+        Use can_estimate_fee() to check if reliable estimation is available.
         """
         try:
             result = await self._api_call(
@@ -402,20 +405,24 @@ class NeutrinoBackend(BlockchainBackend):
             fee_rate = result.get("fee_rate", 0)
             if fee_rate > 0:
                 logger.debug(f"Estimated fee for {target_blocks} blocks: {fee_rate} sat/vB")
-                return int(fee_rate)
+                return float(fee_rate)
 
         except Exception as e:
             logger.warning(f"Fee estimation failed: {e}")
 
-        # Fallback fee rates based on target
+        # Fallback fee rates based on target (conservative defaults)
         if target_blocks <= 1:
-            return 20
+            return 5.0
         elif target_blocks <= 3:
-            return 10
+            return 2.0
         elif target_blocks <= 6:
-            return 5
+            return 1.0
         else:
-            return 2
+            return 1.0
+
+    def can_estimate_fee(self) -> bool:
+        """Neutrino cannot reliably estimate fees - requires full node."""
+        return False
 
     async def get_block_height(self) -> int:
         """Get current blockchain height from neutrino."""

@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Fee rate handling improvements:
+  - Changed default fee rate from 10 sat/vB to 1 sat/vB fallback.
+  - Added support for sub-1 sat/vB fee rates (float instead of int).
+  - Added `--block-target` option for fee estimation (1-1008 blocks).
+  - Added `--fee-rate` option for manual fee rate (mutually exclusive with `--block-target`).
+  - Default behavior: 3-block fee estimation when connected to full node.
+  - Neutrino backend: falls back to 1 sat/vB (cannot estimate fees).
+  - Error when `--block-target` is used with neutrino backend.
+- Backend `estimate_fee()` now returns `float` for precision with sub-sat rates.
+- Added `can_estimate_fee()` method to backends for capability detection.
+
 ## [0.8.0] - 2026-01-08
 
 ### Added

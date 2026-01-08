@@ -62,12 +62,76 @@ async def test_bitcoin_core_backend_integration():
         assert tx is not None
         assert tx.txid == txid
 
-        # Test estimate_fee
+        # Test estimate_fee returns float
         fee = await backend.estimate_fee(2)
+        assert isinstance(fee, float)
         assert fee > 0
 
     finally:
         await backend.close()
+
+
+class TestBitcoinCoreBackendUnit:
+    """Unit tests for BitcoinCoreBackend (no Docker required)."""
+
+    def test_bitcoin_core_can_estimate_fee(self):
+        """Test that BitcoinCoreBackend reports it can estimate fees."""
+        backend = BitcoinCoreBackend(
+            rpc_url="http://localhost:18443", rpc_user="test", rpc_password="test"
+        )
+        assert backend.can_estimate_fee() is True
+
+    @pytest.mark.asyncio
+    async def test_bitcoin_core_fee_returns_float(self):
+        """Test that BitcoinCoreBackend fee estimation returns float."""
+        from unittest.mock import AsyncMock
+
+        backend = BitcoinCoreBackend(
+            rpc_url="http://localhost:18443", rpc_user="test", rpc_password="test"
+        )
+
+        # Mock the RPC call to return a known fee rate (BTC/kB)
+        # 0.00001 BTC/kB = 1 sat/vB
+        backend._rpc_call = AsyncMock(return_value={"feerate": 0.00001})
+
+        fee = await backend.estimate_fee(3)
+        assert isinstance(fee, float)
+        assert fee == 1.0
+
+        # Test fractional sat/vB rate: 0.000015 BTC/kB = 1.5 sat/vB
+        backend._rpc_call = AsyncMock(return_value={"feerate": 0.000015})
+        fee = await backend.estimate_fee(3)
+        assert isinstance(fee, float)
+        assert fee == 1.5
+
+        # Test sub-1 sat/vB rate: 0.000005 BTC/kB = 0.5 sat/vB
+        backend._rpc_call = AsyncMock(return_value={"feerate": 0.000005})
+        fee = await backend.estimate_fee(6)
+        assert isinstance(fee, float)
+        assert fee == 0.5
+
+    @pytest.mark.asyncio
+    async def test_bitcoin_core_fee_fallback(self):
+        """Test that BitcoinCoreBackend falls back to 1 sat/vB on error."""
+        from unittest.mock import AsyncMock
+
+        backend = BitcoinCoreBackend(
+            rpc_url="http://localhost:18443", rpc_user="test", rpc_password="test"
+        )
+
+        # Mock the RPC call to raise an exception
+        backend._rpc_call = AsyncMock(side_effect=Exception("RPC error"))
+
+        fee = await backend.estimate_fee(3)
+        assert isinstance(fee, float)
+        assert fee == 1.0
+
+        # Mock the RPC call to return no feerate (estimation unavailable)
+        backend._rpc_call = AsyncMock(return_value={"errors": ["Insufficient data"]})
+
+        fee = await backend.estimate_fee(3)
+        assert isinstance(fee, float)
+        assert fee == 1.0
 
 
 class TestNeutrinoBackend:
@@ -83,6 +147,46 @@ class TestNeutrinoBackend:
         assert backend.neutrino_url == "http://localhost:8334"
         assert backend.network == "regtest"
         assert backend._synced is False
+        await backend.close()
+
+    @pytest.mark.asyncio
+    async def test_neutrino_backend_cannot_estimate_fee(self):
+        """Test that NeutrinoBackend reports it cannot estimate fees."""
+        backend = NeutrinoBackend(neutrino_url="http://localhost:8334")
+        assert backend.can_estimate_fee() is False
+        await backend.close()
+
+    @pytest.mark.asyncio
+    async def test_neutrino_backend_fee_fallback_values(self):
+        """Test that NeutrinoBackend returns float fallback fee values."""
+        backend = NeutrinoBackend(neutrino_url="http://localhost:8334")
+
+        # Test fallback values for different targets (no API call - will fail and use fallback)
+        # Can't actually call estimate_fee without mocking, but we can check the type
+        # when it returns fallback values
+
+        from unittest.mock import AsyncMock
+
+        # Mock _api_call to raise an exception (simulating unavailable API)
+        backend._api_call = AsyncMock(side_effect=Exception("API unavailable"))
+
+        # Check fallback for different targets - should return float
+        fee_1block = await backend.estimate_fee(1)
+        assert isinstance(fee_1block, float)
+        assert fee_1block == 5.0  # Fallback for <= 1 block
+
+        fee_3block = await backend.estimate_fee(3)
+        assert isinstance(fee_3block, float)
+        assert fee_3block == 2.0  # Fallback for <= 3 blocks
+
+        fee_6block = await backend.estimate_fee(6)
+        assert isinstance(fee_6block, float)
+        assert fee_6block == 1.0  # Fallback for <= 6 blocks
+
+        fee_12block = await backend.estimate_fee(12)
+        assert isinstance(fee_12block, float)
+        assert fee_12block == 1.0  # Fallback for > 6 blocks
+
         await backend.close()
 
     @pytest.mark.asyncio
