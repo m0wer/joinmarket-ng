@@ -457,7 +457,7 @@ Use env vars for RPC credentials (see jmwallet README).
 │    --mixdepth          -m                        INTEGER  Source mixdepth    │
 │                                                           [default: 0]       │
 │    --counterparties    -n                        INTEGER  Number of makers   │
-│                                                           [default: 3]       │
+│                                                           [default: 10]      │
 │    --mnemonic                                    TEXT     Wallet mnemonic    │
 │                                                           phrase             │
 │                                                           [env var:          │
@@ -527,6 +527,18 @@ Use env vars for RPC credentials (see jmwallet README).
 │    --max-rel-fee                                 TEXT     Max relative fee   │
 │                                                           (0.001=0.1%)       │
 │                                                           [default: 0.001]   │
+│    --fee-rate                                    FLOAT    Manual fee rate in │
+│                                                           sat/vB (e.g. 1.5). │
+│                                                           Mutually exclusive │
+│                                                           with               │
+│                                                           --block-target.    │
+│    --block-target                                INTEGER  Target blocks for  │
+│                                                           fee estimation     │
+│                                                           (1-1008). Defaults │
+│                                                           to 3 when using    │
+│                                                           full node. Cannot  │
+│                                                           be used with       │
+│                                                           neutrino backend.  │
 │    --bondless-allowa…                            FLOAT    Fraction of time   │
 │                                                           to choose makers   │
 │                                                           randomly (0.0-1.0) │

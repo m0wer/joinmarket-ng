@@ -328,7 +328,12 @@ For detailed help on any command, see the auto-generated help sections below.
 │                                             [env var: BIP39_PASSPHRASE]      │
 │ --prompt-bip39-passphrase                   Prompt for BIP39 passphrase      │
 │ --mixdepth                 -m      INTEGER  Source mixdepth [default: 0]     │
-│ --fee-rate                         INTEGER  Fee rate in sat/vB [default: 10] │
+│ --fee-rate                         FLOAT    Manual fee rate in sat/vB (e.g.  │
+│                                             1.5). Mutually exclusive with    │
+│                                             --block-target. Defaults to      │
+│                                             3-block estimation.              │
+│ --block-target                     INTEGER  Target blocks for fee estimation │
+│                                             (1-1008). Defaults to 3.         │
 │ --network                  -n      TEXT     [default: mainnet]               │
 │ --rpc-url                          TEXT     [env var: BITCOIN_RPC_URL]       │
 │                                             [default: http://127.0.0.1:8332] │
