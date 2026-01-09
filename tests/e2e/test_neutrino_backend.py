@@ -464,7 +464,6 @@ class TestNeutrinoCoinJoin:
             await bitcoin_backend.close()
 
     @pytest.mark.slow
-    @pytest.mark.flaky(reruns=3, reruns_delay=10)
     async def test_coinjoin_with_neutrino_taker(
         self, neutrino_backend, fresh_docker_makers
     ):
@@ -647,7 +646,8 @@ class TestNeutrinoCoinJoin:
                     logger.info(
                         "Verifying transaction was broadcast to Bitcoin Core..."
                     )
-                    # First check mempool - the tx should be there before we mine
+                    # Check if tx is in mempool or already confirmed
+                    # (auto-miner may have already mined it)
                     import httpx
 
                     async with httpx.AsyncClient(timeout=10.0) as client:
@@ -664,18 +664,27 @@ class TestNeutrinoCoinJoin:
                         mempool = response.json()["result"]
                         logger.info(f"Mempool contents: {mempool}")
 
-                        assert txid in mempool, (
-                            f"Transaction {txid} should be in mempool but wasn't found. "
-                            f"This indicates the makers failed to broadcast the transaction. "
-                            f"Mempool: {mempool}"
-                        )
-
-                    logger.info(
-                        f"Transaction {txid} confirmed in mempool, mining block..."
-                    )
-
-                    # Mine blocks to confirm
-                    await mine_blocks(1, dest_address)
+                        if txid in mempool:
+                            logger.info(
+                                f"Transaction {txid} found in mempool, mining block..."
+                            )
+                            # Mine blocks to confirm
+                            await mine_blocks(1, dest_address)
+                        else:
+                            logger.info(
+                                f"Transaction {txid} not in mempool, checking if already confirmed..."
+                            )
+                            # Check if already confirmed (auto-miner may have mined it)
+                            tx_info = await bitcoin_backend.get_transaction(txid)
+                            if tx_info is None or tx_info.confirmations == 0:
+                                raise AssertionError(
+                                    f"Transaction {txid} not found in mempool or blockchain. "
+                                    f"This indicates the makers failed to broadcast. "
+                                    f"Mempool: {mempool}"
+                                )
+                            logger.info(
+                                f"Transaction already confirmed with {tx_info.confirmations} confirmations"
+                            )
 
                     # Now verify the transaction is confirmed
                     logger.info("Verifying transaction on Bitcoin Core...")
