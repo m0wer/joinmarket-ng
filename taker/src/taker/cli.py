@@ -383,7 +383,8 @@ async def _run_coinjoin(
     try:
         await taker.start()
 
-        logger.info(f"Starting CoinJoin: {amount} sats -> {destination}")
+        amount_display = "ALL (sweep)" if amount == 0 else f"{amount:,} sats"
+        logger.info(f"Starting CoinJoin: {amount_display} -> {destination}")
         txid = await taker.do_coinjoin(
             amount=amount,
             destination=destination,
