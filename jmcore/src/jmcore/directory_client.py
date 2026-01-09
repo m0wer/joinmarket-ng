@@ -532,11 +532,20 @@ class DirectoryClient:
         """
         Process a PEERLIST response and update internal state.
 
+        Note: Some directories send multiple partial PEERLIST responses (one per peer)
+        instead of a single complete list. We handle this by only adding/updating
+        peers from each response, not removing nicks that aren't present.
+
+        Removal of stale offers is handled by:
+        1. Explicit disconnect markers (;D suffix) in peerlist entries
+        2. The periodic peerlist refresh in OrderbookAggregator
+        3. Staleness cleanup for directories without GETPEERLIST support
+
         Args:
             peerlist_str: Comma-separated list of peer entries
 
         Returns:
-            List of active peers (nick, location, features)
+            List of active peers (nick, location, features) in this response
         """
         logger.debug(f"Peerlist string: {peerlist_str}")
 
@@ -544,16 +553,12 @@ class DirectoryClient:
         self._peerlist_supported = True
 
         if not peerlist_str:
-            # Empty peerlist - clear our active peers tracking
-            old_nicks = set(self._active_peers.keys())
-            self._active_peers.clear()
-            # Remove offers from nicks that are no longer active
-            for nick in old_nicks:
-                self.remove_offers_for_nick(nick)
+            # Empty peerlist response - just return empty list
+            # Don't remove offers as this might be a partial response
             return []
 
         peers: list[tuple[str, str, FeatureSet]] = []
-        new_active_peers: dict[str, str] = {}
+        explicitly_disconnected: list[str] = []
 
         for entry in peerlist_str.split(","):
             # Skip empty entries
@@ -570,9 +575,13 @@ class DirectoryClient:
                     f"Parsed peer: {nick} at {location}, "
                     f"disconnected={disconnected}, features={features.to_comma_string()}"
                 )
-                if not disconnected:
+                if disconnected:
+                    # Nick explicitly marked as disconnected - remove their offers
+                    explicitly_disconnected.append(nick)
+                else:
                     peers.append((nick, location, features))
-                    new_active_peers[nick] = location
+                    # Update/add this nick to active peers
+                    self._active_peers[nick] = location
                     # Always update peer_features cache to track that we've seen this peer
                     # This prevents triggering "new peer" logic for every message from this peer
                     self.peer_features[nick] = features.to_dict()
@@ -580,21 +589,17 @@ class DirectoryClient:
                 logger.warning(f"Failed to parse peerlist entry '{entry}': {e}")
                 continue
 
-        # Find nicks that left (were in old peerlist but not in new)
-        old_nicks = set(self._active_peers.keys())
-        new_nicks = set(new_active_peers.keys())
-        left_nicks = old_nicks - new_nicks
-
-        # Remove offers from nicks that left
-        for nick in left_nicks:
+        # Only remove offers for nicks that are explicitly marked as disconnected
+        for nick in explicitly_disconnected:
             self.remove_offers_for_nick(nick)
-
-        # Update active peers
-        self._active_peers = new_active_peers
 
         logger.info(
             f"Received {len(peers)} active peers with features from {self.host}:{self.port}"
-            + (f", {len(left_nicks)} nicks left" if left_nicks else "")
+            + (
+                f", {len(explicitly_disconnected)} explicitly disconnected"
+                if explicitly_disconnected
+                else ""
+            )
         )
         return peers
 

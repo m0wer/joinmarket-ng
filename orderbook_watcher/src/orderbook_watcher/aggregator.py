@@ -364,15 +364,21 @@ class OrderbookAggregator:
                 # Collect active nicks from ALL connected directories
                 all_active_nicks: set[str] = set()
                 directories_checked = 0
+                directories_with_peerlist_support = 0
 
                 for node_id, client in self.clients.items():
                     try:
                         # Refresh peerlist for this client
-                        # This also triggers cleanup of offers for nicks that left
+                        # This updates the client's active_peers tracking
                         await client.get_peerlist_with_features()
                         active_nicks = client.get_active_nicks()
                         all_active_nicks.update(active_nicks)
                         directories_checked += 1
+
+                        # Track if this directory supports peerlist
+                        if client._peerlist_supported:
+                            directories_with_peerlist_support += 1
+
                         logger.debug(f"Directory {node_id}: {len(active_nicks)} active nicks")
                     except Exception as e:
                         logger.debug(f"Failed to refresh peerlist from {node_id}: {e}")
@@ -380,8 +386,31 @@ class OrderbookAggregator:
                 if directories_checked > 0:
                     logger.info(
                         f"Peerlist refresh: {len(all_active_nicks)} unique nicks "
-                        f"across {directories_checked} directories"
+                        f"across {directories_checked} directories "
+                        f"({directories_with_peerlist_support} support GETPEERLIST)"
                     )
+
+                    # Clean up offers from nicks that are no longer in ANY directory's peerlist
+                    # Only do this if at least one directory supports GETPEERLIST
+                    if directories_with_peerlist_support > 0:
+                        total_removed = 0
+                        all_stale_nicks: set[str] = set()
+                        for client in self.clients.values():
+                            # Get all nicks with offers in this client
+                            client_nicks = {key[0] for key in client.offers}
+
+                            # Remove offers from nicks not in the global active list
+                            stale_nicks = client_nicks - all_active_nicks
+                            all_stale_nicks.update(stale_nicks)
+                            for nick in stale_nicks:
+                                removed = client.remove_offers_for_nick(nick)
+                                total_removed += removed
+
+                        if total_removed > 0:
+                            logger.info(
+                                f"Peerlist cleanup: removed {total_removed} offers from "
+                                f"{len(all_stale_nicks)} nicks no longer in any peerlist"
+                            )
 
                 # Sleep for 5 minutes before next refresh
                 await asyncio.sleep(300)

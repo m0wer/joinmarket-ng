@@ -51,6 +51,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Orderbook Watcher showing only few offers despite receiving many from directories**.
+  - Directory servers send realtime PEERLIST updates (one per peer) when peers connect/disconnect.
+  - DirectoryClient was incorrectly treating these partial updates as complete peerlist replacements.
+  - Now accumulates active peers from partial responses instead of replacing the entire list.
+  - Only removes offers for nicks explicitly marked as disconnected (`;D` suffix).
+  - Periodic peerlist refresh now collects active nicks from ALL directories before cleanup.
+  - This fixes orderbooks being pruned down to just the most recently seen makers.
 - Critical maker transaction fee calculation bug causing "Change output value too low" errors.
   - Maker `txfee` from offers is the total transaction fee contribution (in satoshis), not per-input/output.
   - Previously incorrectly multiplied `offer.txfee` by `(num_inputs + num_outputs + 1)`, causing maker change calculations to fail.
