@@ -46,6 +46,7 @@ class TCPConnection(Connection):
         self.max_message_size = max_message_size
         self._connected = True
         self._send_lock = asyncio.Lock()
+        self._receive_lock = asyncio.Lock()
 
     async def send(self, data: bytes) -> None:
         if not self._connected:
@@ -70,18 +71,22 @@ class TCPConnection(Connection):
         if not self._connected:
             raise ConnectionError("Connection closed")
 
-        try:
-            data = await self.reader.readuntil(b"\n")
-            stripped = data.rstrip(b"\r\n")
-            logger.trace(f"TCPConnection.receive: received {len(stripped)} bytes")
-            return stripped
-        except asyncio.LimitOverrunError as e:
-            logger.error(f"Message too large (>{self.max_message_size} bytes)")
-            raise ConnectionError("Message too large") from e
-        except asyncio.IncompleteReadError as e:
-            self._connected = False
-            logger.trace("TCPConnection.receive: connection closed by peer")
-            raise ConnectionError("Connection closed by peer") from e
+        async with self._receive_lock:
+            if not self._connected:
+                raise ConnectionError("Connection closed")
+
+            try:
+                data = await self.reader.readuntil(b"\n")
+                stripped = data.rstrip(b"\r\n")
+                logger.trace(f"TCPConnection.receive: received {len(stripped)} bytes")
+                return stripped
+            except asyncio.LimitOverrunError as e:
+                logger.error(f"Message too large (>{self.max_message_size} bytes)")
+                raise ConnectionError("Message too large") from e
+            except asyncio.IncompleteReadError as e:
+                self._connected = False
+                logger.trace("TCPConnection.receive: connection closed by peer")
+                raise ConnectionError("Connection closed by peer") from e
 
     async def close(self) -> None:
         if not self._connected:

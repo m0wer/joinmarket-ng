@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Backend `estimate_fee()` now returns `float` for precision with sub-sat rates.
 - Added `can_estimate_fee()` method to backends for capability detection.
 
+### Fixed
+
+- Concurrent read bug in TCPConnection causing "readuntil() called while another coroutine is already waiting" errors.
+  - Added receive lock to serialize concurrent `receive()` calls on the same connection.
+  - This fixes race conditions when `listen_continuously()` and `get_peerlist_with_features()` run concurrently.
+
 ## [0.8.0] - 2026-01-08
 
 ### Added
