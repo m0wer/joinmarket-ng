@@ -259,15 +259,64 @@ Privacy tradeoff: More inputs = faster consolidation but reveals UTXO clustering
 
 ## Backend Systems
 
-JoinMarket NG supports two blockchain backends with different tradeoffs:
+JoinMarket NG supports three blockchain backends with different tradeoffs:
 
-### Bitcoin Core Backend
+### Descriptor Wallet Backend (Recommended)
+
+- **Method**: `importdescriptors` + `listunspent` RPC (uses Bitcoin Core descriptor wallet)
+- **Requirements**: Bitcoin Core v24+ (descriptor wallet support)
+- **Validation**: Full validation
+- **Storage**: ~500 GB (full node) + small wallet file
+- **Privacy**: High (local node)
+- **Sync Speed**: Fast after initial setup
+
+**Key Advantages:**
+- **Persistent UTXO tracking**: Once descriptors are imported, Bitcoin Core tracks UTXOs automatically
+- **Real-time updates**: Balance updates as blocks arrive, no need for full UTXO set scans
+- **Mempool awareness**: Sees unconfirmed transactions immediately
+- **Efficient queries**: O(wallet UTXOs) instead of O(entire UTXO set)
+
+**Setup:**
+```python
+from jmwallet.backends import DescriptorWalletBackend, get_mnemonic_fingerprint, generate_wallet_name
+
+# Create backend with deterministic wallet name
+fingerprint = get_mnemonic_fingerprint(mnemonic)
+wallet_name = generate_wallet_name(fingerprint, "mainnet")
+
+backend = DescriptorWalletBackend(
+    rpc_url="http://127.0.0.1:8332",
+    rpc_user="user",
+    rpc_password="pass",
+    wallet_name=wallet_name,
+)
+
+# One-time setup: create wallet and import descriptors
+wallet_service = WalletService(mnemonic, backend, network="mainnet")
+await wallet_service.setup_descriptor_wallet(scan_range=1000, rescan=True)
+
+# Fast sync using listunspent
+utxos = await wallet_service.sync_with_descriptor_wallet()
+```
+
+**Trade-offs:**
+- Requires wallet creation in Bitcoin Core (one-time)
+- Wallet files persist on disk (privacy consideration for shared systems)
+- Initial descriptor import can take time for large ranges with rescan
+
+### Bitcoin Core Backend (Legacy)
 
 - **Method**: `scantxoutset` RPC (no wallet required)
 - **Requirements**: Bitcoin Core v30+
 - **Validation**: Full validation
 - **Storage**: ~500 GB
 - **Privacy**: High (local node)
+- **Sync Speed**: Slow (scans entire UTXO set each time)
+
+**Use Case**: Simple scripts or one-off operations where persistent tracking isn't needed.
+
+**Note**: `scantxoutset` scans ~150-200M UTXOs on mainnet, taking 90+ seconds per scan.
+For ongoing wallet operations, use DescriptorWalletBackend instead.
 
 ### Neutrino Backend
 
@@ -279,7 +328,8 @@ JoinMarket NG supports two blockchain backends with different tradeoffs:
 - **Sync**: Minutes instead of days
 
 **Decision Matrix**:
-- Use Core if: You run a full node, need full validation
+- Use DescriptorWalletBackend if: You run a full node and want fast ongoing operations (recommended)
+- Use BitcoinCoreBackend if: You need simple one-off UTXO queries without wallet setup
 - Use Neutrino if: Limited storage, fast setup, light client needed
 
 
