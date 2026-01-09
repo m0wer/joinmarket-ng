@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `can_estimate_fee()` method to backends for capability detection.
 - Increased default counterparty count from 3 to 10 makers.
 - Reduced logging verbosity: parsed offers now logged at DEBUG level instead of INFO.
+- Improved sweep coinjoin logging: initial "Starting CoinJoin" message now shows "ALL (sweep)" instead of "0 sats".
 - **Default broadcast policy changed from RANDOM_PEER to MULTIPLE_PEERS** (sends to 3 random makers).
 - **Unified broadcast behavior**: All policies (SELF, RANDOM_PEER, MULTIPLE_PEERS, NOT_SELF) work
   the same way for both full node and Neutrino backends. The only difference is Neutrino skips
