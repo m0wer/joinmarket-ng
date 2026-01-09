@@ -148,6 +148,7 @@ class CoinJoinTxBuilder:
             "input_owners": [owner for _, owner in all_inputs],
             "output_owners": [(owner, out_type) for _, owner, out_type in all_outputs],
             "input_values": [inp.value for inp, _ in all_inputs],
+            "fee": tx_data.tx_fee,
         }
 
         # Serialize transaction

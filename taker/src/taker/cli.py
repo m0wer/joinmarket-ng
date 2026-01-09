@@ -110,7 +110,7 @@ def coinjoin(
     mixdepth: Annotated[int, typer.Option("--mixdepth", "-m", help="Source mixdepth")] = 0,
     counterparties: Annotated[
         int, typer.Option("--counterparties", "-n", help="Number of makers")
-    ] = 3,
+    ] = 10,
     mnemonic: Annotated[
         str | None, typer.Option("--mnemonic", envvar="MNEMONIC", help="Wallet mnemonic phrase")
     ] = None,
@@ -319,11 +319,16 @@ async def _run_coinjoin(
             neutrino_url=config.backend_config.get("neutrino_url", "http://127.0.0.1:8334"),
             network=bitcoin_network.value,
         )
-        # Wait for neutrino to sync
-        logger.info("Waiting for neutrino to sync...")
-        synced = await backend.wait_for_sync(timeout=300.0)
-        if not synced:
-            logger.error("Neutrino sync timeout")
+        # Verify connection early
+        logger.info("Verifying Neutrino connection...")
+        try:
+            synced = await backend.wait_for_sync(timeout=30.0)
+            if not synced:
+                logger.error("Neutrino connection failed: not synced")
+                raise typer.Exit(1)
+            logger.info("Neutrino connection verified")
+        except Exception as e:
+            logger.error(f"Failed to connect to Neutrino backend: {e}")
             raise typer.Exit(1)
     else:
         backend = BitcoinCoreBackend(
@@ -331,6 +336,14 @@ async def _run_coinjoin(
             rpc_user=config.backend_config["rpc_user"],
             rpc_password=config.backend_config["rpc_password"],
         )
+        # Verify RPC connection early
+        logger.info("Verifying Bitcoin Core RPC connection...")
+        try:
+            await backend.get_block_height()
+            logger.info("Bitcoin Core RPC connection verified")
+        except Exception as e:
+            logger.error(f"Failed to connect to Bitcoin Core RPC: {e}")
+            raise typer.Exit(1)
 
     # Create wallet with bitcoin_network for address generation
     wallet = WalletService(
@@ -535,11 +548,16 @@ async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
             neutrino_url=config.backend_config.get("neutrino_url", "http://127.0.0.1:8334"),
             network=bitcoin_network.value,
         )
-        # Wait for neutrino to sync
-        logger.info("Waiting for neutrino to sync...")
-        synced = await backend.wait_for_sync(timeout=300.0)
-        if not synced:
-            logger.error("Neutrino sync timeout")
+        # Verify connection early
+        logger.info("Verifying Neutrino connection...")
+        try:
+            synced = await backend.wait_for_sync(timeout=30.0)
+            if not synced:
+                logger.error("Neutrino connection failed: not synced")
+                raise typer.Exit(1)
+            logger.info("Neutrino connection verified")
+        except Exception as e:
+            logger.error(f"Failed to connect to Neutrino backend: {e}")
             raise typer.Exit(1)
     else:
         backend = BitcoinCoreBackend(
@@ -547,6 +565,14 @@ async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
             rpc_user=config.backend_config["rpc_user"],
             rpc_password=config.backend_config["rpc_password"],
         )
+        # Verify RPC connection early
+        logger.info("Verifying Bitcoin Core RPC connection...")
+        try:
+            await backend.get_block_height()
+            logger.info("Bitcoin Core RPC connection verified")
+        except Exception as e:
+            logger.error(f"Failed to connect to Bitcoin Core RPC: {e}")
+            raise typer.Exit(1)
 
     # Create wallet with bitcoin_network for address generation
     wallet = WalletService(

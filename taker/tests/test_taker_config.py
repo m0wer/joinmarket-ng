@@ -39,7 +39,7 @@ class TestTakerConfig:
         config = TakerConfig(mnemonic=sample_mnemonic)
         assert config.mnemonic == sample_mnemonic
         assert config.network.value == "mainnet"
-        assert config.counterparty_count == 3
+        assert config.counterparty_count == 10
 
     def test_full_config(self, sample_mnemonic: str) -> None:
         """Test full configuration with all options."""

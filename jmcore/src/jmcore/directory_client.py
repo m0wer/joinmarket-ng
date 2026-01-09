@@ -818,7 +818,7 @@ class DirectoryClient:
                             if bond_data:
                                 offer.fidelity_bond_data = bond_data
 
-                            logger.info(
+                            logger.debug(
                                 f"Parsed {offer_type} from {from_nick}: "
                                 f"oid={oid}, size={minsize}-{maxsize}, fee={cjfee}, "
                                 f"has_bond={bond_data is not None}, neutrino_compat={neutrino_compat}"

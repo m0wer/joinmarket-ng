@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Early backend connection validation in taker CLI before wallet sync.
+- Estimated transaction fee logging before user confirmation prompt (assumes 1 input per maker + 20% buffer).
+- Final transaction summary before broadcast with exact input/output counts, maker fees, and mining fees.
+- Support for broadcast confirmation callback to allow user to review transaction before broadcasting.
+
 ### Changed
 
 - Fee rate handling improvements:
@@ -19,9 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Error when `--block-target` is used with neutrino backend.
 - Backend `estimate_fee()` now returns `float` for precision with sub-sat rates.
 - Added `can_estimate_fee()` method to backends for capability detection.
+- Increased default counterparty count from 3 to 10 makers.
+- Reduced logging verbosity: parsed offers now logged at DEBUG level instead of INFO.
 
 ### Fixed
 
+- Critical maker transaction fee calculation bug causing "Change output value too low" errors.
+  - Maker `txfee` from offers is the total transaction fee contribution (in satoshis), not per-input/output.
+  - Previously incorrectly multiplied `offer.txfee` by `(num_inputs + num_outputs + 1)`, causing maker change calculations to fail.
+  - Now correctly uses `offer.txfee` directly as per JoinMarket protocol specification.
 - Concurrent read bug in TCPConnection causing "readuntil() called while another coroutine is already waiting" errors.
   - Added receive lock to serialize concurrent `receive()` calls on the same connection.
   - This fixes race conditions when `listen_continuously()` and `get_peerlist_with_features()` run concurrently.

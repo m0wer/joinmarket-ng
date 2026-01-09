@@ -628,6 +628,15 @@ All protocol commands use JSON-line format: `{"type": <code>, "line": "<payload>
 
 Taker broadcasts `!orderbook` via PUBMSG. Makers respond with offers via PRIVMSG (not PUBMSG).
 
+**Offer Format**: Offers use format `!sw0reloffer <oid> <minsize> <maxsize> <txfee> <cjfee>` where:
+- `oid`: Order ID (integer)
+- `minsize`: Minimum CoinJoin amount in satoshis
+- `maxsize`: Maximum CoinJoin amount in satoshis
+- `txfee`: **Total transaction fee contribution in satoshis** (not per-input/output)
+- `cjfee`: Relative fee (0.0-1.0) for relative offers, or absolute fee in satoshis for absolute offers
+
+The `txfee` field represents the maker's total contribution to the mining fee, which is deducted from their change output. This is a fixed amount regardless of the number of inputs/outputs the maker contributes. It's kept for historical reasons, but there are currently no offers on the orderbook with non-zero `txfee`.
+
 ### Maker Selection Algorithm
 
 After collecting offers, the taker selects makers through three phases:

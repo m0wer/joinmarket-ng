@@ -852,6 +852,21 @@ class Taker:
                 f"Selected {len(self.maker_sessions)} makers, total fee: {total_fee:,} sats"
             )
 
+            # Log estimated transaction fee before prompting for confirmation
+            # Conservative estimate: assume 1 input per maker + 20% buffer, rounded up
+            import math
+
+            estimated_maker_inputs = math.ceil(n_makers * 1.2)
+            estimated_inputs = len(self.preselected_utxos) + estimated_maker_inputs
+            # Outputs: 1 CJ output per participant + change outputs (assume all have change)
+            estimated_outputs = (1 + n_makers) + (1 + n_makers)
+            estimated_tx_fee = self._estimate_tx_fee(estimated_inputs, estimated_outputs)
+            logger.info(
+                f"Estimated transaction (mining) fee: {estimated_tx_fee:,} sats "
+                f"(~{self._fee_rate:.2f} sat/vB for ~{estimated_inputs} inputs, "
+                f"{estimated_outputs} outputs)"
+            )
+
             # Prompt for confirmation after maker selection
             if hasattr(self, "confirmation_callback") and self.confirmation_callback:
                 try:
@@ -947,6 +962,75 @@ class Taker:
                 logger.error("Signature collection failed")
                 self.state = TakerState.FAILED
                 return None
+
+            # Final confirmation before broadcast
+            # Calculate exact transaction details
+            num_taker_inputs = len(self.selected_utxos)
+            num_maker_inputs = sum(len(s.utxos) for s in self.maker_sessions.values())
+            total_inputs = num_taker_inputs + num_maker_inputs
+
+            # Parse transaction to count outputs
+            tx = deserialize_transaction(self.final_tx)
+            total_outputs = len(tx.outputs)
+
+            # Calculate fees
+            total_maker_fees = sum(
+                calculate_cj_fee(session.offer, self.cj_amount)
+                for session in self.maker_sessions.values()
+            )
+            mining_fee = self.tx_metadata.get("fee", 0)
+            total_cost = total_maker_fees + mining_fee
+
+            # Log final transaction details
+            logger.info("=" * 70)
+            logger.info("FINAL TRANSACTION SUMMARY - Ready to broadcast")
+            logger.info("=" * 70)
+            logger.info(f"CoinJoin amount:      {self.cj_amount:,} sats")
+            logger.info(f"Makers participating: {len(self.maker_sessions)}")
+            logger.info(
+                f"  Makers: {', '.join(nick[:10] + '...' for nick in self.maker_sessions.keys())}"
+            )
+            logger.info(
+                f"Transaction inputs:   {total_inputs} ({num_taker_inputs} yours, "
+                f"{num_maker_inputs} makers)"
+            )
+            logger.info(f"Transaction outputs:  {total_outputs}")
+            logger.info(f"Maker fees:           {total_maker_fees:,} sats")
+            logger.info(f"Mining fee:           {mining_fee:,} sats (~{self._fee_rate:.2f} sat/vB)")
+            logger.info(f"Total cost:           {total_cost:,} sats")
+            logger.info(f"Transaction size:     {len(self.final_tx)} bytes")
+            logger.info("-" * 70)
+            logger.info("Transaction hex (for manual verification/broadcast):")
+            logger.info(self.final_tx.hex())
+            logger.info("=" * 70)
+
+            # Prompt for final confirmation if callback is set
+            if hasattr(self, "confirmation_callback") and self.confirmation_callback:
+                try:
+                    confirmed = await self.confirmation_callback(
+                        {
+                            "type": "broadcast",
+                            "cj_amount": self.cj_amount,
+                            "num_makers": len(self.maker_sessions),
+                            "maker_nicks": list(self.maker_sessions.keys()),
+                            "total_inputs": total_inputs,
+                            "taker_inputs": num_taker_inputs,
+                            "maker_inputs": num_maker_inputs,
+                            "total_outputs": total_outputs,
+                            "maker_fees": total_maker_fees,
+                            "mining_fee": mining_fee,
+                            "total_cost": total_cost,
+                            "fee_rate": self._fee_rate,
+                        }
+                    )
+                    if not confirmed:
+                        logger.warning("User declined final broadcast confirmation")
+                        self.state = TakerState.FAILED
+                        return None
+                except Exception as e:
+                    logger.error(f"Final confirmation callback failed: {e}")
+                    self.state = TakerState.FAILED
+                    return None
 
             # Phase 5: Broadcast
             self.state = TakerState.BROADCASTING
@@ -1508,12 +1592,16 @@ class Taker:
             maker_data = {}
             for nick, session in self.maker_sessions.items():
                 cjfee = calculate_cj_fee(session.offer, self.cj_amount)
+                # JoinMarket protocol: txfee in offer is the total transaction fee
+                # the maker contributes (in satoshis), not a per-input/output fee
+                maker_txfee = session.offer.txfee
+
                 maker_data[nick] = {
                     "utxos": session.utxos,
                     "cj_addr": session.cj_address,
                     "change_addr": session.change_address,
                     "cjfee": cjfee,
-                    "txfee": session.offer.txfee,  # Maker's share of tx fee
+                    "txfee": maker_txfee,
                 }
 
             # Build transaction
@@ -1539,6 +1627,21 @@ class Taker:
             )
 
             logger.info(f"Built unsigned tx: {len(self.unsigned_tx)} bytes")
+
+            # Log final transaction details
+            logger.info(
+                f"Final CoinJoin transaction details: "
+                f"{num_inputs} inputs ({num_taker_inputs} taker, {num_maker_inputs} maker), "
+                f"{num_outputs} outputs"
+            )
+            logger.info(
+                f"Transaction amounts: cj_amount={self.cj_amount:,} sats, "
+                f"total_maker_fees={total_maker_fee:,} sats, "
+                f"mining_fee={tx_fee:,} sats "
+                f"({self._fee_rate:.2f} sat/vB)"
+            )
+            logger.info(f"Participating makers: {', '.join(self.maker_sessions.keys())}")
+
             return True
 
         except Exception as e:

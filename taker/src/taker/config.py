@@ -50,7 +50,7 @@ class TakerConfig(WalletConfig):
     amount: int = Field(default=0, ge=0, description="Amount in sats (0 = sweep)")
     mixdepth: int = Field(default=0, ge=0, description="Source mixdepth")
     counterparty_count: int = Field(
-        default=3, ge=1, le=20, description="Number of makers to select"
+        default=10, ge=1, le=20, description="Number of makers to select"
     )
 
     # Fee settings
