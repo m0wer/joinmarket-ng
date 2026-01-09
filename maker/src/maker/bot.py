@@ -1472,11 +1472,25 @@ class MakerBot:
             to_nick = parts[1]
             rest = COMMAND_PREFIX.join(parts[2:])
 
-            if to_nick != self.nick:
-                return
-
             # Strip leading "!" if present (due to !!command message format)
             command = rest.strip().lstrip("!")
+
+            # Per JoinMarket reference implementation, !push messages are accepted
+            # regardless of to_nick. This is important because:
+            # 1. Makers may regenerate their nick after sending signatures
+            # 2. !push doesn't require session state (broadcasts "unquestioningly")
+            # 3. Not all makers receive !push (only subset for broadcast diversity)
+            #
+            # For other commands, we enforce nick matching to prevent messages
+            # intended for previous identities from being processed.
+            is_push = command.startswith("push")
+
+            if not is_push and to_nick != self.nick:
+                # Message addressed to a different nick (possibly old nick after regeneration)
+                # This is expected for non-push commands and helps prevent processing
+                # messages intended for stale sessions
+                logger.debug(f"Ignoring message to {to_nick} (current nick: {self.nick})")
+                return
 
             # Note: command prefix already stripped
             if command.startswith("fill"):
@@ -1485,7 +1499,7 @@ class MakerBot:
                 await self._handle_auth(from_nick, command)
             elif command.startswith("tx"):
                 await self._handle_tx(from_nick, command)
-            elif command.startswith("push"):
+            elif is_push:
                 await self._handle_push(from_nick, command)
             elif command.startswith("hp2"):
                 # hp2 via privmsg = commitment transfer request
