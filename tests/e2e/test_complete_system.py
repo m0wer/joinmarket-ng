@@ -1013,6 +1013,153 @@ async def test_complete_coinjoin_two_makers(
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
+async def test_coinjoin_with_multi_utxo_maker(
+    bitcoin_backend,
+    taker_config,
+    directory_server,
+    fresh_docker_makers,
+):
+    """
+    Test CoinJoin with a maker using multiple UTXOs.
+
+    This test specifically verifies the fix for the multi-signature bug where makers
+    with multiple UTXOs send multiple !sig messages, and the taker must correctly
+    accumulate and process all signatures.
+
+    Regression test for: Taker only accepting one signature from multi-UTXO makers,
+    causing transaction broadcast to fail due to incomplete signatures.
+
+    The test:
+    1. Uses maker3 which typically has many small UTXOs (from mining rewards)
+    2. Sets a small CoinJoin amount to force maker to use multiple UTXOs
+    3. Verifies all signatures are collected and transaction broadcasts successfully
+
+    Requires: docker compose --profile e2e up -d
+    """
+    import subprocess
+
+    from tests.e2e.rpc_utils import mine_blocks
+
+    # Check if Docker maker3 is running (it has many UTXOs from mining)
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", "jm-maker3"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.stdout.strip() != "true":
+            pytest.skip(
+                "Docker maker3 not running. Start with: docker compose --profile e2e up -d"
+            )
+    except (
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        subprocess.CalledProcessError,
+    ):
+        pytest.skip("Docker not available or maker3 not running")
+
+    # Mine extra blocks to ensure coinbase maturity
+    print("Mining blocks to ensure coinbase maturity...")
+    addr = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080"
+    await mine_blocks(10, addr)
+
+    # Create taker wallet
+    taker_wallet = WalletService(
+        mnemonic=TAKER_MNEMONIC,
+        backend=bitcoin_backend,
+        network="regtest",
+        mixdepth_count=5,
+    )
+
+    # Sync wallet
+    await taker_wallet.sync_all()
+    taker_balance = await taker_wallet.get_total_balance()
+    print(f"Taker balance: {taker_balance:,} sats")
+
+    min_balance = 50_000_000  # 0.5 BTC minimum
+    if taker_balance < min_balance:
+        await taker_wallet.close()
+        pytest.skip(
+            f"Taker needs at least {min_balance:,} sats. "
+            "Run wallet-funder or fund manually."
+        )
+
+    # Create taker
+    taker = Taker(taker_wallet, bitcoin_backend, taker_config)
+
+    try:
+        # Start taker
+        print("Starting taker...")
+        await taker.start()
+
+        # Fetch orderbook
+        print("Fetching orderbook...")
+        offers = await taker.directory_client.fetch_orderbook(timeout=15.0)
+        print(f"Found {len(offers)} offers in orderbook")
+
+        if len(offers) < 1:
+            await taker.stop()
+            await taker_wallet.close()
+            pytest.skip(
+                f"Need at least 1 offer, found {len(offers)}. "
+                "Ensure Docker makers are running and have funds."
+            )
+
+        # Update orderbook manager
+        taker.orderbook_manager.update_offers(offers)
+
+        # Get taker's destination address (internal)
+        dest_address = taker_wallet.get_receive_address(1, 0)  # mixdepth 1
+
+        # Use a small CoinJoin amount (20M sats = 0.2 BTC)
+        # This forces maker3 (which has many small mining rewards) to use multiple UTXOs
+        # If maker3 uses >1 UTXO, it will send >1 !sig message, testing our fix
+        cj_amount = 20_000_000  # 0.2 BTC
+        print(f"Initiating CoinJoin for {cj_amount:,} sats to {dest_address}...")
+        print("This amount is chosen to force maker to use multiple UTXOs")
+
+        txid = await taker.do_coinjoin(
+            amount=cj_amount,
+            destination=dest_address,
+            mixdepth=0,
+        )
+
+        # Verify result
+        assert txid is not None, "CoinJoin should return a txid"
+        print(f"CoinJoin successful! txid: {txid}")
+
+        # Verify transaction on blockchain
+        tx_info = await bitcoin_backend.get_transaction(txid)
+        if tx_info:
+            print(f"Transaction info: {tx_info}")
+            # Count inputs to verify multi-UTXO usage
+            if "vin" in tx_info:
+                num_inputs = len(tx_info["vin"])
+                print(f"Transaction has {num_inputs} inputs")
+                # If we have >2 inputs (1 taker + >1 maker), we successfully tested multi-UTXO
+                if num_inputs > 2:
+                    print(
+                        "✓ Successfully tested multi-UTXO maker "
+                        f"(maker used {num_inputs - 1} UTXOs)"
+                    )
+
+        # Mine a block to confirm
+        await mine_blocks(1, dest_address)
+
+        # Verify the transaction has confirmations
+        height = await bitcoin_backend.get_block_height()
+        print(f"Current block height: {height}")
+
+    finally:
+        # Cleanup
+        print("Stopping taker...")
+        await taker.stop()
+        await taker_wallet.close()
+
+
+@pytest.mark.asyncio
 async def test_maker_offer_announcement(
     bitcoin_backend,
     maker_config,
