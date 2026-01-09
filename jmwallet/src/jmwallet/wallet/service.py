@@ -713,6 +713,7 @@ class WalletService:
         scan_range: int = DEFAULT_SCAN_RANGE,
         fidelity_bond_addresses: list[tuple[str, int, int]] | None = None,
         rescan: bool = True,
+        check_existing: bool = True,
     ) -> bool:
         """
         Setup descriptor wallet backend for efficient UTXO tracking.
@@ -727,18 +728,37 @@ class WalletService:
             scan_range: Address index range to import (default 1000)
             fidelity_bond_addresses: Optional list of (address, locktime, index) tuples
             rescan: Whether to rescan blockchain (can be slow for mainnet)
+            check_existing: If True, checks if wallet is already set up and skips import
 
         Returns:
             True if setup completed successfully
 
         Raises:
             RuntimeError: If backend is not DescriptorWalletBackend
+
+        Example:
+            # First time setup (or wallet recovery)
+            if not await wallet.is_descriptor_wallet_ready():
+                await wallet.setup_descriptor_wallet(rescan=True)
+
+            # Or just call setup_descriptor_wallet - it checks automatically
+            await wallet.setup_descriptor_wallet()  # Skips if already set up
         """
         if not isinstance(self.backend, DescriptorWalletBackend):
             raise RuntimeError(
                 "setup_descriptor_wallet() requires DescriptorWalletBackend. "
                 "Current backend does not support descriptor wallets."
             )
+
+        # Check if already set up (unless explicitly disabled)
+        if check_existing:
+            expected_count = self.mixdepth_count * 2  # external + internal per mixdepth
+            if fidelity_bond_addresses:
+                expected_count += len(fidelity_bond_addresses)
+
+            if await self.backend.is_wallet_setup(expected_descriptor_count=expected_count):
+                logger.info("Descriptor wallet already set up, skipping import")
+                return True
 
         # Generate descriptors for all mixdepths
         descriptors = self._generate_import_descriptors(scan_range)
@@ -764,6 +784,33 @@ class WalletService:
         await self.backend.setup_wallet(descriptors, rescan=rescan)
         logger.info("Descriptor wallet setup complete")
         return True
+
+    async def is_descriptor_wallet_ready(self, fidelity_bond_count: int = 0) -> bool:
+        """
+        Check if descriptor wallet is already set up and ready to use.
+
+        Args:
+            fidelity_bond_count: Expected number of fidelity bond addresses
+
+        Returns:
+            True if wallet is set up with all expected descriptors
+
+        Example:
+            if await wallet.is_descriptor_wallet_ready():
+                # Just sync
+                utxos = await wallet.sync_with_descriptor_wallet()
+            else:
+                # First time - import descriptors
+                await wallet.setup_descriptor_wallet(rescan=True)
+        """
+        if not isinstance(self.backend, DescriptorWalletBackend):
+            return False
+
+        expected_count = self.mixdepth_count * 2  # external + internal per mixdepth
+        if fidelity_bond_count > 0:
+            expected_count += fidelity_bond_count
+
+        return await self.backend.is_wallet_setup(expected_descriptor_count=expected_count)
 
     def _generate_import_descriptors(
         self, scan_range: int = DEFAULT_SCAN_RANGE

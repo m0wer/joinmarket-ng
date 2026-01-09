@@ -337,6 +337,77 @@ class DescriptorWalletBackend(BlockchainBackend):
         await self.import_descriptors(descriptors, rescan=rescan)
         return True
 
+    async def list_descriptors(self) -> list[dict[str, Any]]:
+        """
+        List all descriptors currently imported in the wallet.
+
+        Returns:
+            List of descriptor info dicts with fields like 'desc', 'timestamp', 'active', etc.
+
+        Example:
+            descriptors = await backend.list_descriptors()
+            for d in descriptors:
+                print(f"Descriptor: {d['desc']}, Active: {d.get('active', False)}")
+        """
+        if not self._wallet_loaded:
+            raise RuntimeError("Wallet not loaded. Call create_wallet() first.")
+
+        try:
+            result = await self._rpc_call("listdescriptors")
+            return result.get("descriptors", [])
+        except Exception as e:
+            logger.error(f"Failed to list descriptors: {e}")
+            raise
+
+    async def is_wallet_setup(self, expected_descriptor_count: int | None = None) -> bool:
+        """
+        Check if wallet is already set up with imported descriptors.
+
+        Args:
+            expected_descriptor_count: If provided, verifies this many descriptors are imported.
+                                      For JoinMarket: 2 per mixdepth (external + internal)
+                                      Example: 5 mixdepths = 10 descriptors minimum
+
+        Returns:
+            True if wallet exists and has descriptors imported
+
+        Example:
+            # Check if wallet is set up for 5 mixdepths
+            if await backend.is_wallet_setup(expected_descriptor_count=10):
+                # Already set up, just sync
+                utxos = await wallet.sync_with_descriptor_wallet()
+            else:
+                # First time - import descriptors
+                await wallet.setup_descriptor_wallet(rescan=True)
+        """
+        try:
+            # Check if wallet exists and is loaded
+            wallets = await self._rpc_call("listwallets", use_wallet=False)
+            if self.wallet_name in wallets:
+                self._wallet_loaded = True
+            else:
+                # Try to load it
+                try:
+                    await self._rpc_call("loadwallet", [self.wallet_name], use_wallet=False)
+                    self._wallet_loaded = True
+                except ValueError:
+                    return False
+
+            # Check if descriptors are imported
+            descriptors = await self.list_descriptors()
+            if not descriptors:
+                return False
+
+            # If expected count provided, verify
+            if expected_descriptor_count is not None:
+                return len(descriptors) >= expected_descriptor_count
+
+            return True
+
+        except Exception as e:
+            logger.debug(f"Wallet setup check failed: {e}")
+            return False
+
     async def get_utxos(self, addresses: list[str]) -> list[UTXO]:
         """
         Get UTXOs for given addresses using listunspent.

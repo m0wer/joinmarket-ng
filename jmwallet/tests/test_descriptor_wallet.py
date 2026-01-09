@@ -286,6 +286,72 @@ class TestDescriptorWalletBackendUnit:
         backend = DescriptorWalletBackend()
         assert backend.can_provide_neutrino_metadata() is True
 
+    @pytest.mark.asyncio
+    async def test_list_descriptors(self):
+        """Test listing descriptors from wallet."""
+        backend = DescriptorWalletBackend()
+        backend._wallet_loaded = True
+        backend._rpc_call = AsyncMock(
+            return_value={
+                "descriptors": [
+                    {"desc": "wpkh(xpub.../0/*)#checksum", "active": True},
+                    {"desc": "wpkh(xpub.../1/*)#checksum", "active": True},
+                ]
+            }
+        )
+
+        descriptors = await backend.list_descriptors()
+        assert len(descriptors) == 2
+        assert descriptors[0]["desc"].startswith("wpkh")
+        assert descriptors[0]["active"] is True
+
+    @pytest.mark.asyncio
+    async def test_is_wallet_setup_true(self):
+        """Test checking if wallet is set up (positive case)."""
+        backend = DescriptorWalletBackend(wallet_name="test_wallet")
+        backend._rpc_call = AsyncMock(
+            side_effect=[
+                ["test_wallet"],  # listwallets
+                {
+                    "descriptors": [
+                        {"desc": "wpkh(xpub.../0/*)#checksum", "active": True},
+                        {"desc": "wpkh(xpub.../1/*)#checksum", "active": True},
+                    ]
+                },  # listdescriptors
+            ]
+        )
+
+        is_ready = await backend.is_wallet_setup(expected_descriptor_count=2)
+        assert is_ready is True
+
+    @pytest.mark.asyncio
+    async def test_is_wallet_setup_false_no_wallet(self):
+        """Test checking if wallet is set up (wallet doesn't exist)."""
+        backend = DescriptorWalletBackend(wallet_name="nonexistent")
+        backend._rpc_call = AsyncMock(
+            side_effect=[
+                [],  # listwallets - wallet not loaded
+                ValueError("Wallet file verification failed"),  # loadwallet fails
+            ]
+        )
+
+        is_ready = await backend.is_wallet_setup()
+        assert is_ready is False
+
+    @pytest.mark.asyncio
+    async def test_is_wallet_setup_false_no_descriptors(self):
+        """Test checking if wallet is set up (wallet exists but no descriptors)."""
+        backend = DescriptorWalletBackend(wallet_name="test_wallet")
+        backend._rpc_call = AsyncMock(
+            side_effect=[
+                ["test_wallet"],  # listwallets
+                {"descriptors": []},  # listdescriptors - empty
+            ]
+        )
+
+        is_ready = await backend.is_wallet_setup()
+        assert is_ready is False
+
 
 class TestWalletNameGeneration:
     """Tests for wallet name generation utilities."""
@@ -352,13 +418,15 @@ async def test_descriptor_wallet_backend_integration():
         assert backend._wallet_loaded is True
 
         # Import a simple descriptor
-        # Using a test xpub (this won't have funds, just testing the import)
+        # Using a known valid testnet xpub from BIP32 test vectors
+        # This won't have funds, just testing the import mechanism
         test_xpub = (
-            "tpubDDXgATYzdQkHHhZZCMcNJj2GbJEvT2SL9cneXCAP9MkLB9YZovvAfTpPN82"
-            "PmFqpU72KcYwzACvnwBmUVPF7rtYKPwjsb1vSazJJGMjv2LT"
+            "tpubD6NzVbkrYhZ4XgiXtGrdW5XDAPFCL9h7we1vwNCpn8tGbBcgfVYjXyhWo4E1xkh56hjod1Rh"
+            "GjxbaTLV3X4FyWuejifB9jusQ46QzG87VKp"
         )
+        # Bitcoin Core will add checksum automatically via getdescriptorinfo
         descriptors = [
-            {"desc": f"wpkh({test_xpub}/0/*)", "range": [0, 10]},
+            {"desc": f"wpkh({test_xpub}/0/*)", "range": [0, 10], "timestamp": "now"},
         ]
 
         import_result = await backend.import_descriptors(descriptors, rescan=False)
