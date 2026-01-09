@@ -526,7 +526,7 @@ print_next_steps() {
     fi
     echo ""
     echo -e "${YELLOW}IMPORTANT:${NC} You'll need to activate the virtual environment every time"
-    echo "you open a new terminal: ${GREEN}source $VENV_DIR/bin/activate${NC}"
+    echo -e "you open a new terminal: ${GREEN}source $VENV_DIR/bin/activate${NC}"
     echo ""
 }
 

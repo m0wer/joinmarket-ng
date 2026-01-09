@@ -288,10 +288,46 @@ JoinMarket NG supports two blockchain backends with different tradeoffs:
 
 After broadcasting, takers verify the transaction was accepted:
 
-- **Core/Mempool backends**: Use `get_transaction(txid)`
-- **Neutrino backend**: Use address-based UTXO lookup at `/v1/utxo/{txid}/{vout}?address=...`
+- **Core/Mempool backends**: Use `get_transaction(txid)` to check mempool/chain
+- **Neutrino backend**: Cannot access mempool. See "Neutrino Broadcast Strategy" below.
 
 Both spent and unspent responses confirm broadcast success.
+
+### Neutrino Broadcast Strategy
+
+Neutrino clients using BIP157/158 compact block filters **cannot access the mempool**.
+This affects transaction broadcast verification, but the taker uses the same broadcast
+policies as full nodes with appropriate adaptations:
+
+**Problem**: After sending `!push` to a maker, Neutrino cannot verify if the transaction
+is in the mempool. Full nodes can check `get_transaction(txid)` but Neutrino must wait
+for block confirmation.
+
+**Solution**: All broadcast policies work the same way for both full nodes and Neutrino:
+
+| Policy | Behavior (Full Node & Neutrino) |
+|--------|--------------------------------|
+| `SELF` | Broadcast via own backend (always verifiable) |
+| `RANDOM_PEER` | Try makers sequentially in random order, fall back to self as last resort |
+| `MULTIPLE_PEERS` | Broadcast to N random makers simultaneously (default N=3), fall back to self if all fail |
+| `NOT_SELF` | Try makers sequentially, never self. No fallback if all fail |
+
+**Default policy**: `MULTIPLE_PEERS` (recommended for both full node and Neutrino)
+
+**Multi-peer broadcast**: Instead of trying one maker at a time, `MULTIPLE_PEERS` sends
+`!push` to N random makers simultaneously (default 3). This provides redundancy without
+broadcasting to all makers, reducing network footprint.
+
+**Privacy note**: All makers already participated in the CoinJoin, so they all know
+the transaction. Sending `!push` to multiple makers doesn't reveal new information.
+
+**Self-fallback for Neutrino**: When Neutrino falls back to self-broadcast, it cannot
+verify the transaction is in the mempool. It trusts that `broadcast_transaction()`
+succeeded based on the backend's response. Confirmation is verified later via block-based
+UTXO lookups.
+
+**Confirmation monitoring**: Pending transactions are monitored using `verify_tx_output()`
+with the destination address hint, checking if the CoinJoin output appears in confirmed blocks.
 
 ### Directory Server Transport Protocol
 

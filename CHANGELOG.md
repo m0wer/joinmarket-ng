@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Estimated transaction fee logging before user confirmation prompt (assumes 1 input per maker + 20% buffer).
 - Final transaction summary before broadcast with exact input/output counts, maker fees, and mining fees.
 - Support for broadcast confirmation callback to allow user to review transaction before broadcasting.
+- `has_mempool_access()` method to BlockchainBackend for detecting mempool visibility.
+- `BroadcastPolicy.MULTIPLE_PEERS` - new broadcast policy that sends to N random makers (default 3).
+- `broadcast_peer_count` configuration parameter to control number of peers for MULTIPLE_PEERS policy.
+- Unified broadcast behavior between full node and Neutrino clients.
 
 ### Changed
 
@@ -28,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `can_estimate_fee()` method to backends for capability detection.
 - Increased default counterparty count from 3 to 10 makers.
 - Reduced logging verbosity: parsed offers now logged at DEBUG level instead of INFO.
+- **Default broadcast policy changed from RANDOM_PEER to MULTIPLE_PEERS** (sends to 3 random makers).
+- **Unified broadcast behavior**: All policies (SELF, RANDOM_PEER, MULTIPLE_PEERS, NOT_SELF) work
+  the same way for both full node and Neutrino backends. The only difference is Neutrino skips
+  mempool verification when falling back to self-broadcast.
+- RANDOM_PEER and MULTIPLE_PEERS now allow self-fallback if all makers fail (both full node and Neutrino).
+- Neutrino pending transaction timeout reduced from 48h to 10h before warning.
+- Neutrino pending transaction monitoring uses block-based UTXO verification (cannot access mempool).
 
 ### Fixed
 

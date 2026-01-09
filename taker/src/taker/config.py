@@ -16,14 +16,23 @@ class BroadcastPolicy(str, Enum):
     Policy for how to broadcast the final CoinJoin transaction.
 
     Privacy implications:
-    - SELF: Taker broadcasts via own node. Links taker's IP to the transaction.
-    - RANDOM_PEER: Random selection from makers + self. Provides plausible deniability.
-    - NOT_SELF: Only makers can broadcast. Maximum privacy - taker's node never touches tx.
-                WARNING: No fallback if makers fail to broadcast!
+    - SELF: Taker broadcasts via own node. Links taker's IP to the transaction (even via Tor).
+    - RANDOM_PEER: Random maker selected. If verification fails, tries next maker, falls back
+                   to self as last resort. Good balance of privacy and reliability.
+    - MULTIPLE_PEERS: Broadcast to N random makers simultaneously (default 3). Redundant and
+                      reliable without excessive network footprint. Falls back to self if all fail.
+    - NOT_SELF: Try makers sequentially, never self. Maximum privacy - taker never broadcasts.
+                WARNING: No fallback if all makers fail!
+
+    Neutrino considerations:
+    - Neutrino cannot verify mempool transactions (only confirmed blocks)
+    - MULTIPLE_PEERS is recommended and default: sends to multiple makers for redundancy
+    - Self-fallback allowed but verification skipped (trusts broadcast succeeded)
     """
 
     SELF = "self"
     RANDOM_PEER = "random-peer"
+    MULTIPLE_PEERS = "multiple-peers"
     NOT_SELF = "not-self"
 
 
@@ -108,13 +117,18 @@ class TakerConfig(WalletConfig):
 
     # Broadcast policy (privacy vs reliability tradeoff)
     tx_broadcast: BroadcastPolicy = Field(
-        default=BroadcastPolicy.RANDOM_PEER,
-        description="How to broadcast the final transaction: self, random-peer, or not-self",
+        default=BroadcastPolicy.MULTIPLE_PEERS,
+        description="How to broadcast: self, random-peer, multiple-peers, or not-self",
     )
     broadcast_timeout_sec: int = Field(
         default=30,
         ge=5,
         description="Timeout waiting for maker to broadcast when delegating",
+    )
+    broadcast_peer_count: int = Field(
+        default=3,
+        ge=1,
+        description="Number of random peers to use for MULTIPLE_PEERS policy",
     )
 
     # Advanced options

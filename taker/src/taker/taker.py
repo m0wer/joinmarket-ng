@@ -29,6 +29,7 @@ from jmcore.models import Offer
 from jmcore.protocol import JM_VERSION, parse_utxo_list
 from jmwallet.backends.base import BlockchainBackend
 from jmwallet.history import (
+    TransactionHistoryEntry,
     append_history_entry,
     create_taker_history_entry,
     get_pending_transactions,
@@ -544,9 +545,22 @@ class Taker:
         Checks pending transactions every 60 seconds and updates their confirmation
         status in the history file. Transactions are marked as successful once they
         receive their first confirmation.
+
+        Neutrino-specific behavior:
+        - Neutrino cannot fetch arbitrary transactions by txid (get_transaction returns None)
+        - Instead, we use verify_tx_output() with the destination address hint
+        - This uses compact block filters to check if the output exists in confirmed blocks
+        - For Neutrino, we must wait for confirmation before we can verify the transaction
         """
         logger.info("Starting pending transaction monitor...")
         check_interval = 60.0  # Check every 60 seconds
+        has_mempool = self.backend.has_mempool_access()
+
+        if not has_mempool:
+            logger.info(
+                "Backend has no mempool access (Neutrino). "
+                "Pending transactions will be verified via block confirmation only."
+            )
 
         while self.running:
             try:
@@ -566,37 +580,12 @@ class Taker:
                         continue
 
                     try:
-                        # Check if transaction exists and get confirmations
-                        tx_info = await self.backend.get_transaction(entry.txid)
-
-                        if tx_info is None:
-                            # Transaction not found - might have been rejected/replaced
-                            from datetime import datetime
-
-                            timestamp = datetime.fromisoformat(entry.timestamp)
-                            age_hours = (datetime.now() - timestamp).total_seconds() / 3600
-
-                            if age_hours > 24:
-                                logger.warning(
-                                    f"Transaction {entry.txid[:16]}... not found after "
-                                    f"{age_hours:.1f} hours, may have been rejected"
-                                )
-                            continue
-
-                        confirmations = tx_info.confirmations
-
-                        if confirmations > 0:
-                            # Update history with confirmation
-                            update_transaction_confirmation(
-                                txid=entry.txid,
-                                confirmations=confirmations,
-                                data_dir=self.config.data_dir,
-                            )
-
-                            logger.info(
-                                f"CoinJoin {entry.txid[:16]}... confirmed! "
-                                f"({confirmations} confirmation{'s' if confirmations != 1 else ''})"
-                            )
+                        if has_mempool:
+                            # Full node / Mempool API: can get transaction directly
+                            await self._check_pending_with_mempool(entry)
+                        else:
+                            # Neutrino: must use address-based verification
+                            await self._check_pending_without_mempool(entry)
 
                     except Exception as e:
                         logger.debug(f"Error checking transaction {entry.txid[:16]}...: {e}")
@@ -608,6 +597,103 @@ class Taker:
                 logger.error(f"Error in pending transaction monitor: {e}")
 
         logger.info("Pending transaction monitor stopped")
+
+    async def _check_pending_with_mempool(self, entry: TransactionHistoryEntry) -> None:
+        """Check pending transaction status using get_transaction (requires mempool access)."""
+        tx_info = await self.backend.get_transaction(entry.txid)
+
+        if tx_info is None:
+            # Transaction not found - might have been rejected/replaced
+            from datetime import datetime
+
+            timestamp = datetime.fromisoformat(entry.timestamp)
+            age_hours = (datetime.now() - timestamp).total_seconds() / 3600
+
+            if age_hours > 24:
+                logger.warning(
+                    f"Transaction {entry.txid[:16]}... not found after "
+                    f"{age_hours:.1f} hours, may have been rejected"
+                )
+            return
+
+        confirmations = tx_info.confirmations
+
+        if confirmations > 0:
+            # Update history with confirmation
+            update_transaction_confirmation(
+                txid=entry.txid,
+                confirmations=confirmations,
+                data_dir=self.config.data_dir,
+            )
+
+            logger.info(
+                f"CoinJoin {entry.txid[:16]}... confirmed! "
+                f"({confirmations} confirmation{'s' if confirmations != 1 else ''})"
+            )
+
+    async def _check_pending_without_mempool(self, entry: TransactionHistoryEntry) -> None:
+        """Check pending transaction status without mempool access (Neutrino).
+
+        Uses verify_tx_output() with the destination address to check if the
+        CoinJoin output has been confirmed in a block. This works because
+        Neutrino compact block filters can match on addresses.
+
+        Note: This cannot detect unconfirmed transactions, so we must wait
+        for block confirmation. The transaction may be in mempool but we
+        won't know until it's mined.
+        """
+        from datetime import datetime
+
+        # Need destination address for Neutrino verification
+        if not entry.destination_address:
+            logger.debug(
+                f"Transaction {entry.txid[:16]}... has no destination_address, "
+                "cannot verify with Neutrino"
+            )
+            return
+
+        # Get current block height for efficient scanning
+        try:
+            current_height = await self.backend.get_block_height()
+        except Exception:
+            current_height = None
+
+        # Try to verify the CJ output exists in a confirmed block
+        # We use vout=0 as a guess for the CJ output position, but this may not be accurate
+        # A more robust solution would store the vout in history
+        # For now, we rely on the fact that if the address has a UTXO with this txid,
+        # the transaction is confirmed
+        verified = await self.backend.verify_tx_output(
+            txid=entry.txid,
+            vout=0,  # CJ outputs are typically first, but this is a guess
+            address=entry.destination_address,
+            start_height=current_height,
+        )
+
+        if verified:
+            # Transaction output found in a confirmed block
+            # We don't know exact confirmation count with Neutrino, assume 1
+            update_transaction_confirmation(
+                txid=entry.txid,
+                confirmations=1,  # We know it's confirmed but not exact count
+                data_dir=self.config.data_dir,
+            )
+
+            logger.info(
+                f"CoinJoin {entry.txid[:16]}... confirmed! (verified via Neutrino block filters)"
+            )
+        else:
+            # Not found yet - could be in mempool or not broadcast
+            timestamp = datetime.fromisoformat(entry.timestamp)
+            age_hours = (datetime.now() - timestamp).total_seconds() / 3600
+
+            # For Neutrino, be more patient before warning since we can't see mempool
+            if age_hours > 10:  # 10 hour timeout for Neutrino
+                logger.warning(
+                    f"Transaction {entry.txid[:16]}... not confirmed after "
+                    f"{age_hours:.1f} hours. May still be in mempool (not visible to Neutrino) "
+                    "or may have been rejected/never broadcast."
+                )
 
     async def _periodic_rescan(self) -> None:
         """Background task to periodically rescan wallet.
@@ -1959,9 +2045,16 @@ class Taker:
 
         Privacy implications:
         - SELF: Taker broadcasts via own node. Links taker's IP to the transaction.
-        - RANDOM_PEER: Random selection from makers + self. Provides plausible deniability.
-        - NOT_SELF: Only makers can broadcast. Maximum privacy - taker's node never touches tx.
-                    WARNING: No fallback if makers fail to broadcast!
+        - RANDOM_PEER: Random maker selected. Falls back to next maker on failure,
+                       then self as last resort. Good balance of privacy and reliability.
+        - MULTIPLE_PEERS: Broadcast to N random makers simultaneously (default 3).
+                          Falls back to self if all fail. Recommended for Neutrino.
+        - NOT_SELF: Try makers sequentially, never self. Maximum privacy.
+                    WARNING: No fallback if all makers fail!
+
+        Neutrino notes:
+        - Cannot verify mempool transactions (only confirmed blocks)
+        - Self-fallback allowed but verification skipped (trusts broadcast succeeded)
 
         Returns:
             Transaction ID if successful, empty string otherwise
@@ -1970,10 +2063,17 @@ class Taker:
         import random
 
         policy = self.config.tx_broadcast
-        logger.info(f"Broadcasting with policy: {policy.value}")
+        has_mempool = self.backend.has_mempool_access()
+        logger.info(f"Broadcasting with policy: {policy.value}, mempool_access: {has_mempool}")
 
         # Encode transaction as base64 for !push message
         tx_b64 = base64.b64encode(self.final_tx).decode("ascii")
+
+        # Calculate expected txid upfront (needed for Neutrino)
+        from taker.tx_builder import CoinJoinTxBuilder
+
+        builder = CoinJoinTxBuilder(self.config.bitcoin_network or self.config.network)
+        expected_txid = builder.get_txid(self.final_tx)
 
         # Build list of broadcast candidates based on policy
         maker_nicks = list(self.maker_sessions.keys())
@@ -1983,22 +2083,51 @@ class Taker:
             return await self._broadcast_self()
 
         elif policy == BroadcastPolicy.RANDOM_PEER:
-            # Random selection from makers + self
-            candidates = maker_nicks + ["self"]
-            random.shuffle(candidates)
+            # Try makers in random order, fall back to self as last resort
+            if not maker_nicks:
+                logger.warning("RANDOM_PEER policy but no makers available, using self")
+                return await self._broadcast_self()
 
-            for candidate in candidates:
-                if candidate == "self":
-                    txid = await self._broadcast_self()
-                    if txid:
-                        return txid
+            random.shuffle(maker_nicks)
+
+            for candidate in maker_nicks:
+                txid = await self._broadcast_via_maker(candidate, tx_b64)
+                if txid:
+                    return txid
+
+            # Last resort: self-broadcast
+            logger.warning("All makers failed, falling back to self-broadcast")
+            return await self._broadcast_self()
+
+        elif policy == BroadcastPolicy.MULTIPLE_PEERS:
+            # Broadcast to N random makers simultaneously, fall back to self
+            if not maker_nicks:
+                logger.warning("MULTIPLE_PEERS policy but no makers available, using self")
+                return await self._broadcast_self()
+
+            # Select N random makers (or all if less than N)
+            peer_count = min(self.config.broadcast_peer_count, len(maker_nicks))
+            selected_peers = random.sample(maker_nicks, peer_count)
+
+            success_count = await self._broadcast_to_all_makers(selected_peers, tx_b64)
+
+            if success_count > 0:
+                if has_mempool:
+                    logger.info(
+                        f"Broadcast sent to {success_count}/{peer_count} makers "
+                        "(MULTIPLE_PEERS policy)."
+                    )
                 else:
-                    txid = await self._broadcast_via_maker(candidate, tx_b64)
-                    if txid:
-                        return txid
+                    logger.info(
+                        f"Broadcast sent to {success_count}/{peer_count} makers "
+                        f"(MULTIPLE_PEERS policy). Transaction {expected_txid} will be "
+                        "confirmed via block monitoring (Neutrino cannot verify mempool)"
+                    )
+                return expected_txid
 
-            logger.error("All broadcast attempts failed")
-            return ""
+            # All peers failed, fall back to self
+            logger.warning(f"All {peer_count} peer broadcast attempts failed, falling back to self")
+            return await self._broadcast_self()
 
         elif policy == BroadcastPolicy.NOT_SELF:
             # Only makers can broadcast - no self fallback
@@ -2006,6 +2135,7 @@ class Taker:
                 logger.error("NOT_SELF policy but no makers available")
                 return ""
 
+            # Try makers in random order with verification
             random.shuffle(maker_nicks)
 
             for maker_nick in maker_nicks:
@@ -2025,6 +2155,45 @@ class Taker:
             # Unknown policy, fallback to self
             logger.warning(f"Unknown broadcast policy {policy}, falling back to self")
             return await self._broadcast_self()
+
+    async def _broadcast_to_all_makers(self, maker_nicks: list[str], tx_b64: str) -> int:
+        """
+        Send !push to all makers simultaneously for redundant broadcast.
+
+        This is used by Neutrino takers who cannot verify mempool transactions.
+        By broadcasting to all makers, we maximize the chance that at least one
+        will successfully broadcast the transaction to the Bitcoin network.
+
+        Privacy note: All makers already participated in the CoinJoin, so they
+        all know the transaction. Sending !push to all of them doesn't reveal
+        any new information.
+
+        Args:
+            maker_nicks: List of maker nicks to send !push to
+            tx_b64: Base64-encoded signed transaction
+
+        Returns:
+            Number of makers that successfully received the !push message
+        """
+        import asyncio
+
+        async def send_push(nick: str) -> bool:
+            """Send !push to a single maker, return True if no exception."""
+            try:
+                await self.directory_client.send_privmsg(nick, "push", tx_b64)
+                logger.debug(f"Sent !push to {nick}")
+                return True
+            except Exception as e:
+                logger.warning(f"Failed to send !push to {nick}: {e}")
+                return False
+
+        # Send to all makers concurrently
+        results = await asyncio.gather(*[send_push(nick) for nick in maker_nicks])
+
+        success_count = sum(1 for r in results if r)
+        logger.info(f"!push sent to {success_count}/{len(maker_nicks)} makers")
+
+        return success_count
 
     async def _broadcast_self(self) -> str:
         """Broadcast transaction via our own backend."""

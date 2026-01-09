@@ -88,6 +88,21 @@ class BlockchainBackend(ABC):
         """
         return True
 
+    def has_mempool_access(self) -> bool:
+        """Check if this backend can access unconfirmed transactions in the mempool.
+
+        Full node backends (Bitcoin Core) and API backends (Mempool.space) have
+        mempool access and can verify transactions immediately after broadcast.
+
+        Light client backends (Neutrino using BIP157/158) cannot access the mempool
+        and can only see transactions after they're confirmed in a block. This
+        affects broadcast verification strategy - see BroadcastPolicy docs.
+
+        Returns:
+            True if backend can see unconfirmed transactions, False otherwise.
+        """
+        return True
+
     @abstractmethod
     async def get_block_height(self) -> int:
         """Get current blockchain height"""

@@ -406,6 +406,19 @@ class NeutrinoBackend(BlockchainBackend):
         """Neutrino cannot reliably estimate fees - requires full node."""
         return False
 
+    def has_mempool_access(self) -> bool:
+        """Neutrino cannot access mempool - only sees confirmed transactions.
+
+        BIP157/158 compact block filters only match confirmed blocks.
+        Unconfirmed transactions in the mempool are not visible to Neutrino.
+
+        This means verify_tx_output() will return False for valid transactions
+        that are in the mempool but not yet confirmed. Takers using Neutrino
+        must use alternative verification strategies (e.g., trust maker ACKs,
+        multi-maker broadcast, wait for confirmation).
+        """
+        return False
+
     async def get_block_height(self) -> int:
         """Get current blockchain height from neutrino."""
         try:

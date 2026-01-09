@@ -22,12 +22,14 @@ class TestBroadcastPolicy:
         """Test broadcast policy enum values."""
         assert BroadcastPolicy.SELF.value == "self"
         assert BroadcastPolicy.RANDOM_PEER.value == "random-peer"
+        assert BroadcastPolicy.MULTIPLE_PEERS.value == "multiple-peers"
         assert BroadcastPolicy.NOT_SELF.value == "not-self"
 
     def test_policy_from_string(self) -> None:
         """Test creating policy from string."""
         assert BroadcastPolicy("self") == BroadcastPolicy.SELF
         assert BroadcastPolicy("random-peer") == BroadcastPolicy.RANDOM_PEER
+        assert BroadcastPolicy("multiple-peers") == BroadcastPolicy.MULTIPLE_PEERS
         assert BroadcastPolicy("not-self") == BroadcastPolicy.NOT_SELF
 
 
@@ -35,9 +37,9 @@ class TestTakerConfigBroadcast:
     """Tests for broadcast configuration in TakerConfig."""
 
     def test_default_broadcast_policy(self, sample_mnemonic: str) -> None:
-        """Test default broadcast policy is random-peer."""
+        """Test default broadcast policy is multiple-peers."""
         config = TakerConfig(mnemonic=sample_mnemonic)
-        assert config.tx_broadcast == BroadcastPolicy.RANDOM_PEER
+        assert config.tx_broadcast == BroadcastPolicy.MULTIPLE_PEERS
 
     def test_explicit_self_policy(self, sample_mnemonic: str) -> None:
         """Test explicitly setting self broadcast policy."""
@@ -256,12 +258,13 @@ class TestTakerBroadcast:
 
     @pytest.mark.asyncio
     async def test_phase_broadcast_random_peer_tries_makers(self, taker) -> None:
-        """Test RANDOM_PEER policy tries makers before self."""
+        """Test RANDOM_PEER policy tries makers, falls back to self on failure (full node)."""
         from jmcore.models import Offer, OfferType
 
         from taker.taker import MakerSession
 
         taker.config.tx_broadcast = BroadcastPolicy.RANDOM_PEER
+        taker.backend.has_mempool_access = MagicMock(return_value=True)  # Full node
 
         # Set up maker sessions
         mock_offer = Offer(
@@ -287,11 +290,11 @@ class TestTakerBroadcast:
         # Make maker broadcast "fail" (verification returns False) so we fall back to self
         taker.backend.verify_tx_output = AsyncMock(return_value=False)
 
-        # Force deterministic order: maker first, then self
+        # Force deterministic order: maker first
         with patch("random.shuffle", side_effect=lambda x: x.sort()):
             txid = await taker._phase_broadcast()
 
-        # Should succeed via self fallback
+        # Should succeed via self fallback (full node behavior)
         assert txid == "txid123"
 
     @pytest.mark.asyncio
@@ -331,3 +334,330 @@ class TestTakerBroadcast:
 
         # Should fail
         assert txid == ""
+
+
+class TestNeutrinoBroadcast:
+    """Tests for Neutrino-specific broadcast behavior (no mempool access)."""
+
+    @pytest.fixture
+    def mock_wallet(self):
+        """Create a mock wallet service."""
+        wallet = MagicMock()
+        wallet.mixdepth_count = 5
+        wallet.network = "regtest"
+        wallet.sync_all = AsyncMock()
+        wallet.close = AsyncMock()
+        return wallet
+
+    @pytest.fixture
+    def mock_neutrino_backend(self):
+        """Create a mock Neutrino backend (no mempool access)."""
+        backend = MagicMock()
+        backend.broadcast_transaction = AsyncMock(return_value="txid123")
+        backend.get_transaction = AsyncMock(return_value=None)  # Neutrino can't fetch by txid
+        backend.get_block_height = AsyncMock(return_value=850000)
+        backend.verify_tx_output = AsyncMock(return_value=False)  # Can't verify unconfirmed
+        backend.requires_neutrino_metadata = MagicMock(return_value=True)
+        backend.has_mempool_access = MagicMock(return_value=False)  # Key difference
+        return backend
+
+    @pytest.fixture
+    def mock_fullnode_backend(self):
+        """Create a mock full node backend (has mempool access)."""
+        backend = MagicMock()
+        backend.broadcast_transaction = AsyncMock(return_value="txid123")
+        backend.get_transaction = AsyncMock(return_value=None)
+        backend.get_block_height = AsyncMock(return_value=850000)
+        backend.verify_tx_output = AsyncMock(return_value=True)  # Can verify immediately
+        backend.requires_neutrino_metadata = MagicMock(return_value=False)
+        backend.has_mempool_access = MagicMock(return_value=True)
+        return backend
+
+    @pytest.fixture
+    def taker_config(self, sample_mnemonic: str):
+        """Create a taker config for testing."""
+        return TakerConfig(
+            mnemonic=sample_mnemonic,
+            network="regtest",
+            directory_servers=["localhost:5222"],
+            tx_broadcast=BroadcastPolicy.RANDOM_PEER,
+            broadcast_timeout_sec=5,  # Minimum allowed for tests
+        )
+
+    @pytest.fixture
+    def neutrino_taker(self, mock_wallet, mock_neutrino_backend, taker_config):
+        """Create a Taker instance with Neutrino backend."""
+        from taker.taker import Taker
+
+        taker = Taker(
+            wallet=mock_wallet,
+            backend=mock_neutrino_backend,
+            config=taker_config,
+        )
+        taker.final_tx = bytes.fromhex(
+            "02000000"
+            "0001"
+            "01"
+            "0000000000000000000000000000000000000000000000000000000000000001"
+            "00000000"
+            "00"
+            "ffffffff"
+            "01"
+            "0000000000000000"
+            "160014"
+            "0000000000000000000000000000000000000000"
+            "00"
+            "00000000"
+        )
+        return taker
+
+    @pytest.fixture
+    def fullnode_taker(self, mock_wallet, mock_fullnode_backend, taker_config):
+        """Create a Taker instance with full node backend."""
+        from taker.taker import Taker
+
+        taker = Taker(
+            wallet=mock_wallet,
+            backend=mock_fullnode_backend,
+            config=taker_config,
+        )
+        taker.final_tx = bytes.fromhex(
+            "02000000"
+            "0001"
+            "01"
+            "0000000000000000000000000000000000000000000000000000000000000001"
+            "00000000"
+            "00"
+            "ffffffff"
+            "01"
+            "0000000000000000"
+            "160014"
+            "0000000000000000000000000000000000000000"
+            "00"
+            "00000000"
+        )
+        return taker
+
+    def _setup_makers(self, taker, maker_nicks: list[str]) -> None:
+        """Helper to set up maker sessions for a taker."""
+        from jmcore.models import Offer, OfferType
+
+        from taker.taker import MakerSession
+
+        taker.maker_sessions = {}
+        for nick in maker_nicks:
+            mock_offer = Offer(
+                counterparty=nick,
+                oid=0,
+                ordertype=OfferType.SW0_RELATIVE,
+                minsize=100_000,
+                maxsize=10_000_000,
+                txfee=1000,
+                cjfee="0.0003",
+                fidelity_bond_value=0,
+            )
+            taker.maker_sessions[nick] = MakerSession(nick=nick, offer=mock_offer)
+
+        taker.directory_client = MagicMock()
+        taker.directory_client.send_privmsg = AsyncMock()
+        taker.tx_metadata = {"output_owners": [(nick, "cj") for nick in maker_nicks]}
+        taker.cj_destination = "bcrt1qtest123"
+        taker.taker_change_address = "bcrt1qchange456"
+
+    @pytest.mark.asyncio
+    async def test_multiple_peers_broadcasts_to_n_makers(self, neutrino_taker) -> None:
+        """Test MULTIPLE_PEERS sends !push to N random makers simultaneously."""
+        neutrino_taker.config.tx_broadcast = BroadcastPolicy.MULTIPLE_PEERS
+        neutrino_taker.config.broadcast_peer_count = 3
+        self._setup_makers(neutrino_taker, ["J5maker1", "J5maker2", "J5maker3", "J5maker4"])
+
+        txid = await neutrino_taker._phase_broadcast()
+
+        # Should return expected txid even without verification
+        assert txid != ""
+
+        # Should send !push to exactly 3 makers (not all 4)
+        calls = neutrino_taker.directory_client.send_privmsg.call_args_list
+        assert len(calls) == 3
+
+        # Recipients should be subset of all makers
+        push_recipients = {call[0][0] for call in calls}
+        assert push_recipients.issubset({"J5maker1", "J5maker2", "J5maker3", "J5maker4"})
+
+    @pytest.mark.asyncio
+    async def test_random_peer_falls_back_to_self(self, neutrino_taker) -> None:
+        """Test RANDOM_PEER tries makers sequentially, falls back to self on failure."""
+        self._setup_makers(neutrino_taker, ["J5maker1", "J5maker2"])
+
+        # Simulate all makers failing verification
+        neutrino_taker.backend.verify_tx_output = AsyncMock(return_value=False)
+
+        # Mock self-broadcast to succeed
+        neutrino_taker.backend.broadcast_transaction = AsyncMock(return_value="selfbroadcast_txid")
+
+        txid = await neutrino_taker._phase_broadcast()
+
+        # Should fall back to self and succeed
+        assert txid == "selfbroadcast_txid"
+
+        # Should have tried both makers before self
+        privmsg_calls = neutrino_taker.directory_client.send_privmsg.call_args_list
+        assert len(privmsg_calls) == 2  # Tried both makers
+
+        # Should have called self-broadcast
+        neutrino_taker.backend.broadcast_transaction.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_fullnode_multiple_peers_same_behavior(self, fullnode_taker) -> None:
+        """Test full node MULTIPLE_PEERS works the same as Neutrino."""
+        fullnode_taker.config.tx_broadcast = BroadcastPolicy.MULTIPLE_PEERS
+        fullnode_taker.config.broadcast_peer_count = 2
+        self._setup_makers(fullnode_taker, ["J5maker1", "J5maker2", "J5maker3"])
+
+        txid = await fullnode_taker._phase_broadcast()
+
+        # Should succeed
+        assert txid != ""
+
+        # Should send to exactly 2 makers
+        calls = fullnode_taker.directory_client.send_privmsg.call_args_list
+        assert len(calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_not_self_never_falls_back(self, neutrino_taker) -> None:
+        """Test NOT_SELF never falls back to self even if all makers fail."""
+        neutrino_taker.config.tx_broadcast = BroadcastPolicy.NOT_SELF
+        self._setup_makers(neutrino_taker, ["J5maker1", "J5maker2"])
+
+        # Simulate all makers failing verification
+        neutrino_taker.backend.verify_tx_output = AsyncMock(return_value=False)
+
+        txid = await neutrino_taker._phase_broadcast()
+
+        # Should fail without self-fallback
+        assert txid == ""
+
+        # Should have tried both makers
+        calls = neutrino_taker.directory_client.send_privmsg.call_args_list
+        assert len(calls) == 2
+
+        # Should NOT have called self-broadcast
+        neutrino_taker.backend.broadcast_transaction.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_multiple_peers_falls_back_to_self(self, neutrino_taker) -> None:
+        """Test MULTIPLE_PEERS falls back to self if all N peers fail."""
+        neutrino_taker.config.tx_broadcast = BroadcastPolicy.MULTIPLE_PEERS
+        neutrino_taker.config.broadcast_peer_count = 2
+        self._setup_makers(neutrino_taker, ["J5maker1", "J5maker2"])
+
+        # Simulate all makers failing to receive !push
+        neutrino_taker.directory_client.send_privmsg = AsyncMock(
+            side_effect=Exception("Connection lost")
+        )
+
+        # Mock self-broadcast to succeed
+        neutrino_taker.backend.broadcast_transaction = AsyncMock(return_value="selfbroadcast_txid")
+
+        txid = await neutrino_taker._phase_broadcast()
+
+        # Should fall back to self and succeed
+        assert txid == "selfbroadcast_txid"
+
+        # Should have attempted to send to 2 makers
+        assert neutrino_taker.directory_client.send_privmsg.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_fullnode_random_peer_sequential(self, fullnode_taker) -> None:
+        """Test full node RANDOM_PEER tries candidates sequentially with verification."""
+        self._setup_makers(fullnode_taker, ["J5maker1", "J5maker2"])
+
+        # Add taker's CJ output to metadata so verification can find it
+        fullnode_taker.tx_metadata["output_owners"].insert(0, ("taker", "cj"))
+
+        # Force deterministic order: maker1 first
+        with patch("random.shuffle", side_effect=lambda x: x.sort()):
+            txid = await fullnode_taker._phase_broadcast()
+
+        # Should succeed via first maker (verification returns True)
+        assert txid != ""
+
+        # Should only try first maker (verification succeeded)
+        # Full node doesn't use multi-maker broadcast
+        calls = fullnode_taker.directory_client.send_privmsg.call_args_list
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_fullnode_random_peer_tries_next_on_failure(self, fullnode_taker) -> None:
+        """Test full node RANDOM_PEER tries next candidate when verification fails."""
+        self._setup_makers(fullnode_taker, ["J5maker1", "J5maker2"])
+
+        # First verification fails, second succeeds
+        fullnode_taker.backend.verify_tx_output = AsyncMock(side_effect=[False, False, True, True])
+
+        with patch("random.shuffle", side_effect=lambda x: x.sort()):
+            txid = await fullnode_taker._phase_broadcast()
+
+        # Should succeed
+        assert txid != ""
+
+    @pytest.mark.asyncio
+    async def test_broadcast_to_all_makers_partial_success(self, neutrino_taker) -> None:
+        """Test multi-maker broadcast succeeds even if some makers fail."""
+        self._setup_makers(neutrino_taker, ["J5maker1", "J5maker2", "J5maker3"])
+
+        # Simulate first maker failing, others succeed
+        call_count = [0]
+
+        async def flaky_send(*args):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise Exception("Network error")
+
+        neutrino_taker.directory_client.send_privmsg = AsyncMock(side_effect=flaky_send)
+
+        success_count = await neutrino_taker._broadcast_to_all_makers(
+            ["J5maker1", "J5maker2", "J5maker3"],
+            "dHh0ZXN0",  # base64 test data
+        )
+
+        # Should report 2 successes
+        assert success_count == 2
+
+    @pytest.mark.asyncio
+    async def test_broadcast_to_all_makers_all_fail(self, neutrino_taker) -> None:
+        """Test multi-maker broadcast reports zero on total failure."""
+        self._setup_makers(neutrino_taker, ["J5maker1", "J5maker2"])
+
+        neutrino_taker.directory_client.send_privmsg = AsyncMock(
+            side_effect=Exception("All connections failed")
+        )
+
+        success_count = await neutrino_taker._broadcast_to_all_makers(
+            ["J5maker1", "J5maker2"],
+            "dHh0ZXN0",
+        )
+
+        assert success_count == 0
+
+
+class TestHasMempoolAccess:
+    """Tests for the has_mempool_access() backend method."""
+
+    def test_bitcoin_core_has_mempool(self) -> None:
+        """Test BitcoinCoreBackend has mempool access."""
+        from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
+
+        backend = BitcoinCoreBackend(
+            rpc_url="http://localhost:18443",
+            rpc_user="test",
+            rpc_password="test",
+        )
+        assert backend.has_mempool_access() is True
+
+    def test_neutrino_no_mempool(self) -> None:
+        """Test NeutrinoBackend has no mempool access."""
+        from jmwallet.backends.neutrino import NeutrinoBackend
+
+        backend = NeutrinoBackend(neutrino_url="http://localhost:8080", network="regtest")
+        assert backend.has_mempool_access() is False
