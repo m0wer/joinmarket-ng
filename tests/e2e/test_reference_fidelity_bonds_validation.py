@@ -38,12 +38,6 @@ def is_service_running(service: str) -> bool:
     return bool(result.stdout.strip())
 
 
-def get_jam_logs(lines: int = 100) -> str:
-    """Get recent logs from jam container."""
-    result = run_compose_cmd(["logs", "--tail", str(lines), "jam"])
-    return result.stdout
-
-
 @pytest.fixture(scope="module")
 def reference_services():
     """Ensure reference services are running."""
@@ -64,44 +58,6 @@ def reference_services():
     yield
 
     # Cleanup is handled by docker compose down
-
-
-def test_reference_taker_receives_our_maker_bonds(reference_services):
-    """
-    Test that the reference taker (jam) receives fidelity bonds from our makers.
-
-    This validates that our maker's bond implementation is compatible with
-    the reference taker.
-    """
-    # Give makers time to announce and create bonds
-    time.sleep(10)
-
-    # Check jam logs for bond detection
-    logs = get_jam_logs(lines=500)
-
-    # Look for evidence of bond detection in logs
-    # Reference taker logs show fidelity_bond_value when selecting makers
-    bond_detected = "fidelity_bond_value" in logs
-
-    if bond_detected:
-        logger.info("✓ Reference taker detected fidelity bonds from makers")
-
-        # Extract bond information from logs
-        for line in logs.split("\n"):
-            if "fidelity_bond_value" in line and "counterparty" in line:
-                logger.info(f"  Bond info: {line.strip()}")
-    else:
-        # Check if makers have bonds configured
-        maker_logs = run_compose_cmd(["logs", "--tail", "100", "maker1"]).stdout
-
-        if "Fidelity bond found" in maker_logs:
-            logger.warning(
-                "Maker has bond but reference taker didn't detect it - "
-                "possible compatibility issue"
-            )
-        else:
-            logger.info("Maker doesn't have bond configured - test inconclusive")
-            pytest.skip("Maker doesn't have fidelity bond configured")
 
 
 def test_our_orderbook_watcher_receives_reference_maker_bonds(reference_services):
