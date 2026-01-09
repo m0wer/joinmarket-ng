@@ -589,7 +589,8 @@ def _show_extended_wallet_info(
             btc_balance = sats_to_btc(addr_info.balance)
             ext_balance += addr_info.balance
             # Format: path  address  balance  status
-            print(f"{addr_info.path}\t{addr_info.address}\t{btc_balance:.8f}\t{addr_info.status}")
+            # Pad path to ensure consistent alignment regardless of index digits
+            print(f"{addr_info.path:<24}{addr_info.address}\t{btc_balance:.8f}\t{addr_info.status}")
 
         print(f"Balance:\t{sats_to_btc(ext_balance):.8f}")
 
@@ -604,7 +605,8 @@ def _show_extended_wallet_info(
         for addr_info in int_addresses:
             btc_balance = sats_to_btc(addr_info.balance)
             int_balance += addr_info.balance
-            print(f"{addr_info.path}\t{addr_info.address}\t{btc_balance:.8f}\t{addr_info.status}")
+            # Pad path to ensure consistent alignment regardless of index digits
+            print(f"{addr_info.path:<24}{addr_info.address}\t{btc_balance:.8f}\t{addr_info.status}")
 
         print(f"Balance:\t{sats_to_btc(int_balance):.8f}")
 
@@ -640,8 +642,9 @@ def _show_extended_wallet_info(
                         if is_locked:
                             locktime_str += " [LOCKED]"
 
+                    # Pad path to ensure consistent alignment regardless of index digits
                     print(
-                        f"{addr_info.path}\t{addr_info.address}\t{btc_balance:.8f}\t{locktime_str}"
+                        f"{addr_info.path:<24}{addr_info.address}\t{btc_balance:.8f}\t{locktime_str}"
                     )
 
                 # Show bond balance with locked amount in parentheses
