@@ -276,16 +276,27 @@ class MultiDirectoryClient:
         - When connected to multiple directory servers, the same response may arrive
           multiple times. ResponseDeduplicator tracks which responses we've seen
           and logs duplicates for debugging.
+
+        Special handling for !sig:
+        - Makers send multiple !sig messages (one per UTXO)
+        - We accumulate all messages in a list instead of keeping just the last one
+        - We continue listening for the full timeout to collect all signatures
         """
+        # Track if this command expects multiple messages per maker
+        accumulate_responses = expected_command == "!sig"
+
         responses: dict[str, dict[str, Any]] = {}
         remaining_nicks = set(expected_nicks)
         deduplicator = ResponseDeduplicator()
         start_time = asyncio.get_event_loop().time()
 
-        while remaining_nicks:
+        while remaining_nicks or (accumulate_responses and responses):
             elapsed = asyncio.get_event_loop().time() - start_time
             if elapsed >= timeout:
-                logger.warning(f"Timeout waiting for {expected_command} from: {remaining_nicks}")
+                if not accumulate_responses:
+                    logger.warning(
+                        f"Timeout waiting for {expected_command} from: {remaining_nicks}"
+                    )
                 break
 
             remaining_time = min(5.0, timeout - elapsed)  # Listen in 5s chunks
@@ -319,29 +330,47 @@ class MultiDirectoryClient:
                         if expected_command not in line:
                             continue
 
-                        # Match against remaining nicks
-                        for nick in list(remaining_nicks):
+                        # Match against expected nicks (not just remaining)
+                        for nick in expected_nicks:
                             if nick in line:
-                                # Check for duplicate response from another directory
-                                if not deduplicator.add_response(
-                                    nick, expected_command, line, server
-                                ):
-                                    logger.debug(
-                                        f"Duplicate {expected_command} from {nick} via {server}"
-                                    )
-                                    break
+                                # For accumulating responses (like !sig), skip deduplication
+                                # since we expect multiple messages from the same maker
+                                if not accumulate_responses:
+                                    # Check for duplicate response from another directory
+                                    if not deduplicator.add_response(
+                                        nick, expected_command, line, server
+                                    ):
+                                        logger.debug(
+                                            f"Duplicate {expected_command} from {nick} via {server}"
+                                        )
+                                        break
+
                                 # Extract data after the command
                                 parts = line.split(expected_command, 1)
                                 if len(parts) > 1:
-                                    responses[nick] = {"data": parts[1].strip()}
-                                    remaining_nicks.discard(nick)
-                                    logger.debug(f"Received {expected_command} from {nick}")
+                                    data = parts[1].strip()
+                                    if accumulate_responses:
+                                        # Accumulate multiple !sig messages
+                                        if nick not in responses:
+                                            responses[nick] = {"data": []}
+                                            remaining_nicks.discard(nick)
+                                        responses[nick]["data"].append(data)
+                                        logger.debug(
+                                            f"Received {expected_command} "
+                                            f"#{len(responses[nick]['data'])} "
+                                            f"from {nick}"
+                                        )
+                                    else:
+                                        # Single response (original behavior)
+                                        responses[nick] = {"data": data}
+                                        remaining_nicks.discard(nick)
+                                        logger.debug(f"Received {expected_command} from {nick}")
                                 break
                 except Exception as e:
                     logger.debug(f"Error waiting for responses: {e}")
 
-            # Check if we got all responses
-            if not remaining_nicks:
+            # For non-accumulating commands, check if we got all responses
+            if not accumulate_responses and not remaining_nicks:
                 break
 
         # Log deduplication stats if there were duplicates
@@ -1870,8 +1899,9 @@ class Taker:
         )
 
         # Process responses
-        # Maker sends !sig as ENCRYPTED: just the signature base64
-        # Response format: "<encrypted_sig> <signing_pubkey> <signature>"
+        # Maker sends multiple !sig messages (one per UTXO) as ENCRYPTED
+        # Response format for each: "<encrypted_sig> <signing_pubkey> <signature>"
+        # responses[nick]["data"] is now a list of encrypted signature messages
         for nick in list(self.maker_sessions.keys()):
             if nick in responses:
                 try:
@@ -1881,47 +1911,74 @@ class Taker:
                         del self.maker_sessions[nick]
                         continue
 
-                    # Extract encrypted data (first part of response)
-                    response_data = responses[nick]["data"].strip()
-                    parts = response_data.split()
-                    if not parts:
+                    # Get all signature messages for this maker
+                    response_data_list = responses[nick]["data"]
+                    if not isinstance(response_data_list, list):
+                        # Fallback for single signature (shouldn't happen with new code)
+                        response_data_list = [response_data_list]
+
+                    if not response_data_list:
                         logger.warning(f"Empty !sig response from {nick}")
                         del self.maker_sessions[nick]
                         continue
 
-                    encrypted_data = parts[0]
+                    # Process each signature message
+                    sig_infos: list[dict[str, Any]] = []
+                    for sig_idx, response_data in enumerate(response_data_list):
+                        parts = response_data.strip().split()
+                        if not parts:
+                            logger.warning(f"Empty !sig message #{sig_idx + 1} from {nick}")
+                            continue
 
-                    # Decrypt the signature
-                    # Maker sends base64: varint(sig_len) + sig + varint(pub_len) + pub
-                    decrypted_sig = session.crypto.decrypt(encrypted_data)
+                        encrypted_data = parts[0]
 
-                    # Parse the signature to extract the witness stack
-                    # Format: varint(sig_len) + sig + varint(pub_len) + pub
-                    import base64
+                        # Decrypt the signature
+                        # Maker sends base64: varint(sig_len) + sig + varint(pub_len) + pub
+                        decrypted_sig = session.crypto.decrypt(encrypted_data)
 
-                    sig_bytes = base64.b64decode(decrypted_sig)
-                    sig_len = sig_bytes[0]
-                    signature = sig_bytes[1 : 1 + sig_len]
-                    pub_len = sig_bytes[1 + sig_len]
-                    pubkey = sig_bytes[2 + sig_len : 2 + sig_len + pub_len]
+                        # Parse the signature to extract the witness stack
+                        # Format: varint(sig_len) + sig + varint(pub_len) + pub
+                        sig_bytes = base64.b64decode(decrypted_sig)
+                        sig_len = sig_bytes[0]
+                        signature = sig_bytes[1 : 1 + sig_len]
+                        pub_len = sig_bytes[1 + sig_len]
+                        pubkey = sig_bytes[2 + sig_len : 2 + sig_len + pub_len]
 
-                    # Build witness as [signature_hex, pubkey_hex]
-                    witness = [signature.hex(), pubkey.hex()]
+                        # Build witness as [signature_hex, pubkey_hex]
+                        witness = [signature.hex(), pubkey.hex()]
 
-                    # Match signature to the maker's UTXO
-                    # Makers send one signature per UTXO in the same order
-                    # For now, assume single UTXO per maker (most common case)
-                    if session.utxos:
-                        utxo = session.utxos[0]  # First (and usually only) UTXO
-                        sig_info = {
-                            "txid": utxo["txid"],
-                            "vout": utxo["vout"],
-                            "witness": witness,
-                        }
-                        signatures[nick] = [sig_info]
-                        session.signature = {"signatures": [sig_info]}
-                        session.responded_sig = True
-                        logger.debug(f"Processed !sig from {nick}: {decrypted_sig[:32]}...")
+                        # Match signature to the maker's UTXO by index
+                        # Makers send signatures in the same order as their UTXOs
+                        if sig_idx < len(session.utxos):
+                            utxo = session.utxos[sig_idx]
+                            sig_info = {
+                                "txid": utxo["txid"],
+                                "vout": utxo["vout"],
+                                "witness": witness,
+                            }
+                            sig_infos.append(sig_info)
+                            logger.debug(
+                                f"Processed !sig #{sig_idx + 1}/{len(session.utxos)} from {nick}"
+                            )
+                        else:
+                            logger.warning(
+                                f"Received extra signature #{sig_idx + 1} from {nick} "
+                                f"(only has {len(session.utxos)} UTXOs)"
+                            )
+
+                    if len(sig_infos) != len(session.utxos):
+                        logger.warning(
+                            f"Signature count mismatch for {nick}: "
+                            f"received {len(sig_infos)}, expected {len(session.utxos)}"
+                        )
+                        del self.maker_sessions[nick]
+                        continue
+
+                    signatures[nick] = sig_infos
+                    session.signature = {"signatures": sig_infos}
+                    session.responded_sig = True
+                    logger.debug(f"Processed {len(sig_infos)} signatures from {nick}")
+
                 except Exception as e:
                     logger.warning(f"Invalid !sig response from {nick}: {e}")
                     del self.maker_sessions[nick]

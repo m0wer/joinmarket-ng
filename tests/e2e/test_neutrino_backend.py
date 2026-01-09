@@ -488,8 +488,6 @@ class TestNeutrinoCoinJoin:
         import asyncio
         import subprocess
 
-        from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
-
         from tests.e2e.rpc_utils import ensure_wallet_funded, mine_blocks
 
         # Verify neutrino is synced
@@ -635,20 +633,59 @@ class TestNeutrinoCoinJoin:
             if txid:
                 logger.info(f"CoinJoin successful with neutrino taker! txid: {txid}")
 
-                # Mine blocks to confirm
-                await mine_blocks(1, dest_address)
+                # Verify transaction using Bitcoin Core to ensure it was actually broadcast
+                # Even though we're testing neutrino taker, Bitcoin Core should see the tx
+                # because the makers broadcast to Bitcoin Core
+                from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
 
-                # Verify transaction using Bitcoin Core for comparison
                 bitcoin_backend = BitcoinCoreBackend(
                     rpc_url="http://127.0.0.1:18443",
                     rpc_user="test",
                     rpc_password="test",
                 )
                 try:
+                    logger.info(
+                        "Verifying transaction was broadcast to Bitcoin Core..."
+                    )
+                    # First check mempool - the tx should be there before we mine
+                    import httpx
+
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        response = await client.post(
+                            "http://127.0.0.1:18443",
+                            auth=("test", "test"),
+                            json={
+                                "jsonrpc": "1.0",
+                                "id": "test",
+                                "method": "getrawmempool",
+                                "params": [],
+                            },
+                        )
+                        mempool = response.json()["result"]
+                        logger.info(f"Mempool contents: {mempool}")
+
+                        assert txid in mempool, (
+                            f"Transaction {txid} should be in mempool but wasn't found. "
+                            f"This indicates the makers failed to broadcast the transaction. "
+                            f"Mempool: {mempool}"
+                        )
+
+                    logger.info(
+                        f"Transaction {txid} confirmed in mempool, mining block..."
+                    )
+
+                    # Mine blocks to confirm
+                    await mine_blocks(1, dest_address)
+
+                    # Now verify the transaction is confirmed
                     logger.info("Verifying transaction on Bitcoin Core...")
                     tx_info = await bitcoin_backend.get_transaction(txid)
                     assert tx_info is not None, (
-                        "Transaction should exist on Bitcoin Core"
+                        f"Transaction {txid} should exist on Bitcoin Core after mining"
+                    )
+                    assert tx_info.confirmations >= 1, (
+                        f"Transaction should have at least 1 confirmation, "
+                        f"got {tx_info.confirmations}"
                     )
                     logger.info(
                         f"Transaction confirmed on Bitcoin Core: {tx_info.confirmations} confirmations"
@@ -668,8 +705,19 @@ class TestNeutrinoCoinJoin:
                 new_balance = await taker_wallet.get_total_balance()
                 logger.info(f"Taker new balance: {new_balance:,} sats")
 
+                # Verify mixdepth 1 (destination) received funds
+                mixdepth1_balance = await taker_wallet.get_balance(mixdepth=1)
                 logger.info(
-                    "CoinJoin with neutrino-based taker completed successfully! ✓"
+                    f"Mixdepth 1 balance after CoinJoin: {mixdepth1_balance:,} sats"
+                )
+                assert mixdepth1_balance > 0, (
+                    f"Destination mixdepth should have received CoinJoin output. "
+                    f"Balance: {mixdepth1_balance:,} sats"
+                )
+
+                logger.info(
+                    f"CoinJoin with neutrino-based taker completed successfully! "
+                    f"Received {mixdepth1_balance:,} sats in destination mixdepth"
                 )
             else:
                 pytest.fail("CoinJoin failed to return a txid")

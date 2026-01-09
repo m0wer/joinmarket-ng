@@ -302,8 +302,8 @@ def fresh_docker_makers():
             taker_commitments.unlink()
             logger.info(f"Cleared taker used commitments: {taker_commitments}")
 
-        # Clear commitment blacklists for both makers before restarting
-        for maker in ["jm-maker1", "jm-maker2"]:
+        # Clear commitment blacklists for all makers before restarting
+        for maker in ["jm-maker1", "jm-maker2", "jm-maker3"]:
             try:
                 subprocess.run(
                     [
@@ -324,7 +324,7 @@ def fresh_docker_makers():
 
         # Restart the e2e profile makers
         result = subprocess.run(
-            ["docker", "restart", "jm-maker1", "jm-maker2"],
+            ["docker", "restart", "jm-maker1", "jm-maker2", "jm-maker3"],
             capture_output=True,
             text=True,
             timeout=60,
