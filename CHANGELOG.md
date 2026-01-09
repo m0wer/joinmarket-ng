@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Concurrent read bug in TCPConnection causing "readuntil() called while another coroutine is already waiting" errors.
   - Added receive lock to serialize concurrent `receive()` calls on the same connection.
   - This fixes race conditions when `listen_continuously()` and `get_peerlist_with_features()` run concurrently.
+- Wallet address alignment in `jm-wallet info --extended` output.
+  - Fixed misalignment when address indices transition from single to double digits (e.g., 9 to 10).
+  - Derivation paths now use fixed-width padding (24 characters) for consistent column alignment.
 
 ## [0.8.0] - 2026-01-08
 
