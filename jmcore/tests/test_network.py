@@ -75,3 +75,68 @@ async def test_connection_pool_close_all():
     await pool.close_all()
     c1.close.assert_called()
     assert len(pool) == 0
+
+
+@pytest.mark.asyncio
+async def test_tcp_connection_concurrent_receive():
+    """Test that concurrent receive calls are serialized by the receive lock.
+
+    This test reproduces the bug:
+    "readuntil() called while another coroutine is already waiting for incoming data"
+
+    The issue occurs when:
+    1. listen_continuously() is waiting on receive() in an infinite loop
+    2. get_peerlist_with_features() tries to receive() concurrently
+
+    Without the receive lock, asyncio.StreamReader.readuntil() raises RuntimeError
+    when called by multiple coroutines simultaneously.
+    """
+    import asyncio
+
+    # Create a real StreamReader/StreamWriter pair using pipes
+    # This allows us to test actual concurrent read behavior
+    reader = asyncio.StreamReader()
+    writer = Mock()
+
+    conn = TCPConnection(reader, writer)
+
+    # Track the order of operations
+    events: list[str] = []
+    results: list[bytes] = []
+
+    async def slow_reader(name: str) -> None:
+        """Simulate a slow reader that waits for data."""
+        events.append(f"{name}_start")
+        try:
+            data = await conn.receive()
+            results.append(data)
+            events.append(f"{name}_got_{data.decode()}")
+        except Exception as e:
+            events.append(f"{name}_error_{type(e).__name__}")
+
+    async def feed_data_delayed() -> None:
+        """Feed data to the reader after a short delay."""
+        await asyncio.sleep(0.05)
+        reader.feed_data(b"msg1\r\n")
+        await asyncio.sleep(0.05)
+        reader.feed_data(b"msg2\r\n")
+
+    # Start two concurrent readers and the data feeder
+    task1 = asyncio.create_task(slow_reader("reader1"))
+    task2 = asyncio.create_task(slow_reader("reader2"))
+    feeder = asyncio.create_task(feed_data_delayed())
+
+    # Wait for all tasks
+    await asyncio.gather(task1, task2, feeder, return_exceptions=True)
+
+    # Both readers should complete successfully (serialized by lock)
+    assert "reader1_start" in events
+    assert "reader2_start" in events
+
+    # Both messages should be received (one by each reader)
+    assert len(results) == 2
+    assert set(results) == {b"msg1", b"msg2"}
+
+    # No RuntimeError should have occurred
+    error_events = [e for e in events if "error" in e]
+    assert not error_events, f"Unexpected errors: {error_events}"
