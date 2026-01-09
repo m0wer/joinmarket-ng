@@ -12,6 +12,7 @@ from jmcore.btc_script import mk_freeze_script
 from loguru import logger
 
 from jmwallet.backends.base import BlockchainBackend
+from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
 from jmwallet.wallet.address import script_to_p2wsh_address
 from jmwallet.wallet.bip32 import HDKey, mnemonic_to_seed
 from jmwallet.wallet.models import AddressInfo, AddressStatus, UTXOInfo
@@ -495,9 +496,9 @@ class WalletService:
                 self.utxo_cache[0] = []
             # Avoid duplicates
             existing_outpoints = {(u.txid, u.vout) for u in self.utxo_cache[0]}
-            for utxo in discovered_utxos:
-                if (utxo.txid, utxo.vout) not in existing_outpoints:
-                    self.utxo_cache[0].append(utxo)
+            for utxo_info in discovered_utxos:
+                if (utxo_info.txid, utxo_info.vout) not in existing_outpoints:
+                    self.utxo_cache[0].append(utxo_info)
 
             logger.info(f"Discovery complete: found {len(discovered_utxos)} fidelity bond(s)")
         else:
@@ -706,6 +707,236 @@ class WalletService:
             )
 
         return result
+
+    async def setup_descriptor_wallet(
+        self,
+        scan_range: int = DEFAULT_SCAN_RANGE,
+        fidelity_bond_addresses: list[tuple[str, int, int]] | None = None,
+        rescan: bool = True,
+    ) -> bool:
+        """
+        Setup descriptor wallet backend for efficient UTXO tracking.
+
+        This imports wallet descriptors into Bitcoin Core's descriptor wallet,
+        enabling fast UTXO queries via listunspent instead of slow scantxoutset.
+
+        Should be called once on first use or when restoring a wallet.
+        Subsequent operations will be much faster.
+
+        Args:
+            scan_range: Address index range to import (default 1000)
+            fidelity_bond_addresses: Optional list of (address, locktime, index) tuples
+            rescan: Whether to rescan blockchain (can be slow for mainnet)
+
+        Returns:
+            True if setup completed successfully
+
+        Raises:
+            RuntimeError: If backend is not DescriptorWalletBackend
+        """
+        if not isinstance(self.backend, DescriptorWalletBackend):
+            raise RuntimeError(
+                "setup_descriptor_wallet() requires DescriptorWalletBackend. "
+                "Current backend does not support descriptor wallets."
+            )
+
+        # Generate descriptors for all mixdepths
+        descriptors = self._generate_import_descriptors(scan_range)
+
+        # Add fidelity bond addresses
+        if fidelity_bond_addresses:
+            logger.info(f"Including {len(fidelity_bond_addresses)} fidelity bond addresses")
+            for address, locktime, index in fidelity_bond_addresses:
+                descriptors.append(
+                    {
+                        "desc": f"addr({address})",
+                        "internal": False,
+                    }
+                )
+                # Cache the address info
+                if not hasattr(self, "fidelity_bond_locktime_cache"):
+                    self.fidelity_bond_locktime_cache = {}
+                self.address_cache[address] = (0, FIDELITY_BOND_BRANCH, index)
+                self.fidelity_bond_locktime_cache[address] = locktime
+
+        # Setup wallet and import descriptors
+        logger.info("Setting up descriptor wallet...")
+        await self.backend.setup_wallet(descriptors, rescan=rescan)
+        logger.info("Descriptor wallet setup complete")
+        return True
+
+    def _generate_import_descriptors(
+        self, scan_range: int = DEFAULT_SCAN_RANGE
+    ) -> list[dict[str, Any]]:
+        """
+        Generate descriptors for importdescriptors RPC.
+
+        Creates descriptors for all mixdepths (external and internal addresses)
+        with proper formatting for Bitcoin Core's importdescriptors.
+
+        Args:
+            scan_range: Maximum index to import
+
+        Returns:
+            List of descriptor dicts for importdescriptors
+        """
+        descriptors = []
+
+        for mixdepth in range(self.mixdepth_count):
+            xpub = self.get_account_xpub(mixdepth)
+
+            # External (receive) addresses: .../0/*
+            descriptors.append(
+                {
+                    "desc": f"wpkh({xpub}/0/*)",
+                    "range": [0, scan_range - 1],
+                    "internal": False,
+                }
+            )
+
+            # Internal (change) addresses: .../1/*
+            descriptors.append(
+                {
+                    "desc": f"wpkh({xpub}/1/*)",
+                    "range": [0, scan_range - 1],
+                    "internal": True,
+                }
+            )
+
+        logger.debug(
+            f"Generated {len(descriptors)} import descriptors for "
+            f"{self.mixdepth_count} mixdepths with range [0, {scan_range - 1}]"
+        )
+        return descriptors
+
+    async def sync_with_descriptor_wallet(
+        self,
+        fidelity_bond_addresses: list[tuple[str, int, int]] | None = None,
+    ) -> dict[int, list[UTXOInfo]]:
+        """
+        Sync wallet using descriptor wallet backend (fast listunspent).
+
+        This is MUCH faster than scantxoutset because it only queries the
+        wallet's tracked UTXOs, not the entire UTXO set.
+
+        Args:
+            fidelity_bond_addresses: Optional fidelity bond addresses to include
+
+        Returns:
+            Dictionary mapping mixdepth to list of UTXOs
+
+        Raises:
+            RuntimeError: If backend is not DescriptorWalletBackend
+        """
+        if not isinstance(self.backend, DescriptorWalletBackend):
+            raise RuntimeError("sync_with_descriptor_wallet() requires DescriptorWalletBackend")
+
+        logger.info("Syncing via descriptor wallet (listunspent)...")
+
+        # Get all wallet UTXOs at once
+        all_utxos = await self.backend.get_all_utxos()
+
+        # Organize UTXOs by mixdepth
+        result: dict[int, list[UTXOInfo]] = {md: [] for md in range(self.mixdepth_count)}
+        fidelity_bond_utxos: list[UTXOInfo] = []
+
+        # Build fidelity bond address lookup
+        bond_address_to_info: dict[str, tuple[int, int]] = {}
+        if fidelity_bond_addresses:
+            if not hasattr(self, "fidelity_bond_locktime_cache"):
+                self.fidelity_bond_locktime_cache = {}
+            for address, locktime, index in fidelity_bond_addresses:
+                bond_address_to_info[address] = (locktime, index)
+                self.address_cache[address] = (0, FIDELITY_BOND_BRANCH, index)
+                self.fidelity_bond_locktime_cache[address] = locktime
+
+        for utxo in all_utxos:
+            address = utxo.address
+
+            # Check if this is a fidelity bond
+            if address in bond_address_to_info:
+                locktime, index = bond_address_to_info[address]
+                path = f"{self.root_path}/0'/{FIDELITY_BOND_BRANCH}/{index}:{locktime}"
+                utxo_info = UTXOInfo(
+                    txid=utxo.txid,
+                    vout=utxo.vout,
+                    value=utxo.value,
+                    address=address,
+                    confirmations=utxo.confirmations,
+                    scriptpubkey=utxo.scriptpubkey,
+                    path=path,
+                    mixdepth=0,
+                    height=utxo.height,
+                    locktime=locktime,
+                )
+                fidelity_bond_utxos.append(utxo_info)
+                continue
+
+            # Try to find address in cache
+            path_info = self._find_address_path(address)
+            if path_info is None:
+                logger.debug(f"Unknown address {address}, skipping")
+                continue
+
+            mixdepth, change, index = path_info
+            path = f"{self.root_path}/{mixdepth}'/{change}/{index}"
+
+            utxo_info = UTXOInfo(
+                txid=utxo.txid,
+                vout=utxo.vout,
+                value=utxo.value,
+                address=address,
+                confirmations=utxo.confirmations,
+                scriptpubkey=utxo.scriptpubkey,
+                path=path,
+                mixdepth=mixdepth,
+                height=utxo.height,
+            )
+            result[mixdepth].append(utxo_info)
+
+        # Add fidelity bonds to mixdepth 0
+        if fidelity_bond_utxos:
+            result[0].extend(fidelity_bond_utxos)
+
+        # Update cache
+        self.utxo_cache = result
+
+        total_utxos = sum(len(u) for u in result.values())
+        total_value = sum(sum(u.value for u in utxos) for utxos in result.values())
+        logger.info(
+            f"Descriptor wallet sync complete: {total_utxos} UTXOs, "
+            f"{format_amount(total_value)} total"
+        )
+
+        return result
+
+    def _find_address_path(self, address: str) -> tuple[int, int, int] | None:
+        """
+        Find the derivation path for an address.
+
+        First checks the cache, then tries to derive and match.
+
+        Args:
+            address: Bitcoin address
+
+        Returns:
+            Tuple of (mixdepth, change, index) or None if not found
+        """
+        # Check cache first
+        if address in self.address_cache:
+            return self.address_cache[address]
+
+        # Try to find by deriving addresses (expensive)
+        # This scans a limited range to find the address
+        max_scan = 100  # Limit to avoid expensive scans
+        for mixdepth in range(self.mixdepth_count):
+            for change in [0, 1]:
+                for index in range(max_scan):
+                    derived_addr = self.get_address(mixdepth, change, index)
+                    if derived_addr == address:
+                        return (mixdepth, change, index)
+
+        return None
 
     def _parse_descriptor_path(
         self, desc: str, desc_to_path: dict[str, tuple[int, int]]

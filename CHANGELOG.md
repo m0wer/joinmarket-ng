@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **DescriptorWalletBackend**: New Bitcoin Core backend using descriptor wallets for efficient UTXO tracking.
+  - Uses `importdescriptors` RPC for one-time wallet setup
+  - Uses `listunspent` RPC for fast UTXO queries (O(wallet) vs O(UTXO set))
+  - Persistent tracking: Bitcoin Core maintains UTXO state automatically
+  - Real-time mempool awareness: sees unconfirmed transactions immediately
+  - Deterministic wallet naming based on mnemonic fingerprint
+- `setup_descriptor_wallet()` method in WalletService for one-time descriptor import
+- `sync_with_descriptor_wallet()` method for fast wallet sync via listunspent
+- Helper functions `generate_wallet_name()` and `get_mnemonic_fingerprint()` for deterministic wallet naming
 - Early backend connection validation in taker CLI before wallet sync.
 - Estimated transaction fee logging before user confirmation prompt (assumes 1 input per maker + 20% buffer).
 - Final transaction summary before broadcast with exact input/output counts, maker fees, and mining fees.
