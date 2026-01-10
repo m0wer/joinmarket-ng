@@ -86,6 +86,15 @@ class NeutrinoBackend(BlockchainBackend):
         # Track if we've done the initial rescan
         self._initial_rescan_done: bool = False
 
+        # Track the last block height we rescanned to (for incremental rescans)
+        self._last_rescan_height: int = 0
+
+        # Track if we just triggered a rescan (to avoid waiting multiple times)
+        self._rescan_in_progress: bool = False
+
+        # Track if we just completed a rescan (to enable retry logic for async UTXO lookups)
+        self._just_rescanned: bool = False
+
         # Adjust minimum blockheight based on network
         if network == "regtest":
             self._min_valid_blockheight = 0  # Regtest can have any height
@@ -213,6 +222,9 @@ class NeutrinoBackend(BlockchainBackend):
 
         On first call, triggers a full blockchain rescan from genesis to ensure
         all historical UTXOs are found (critical for wallets funded before neutrino started).
+
+        After initial rescan, automatically rescans if new blocks have arrived
+        to detect transactions that occurred after the last scan.
         """
         utxos: list[UTXO] = []
 
@@ -220,11 +232,15 @@ class NeutrinoBackend(BlockchainBackend):
         for address in addresses:
             await self.add_watch_address(address)
 
+        # Get current tip height to check if new blocks have arrived
+        current_height = await self.get_block_height()
+
         # On first UTXO query, trigger a full blockchain rescan to find existing UTXOs
         # This is critical for wallets that were funded before neutrino was watching them
         logger.debug(
             f"get_utxos: _initial_rescan_done={self._initial_rescan_done}, "
-            f"watched_addresses={len(self._watched_addresses)}"
+            f"watched_addresses={len(self._watched_addresses)}, "
+            f"last_rescan={self._last_rescan_height}, current={current_height}"
         )
         if not self._initial_rescan_done and self._watched_addresses:
             logger.info(
@@ -245,20 +261,99 @@ class NeutrinoBackend(BlockchainBackend):
                 # On regtest with ~3000 blocks, this typically takes 5-10 seconds
                 await asyncio.sleep(10.0)
                 self._initial_rescan_done = True
+                self._last_rescan_height = current_height
+                self._rescan_in_progress = False
+                self._just_rescanned = True
                 logger.info("Initial blockchain rescan completed")
             except Exception as e:
                 logger.warning(f"Initial rescan failed (will retry on next sync): {e}")
+                self._rescan_in_progress = False
+        elif current_height > self._last_rescan_height and not self._rescan_in_progress:
+            # New blocks have arrived since last rescan - need to scan them
+            # This is critical for finding CoinJoin outputs that were just confirmed
+            # We rescan ALL watched addresses, not just the ones in the current query,
+            # because wallet sync happens mixdepth by mixdepth and we need to find
+            # outputs to any of our addresses
+            self._rescan_in_progress = True
+            logger.info(
+                f"New blocks detected ({self._last_rescan_height} -> {current_height}), "
+                f"rescanning for {len(self._watched_addresses)} watched addresses..."
+            )
+            try:
+                # Rescan from just before the last known height to catch edge cases
+                start_height = max(0, self._last_rescan_height - 1)
+
+                await self._api_call(
+                    "POST",
+                    "v1/rescan",
+                    data={
+                        "addresses": list(self._watched_addresses),
+                        "start_height": start_height,
+                    },
+                )
+                # Wait for rescan to complete
+                # NOTE: The rescan is asynchronous - neutrino needs time to:
+                # 1. Match block filters
+                # 2. Download full blocks that match
+                # 3. Extract and index UTXOs
+                # We wait 7 seconds to allow time for indexing to complete
+                await asyncio.sleep(7.0)
+
+                self._last_rescan_height = current_height
+                self._rescan_in_progress = False
+                self._just_rescanned = True
+                logger.info(
+                    f"Incremental rescan completed from block {start_height} to {current_height}"
+                )
+            except Exception as e:
+                logger.warning(f"Incremental rescan failed: {e}")
+                self._rescan_in_progress = False
+        elif self._rescan_in_progress:
+            # A rescan was just triggered by a previous get_utxos call in this batch
+            # Wait a bit for it to complete, but don't wait the full 7 seconds
+            logger.debug("Rescan in progress from previous query, waiting briefly...")
+            await asyncio.sleep(1.0)
         else:
-            # Wait a moment for filter matching to complete
+            # No new blocks, just wait for filter matching / async UTXO lookups
             await asyncio.sleep(0.5)
 
         try:
-            # Request UTXO scan for addresses
-            result = await self._api_call(
-                "POST",
-                "v1/utxos",
-                data={"addresses": addresses},
-            )
+            # Request UTXO scan for addresses with retry logic
+            # The neutrino API performs UTXO lookups asynchronously, so we may need
+            # to retry if the initial query happens before async indexing completes.
+            # We only retry if we just completed a rescan (indicated by _just_rescanned flag)
+            # to avoid unnecessary delays when scanning addresses that have no UTXOs.
+            max_retries = 5 if self._just_rescanned else 1
+            result: dict[str, Any] = {"utxos": []}
+
+            for retry in range(max_retries):
+                result = await self._api_call(
+                    "POST",
+                    "v1/utxos",
+                    data={"addresses": addresses},
+                )
+
+                utxo_count = len(result.get("utxos", []))
+
+                # If we found UTXOs or this is the last retry, proceed
+                if utxo_count > 0 or retry == max_retries - 1:
+                    if retry > 0 and self._just_rescanned:
+                        logger.debug(f"Found {utxo_count} UTXOs after {retry + 1} attempts")
+                    break
+
+                # No UTXOs yet - wait with exponential backoff before retrying
+                # This allows time for async UTXO indexing to complete
+                wait_time = 1.5**retry  # 1.0s, 1.5s, 2.25s, 3.37s, 5.06s
+                logger.debug(
+                    f"No UTXOs found on attempt {retry + 1}/{max_retries}, "
+                    f"waiting {wait_time:.2f}s for async indexing..."
+                )
+                await asyncio.sleep(wait_time)
+
+            # Reset the flag after we've completed the UTXO query
+            # (subsequent queries in this batch won't need full retry)
+            if self._just_rescanned:
+                self._just_rescanned = False
 
             tip_height = await self.get_block_height()
 

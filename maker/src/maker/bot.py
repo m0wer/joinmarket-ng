@@ -429,13 +429,19 @@ class MakerBot:
 
         Note: Offers will need to be recreated with the new nick.
         """
+        # DISABLED: Nick regeneration causes issues with Taker broadcast (!push)
+        # The Taker waits ~60s to collect all signatures before sending !push.
+        # If we regenerate nick immediately after signing, we won't receive the !push.
+        # TODO: Implement a grace period or keep old nick active for a while.
+        return
+
         old_nick = self.nick
 
         # Generate new identity
         self.nick_identity = NickIdentity(JM_VERSION)
         self.nick = self.nick_identity.nick
 
-        # Update offer manager's nick (don't recreate to preserve mocks in tests)
+        # Update offer manager's maker_nick (don't recreate to preserve mocks in tests)
         self.offer_manager.maker_nick = self.nick
 
         logger.info(f"Regenerated nick for privacy: {old_nick} -> {self.nick}")
@@ -1472,25 +1478,11 @@ class MakerBot:
             to_nick = parts[1]
             rest = COMMAND_PREFIX.join(parts[2:])
 
+            if to_nick != self.nick:
+                return
+
             # Strip leading "!" if present (due to !!command message format)
             command = rest.strip().lstrip("!")
-
-            # Per JoinMarket reference implementation, !push messages are accepted
-            # regardless of to_nick. This is important because:
-            # 1. Makers may regenerate their nick after sending signatures
-            # 2. !push doesn't require session state (broadcasts "unquestioningly")
-            # 3. Not all makers receive !push (only subset for broadcast diversity)
-            #
-            # For other commands, we enforce nick matching to prevent messages
-            # intended for previous identities from being processed.
-            is_push = command.startswith("push")
-
-            if not is_push and to_nick != self.nick:
-                # Message addressed to a different nick (possibly old nick after regeneration)
-                # This is expected for non-push commands and helps prevent processing
-                # messages intended for stale sessions
-                logger.debug(f"Ignoring message to {to_nick} (current nick: {self.nick})")
-                return
 
             # Note: command prefix already stripped
             if command.startswith("fill"):
@@ -1499,7 +1491,7 @@ class MakerBot:
                 await self._handle_auth(from_nick, command)
             elif command.startswith("tx"):
                 await self._handle_tx(from_nick, command)
-            elif is_push:
+            elif command.startswith("push"):
                 await self._handle_push(from_nick, command)
             elif command.startswith("hp2"):
                 # hp2 via privmsg = commitment transfer request
@@ -1791,13 +1783,20 @@ class MakerBot:
                     del self.active_sessions[taker_nick]
                     self._cleanup_session_lock(taker_nick)
 
-                    # Regenerate nick for privacy after successful CoinJoin
-                    # This prevents linking this maker across multiple CoinJoins
-                    await self._regenerate_nick()
+                    # NOTE: Nick regeneration disabled for now to match reference implementation
+                    # The reference implementation does NOT regenerate nicks after CoinJoin.
+                    # Reasons to keep nick stable:
+                    # 1. Enables !push to work without timing issues
+                    # 2. Fidelity bond makers need stable identity anyway
+                    # 3. Reference implementation relies on stable nicks
+                    # 4. Privacy is maintained through Tor hidden services
+                    #
+                    # Future consideration: Add as opt-in feature flag if desired
+                    # await self._regenerate_nick()
 
                     # Schedule wallet re-sync in background to avoid blocking !push handling
                     # The transaction hasn't been broadcast yet, so we should not block here
-                    # After re-sync, offers will be updated with the new nick
+                    # After re-sync, offers will be updated (with same nick)
                     asyncio.create_task(self._deferred_wallet_resync())
                 else:
                     logger.error(f"TX verification failed: {response.get('error')}")

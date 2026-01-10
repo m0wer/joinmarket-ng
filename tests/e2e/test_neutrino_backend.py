@@ -442,13 +442,68 @@ class TestNeutrinoCoinJoin:
             if txid:
                 logger.info(f"CoinJoin successful! txid: {txid}")
 
-                # Mine blocks to confirm
-                await mine_blocks(1, dest_address)
+                # Wait for transaction to be broadcast and confirmed
+                logger.info("Waiting for transaction to be broadcast and confirmed...")
+                # The taker returns txid immediately after receiving signatures.
+                # We check mempool and mine manually if found, or wait for confirmation.
+                import httpx
 
-                # Verify on Bitcoin Core
-                logger.info("Verifying transaction on Bitcoin Core...")
-                tx_info = await bitcoin_backend.get_transaction(txid)
-                assert tx_info is not None, "Transaction should exist on Bitcoin Core"
+                max_retries = 30  # Up to ~1.5 minutes total wait time
+                retry_delay = 3  # Check every 3 seconds
+                found = False
+
+                for attempt in range(max_retries):
+                    await asyncio.sleep(retry_delay)
+
+                    # 1. Check if already confirmed
+                    try:
+                        tx_info = await bitcoin_backend.get_transaction(txid)
+                        if tx_info is not None and tx_info.confirmations > 0:
+                            logger.info(
+                                f"Transaction confirmed with {tx_info.confirmations} "
+                                f"confirmation(s) after {(attempt + 1) * retry_delay}s"
+                            )
+                            found = True
+                            break
+                    except Exception:
+                        pass  # Tx might not be known yet
+
+                    # 2. Check mempool and mine if found
+                    try:
+                        async with httpx.AsyncClient(timeout=5.0) as client:
+                            response = await client.post(
+                                "http://127.0.0.1:18443",
+                                auth=("test", "test"),
+                                json={
+                                    "jsonrpc": "1.0",
+                                    "id": "test",
+                                    "method": "getrawmempool",
+                                    "params": [],
+                                },
+                            )
+                            result = response.json()
+                            mempool = result.get("result", []) if result else []
+
+                            if txid in mempool:
+                                logger.info(
+                                    "Transaction found in mempool, mining block..."
+                                )
+                                await mine_blocks(1, dest_address)
+                                # Next loop iteration will find it confirmed
+                                continue
+                    except Exception as e:
+                        logger.warning(f"Failed to check mempool: {e}")
+
+                    if (attempt + 1) % 5 == 0:
+                        logger.info(
+                            f"Still waiting... ({(attempt + 1) * retry_delay}s elapsed)"
+                        )
+
+                if not found:
+                    raise AssertionError(
+                        f"Transaction {txid} not confirmed after {max_retries * retry_delay}s. "
+                        f"This indicates the makers failed to broadcast the transaction."
+                    )
 
                 logger.info(
                     "CoinJoin with neutrino-based maker completed successfully!"
@@ -644,47 +699,69 @@ class TestNeutrinoCoinJoin:
                 )
                 try:
                     logger.info(
-                        "Verifying transaction was broadcast to Bitcoin Core..."
+                        "Waiting for transaction to be broadcast and confirmed..."
                     )
-                    # Check if tx is in mempool or already confirmed
-                    # (auto-miner may have already mined it)
+                    # The taker returns txid immediately after receiving signatures,
+                    # but makers receive !push and broadcast asynchronously (~60s later).
+                    # We check mempool and mine manually if found, or wait for confirmation.
                     import httpx
 
-                    async with httpx.AsyncClient(timeout=10.0) as client:
-                        response = await client.post(
-                            "http://127.0.0.1:18443",
-                            auth=("test", "test"),
-                            json={
-                                "jsonrpc": "1.0",
-                                "id": "test",
-                                "method": "getrawmempool",
-                                "params": [],
-                            },
-                        )
-                        mempool = response.json()["result"]
-                        logger.info(f"Mempool contents: {mempool}")
+                    max_retries = 30  # Up to ~1.5 minutes total wait time
+                    retry_delay = 3  # Check every 3 seconds
+                    found = False
 
-                        if txid in mempool:
-                            logger.info(
-                                f"Transaction {txid} found in mempool, mining block..."
-                            )
-                            # Mine blocks to confirm
-                            await mine_blocks(1, dest_address)
-                        else:
-                            logger.info(
-                                f"Transaction {txid} not in mempool, checking if already confirmed..."
-                            )
-                            # Check if already confirmed (auto-miner may have mined it)
+                    for attempt in range(max_retries):
+                        await asyncio.sleep(retry_delay)
+
+                        # 1. Check if already confirmed
+                        try:
                             tx_info = await bitcoin_backend.get_transaction(txid)
-                            if tx_info is None or tx_info.confirmations == 0:
-                                raise AssertionError(
-                                    f"Transaction {txid} not found in mempool or blockchain. "
-                                    f"This indicates the makers failed to broadcast. "
-                                    f"Mempool: {mempool}"
+                            if tx_info is not None and tx_info.confirmations > 0:
+                                logger.info(
+                                    f"Transaction confirmed with {tx_info.confirmations} "
+                                    f"confirmation(s) after {(attempt + 1) * retry_delay}s"
                                 )
+                                found = True
+                                break
+                        except Exception:
+                            pass  # Tx might not be known yet
+
+                        # 2. Check mempool and mine if found
+                        try:
+                            async with httpx.AsyncClient(timeout=5.0) as client:
+                                response = await client.post(
+                                    "http://127.0.0.1:18443",
+                                    auth=("test", "test"),
+                                    json={
+                                        "jsonrpc": "1.0",
+                                        "id": "test",
+                                        "method": "getrawmempool",
+                                        "params": [],
+                                    },
+                                )
+                                result = response.json()
+                                mempool = result.get("result", []) if result else []
+
+                                if txid in mempool:
+                                    logger.info(
+                                        "Transaction found in mempool, mining block..."
+                                    )
+                                    await mine_blocks(1, dest_address)
+                                    # Next loop iteration will find it confirmed
+                                    continue
+                        except Exception as e:
+                            logger.warning(f"Failed to check mempool: {e}")
+
+                        if (attempt + 1) % 5 == 0:
                             logger.info(
-                                f"Transaction already confirmed with {tx_info.confirmations} confirmations"
+                                f"Still waiting... ({(attempt + 1) * retry_delay}s elapsed)"
                             )
+
+                    if not found:
+                        raise AssertionError(
+                            f"Transaction {txid} not confirmed after {max_retries * retry_delay}s. "
+                            f"This indicates the makers failed to broadcast the transaction."
+                        )
 
                     # Now verify the transaction is confirmed
                     logger.info("Verifying transaction on Bitcoin Core...")
@@ -699,6 +776,32 @@ class TestNeutrinoCoinJoin:
                     logger.info(
                         f"Transaction confirmed on Bitcoin Core: {tx_info.confirmations} confirmations"
                     )
+
+                    # Diagnostic: Verify the destination address received funds via Bitcoin Core
+                    # This confirms the CoinJoin output is at the expected address
+                    async with httpx.AsyncClient(timeout=5.0) as client:
+                        response = await client.post(
+                            "http://127.0.0.1:18443",
+                            auth=("test", "test"),
+                            json={
+                                "jsonrpc": "1.0",
+                                "id": "test",
+                                "method": "scantxoutset",
+                                "params": ["start", [f"addr({dest_address})"]],
+                            },
+                        )
+                        result = response.json()
+                        unspents = result.get("result", {}).get("unspents", [])
+                        total_amount = result.get("result", {}).get("total_amount", 0)
+                        logger.info(
+                            f"Bitcoin Core scan for {dest_address}: "
+                            f"{len(unspents)} UTXO(s), total {total_amount} BTC"
+                        )
+                        if unspents:
+                            for u in unspents:
+                                logger.info(
+                                    f"  UTXO: {u.get('txid')}:{u.get('vout')} = {u.get('amount')} BTC"
+                                )
                 finally:
                     await bitcoin_backend.close()
 
@@ -710,12 +813,28 @@ class TestNeutrinoCoinJoin:
 
                 # Re-sync taker wallet to see the new balance
                 logger.info("Re-syncing taker wallet after CoinJoin...")
-                await taker_wallet.sync()
+
+                # Retry loop for balance check (neutrino might be slow to update)
+                max_retries = 10
+                retry_delay = 2
+                mixdepth1_balance = 0
+
+                for attempt in range(max_retries):
+                    await taker_wallet.sync()
+                    mixdepth1_balance = await taker_wallet.get_balance(mixdepth=1)
+
+                    if mixdepth1_balance > 0:
+                        break
+
+                    logger.info(
+                        f"Balance is 0, retrying sync in {retry_delay}s... ({attempt + 1}/{max_retries})"
+                    )
+                    await asyncio.sleep(retry_delay)
+
                 new_balance = await taker_wallet.get_total_balance()
                 logger.info(f"Taker new balance: {new_balance:,} sats")
 
                 # Verify mixdepth 1 (destination) received funds
-                mixdepth1_balance = await taker_wallet.get_balance(mixdepth=1)
                 logger.info(
                     f"Mixdepth 1 balance after CoinJoin: {mixdepth1_balance:,} sats"
                 )
