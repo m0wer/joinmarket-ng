@@ -1130,7 +1130,36 @@ async def test_coinjoin_with_multi_utxo_maker(
         assert txid is not None, "CoinJoin should return a txid"
         print(f"CoinJoin successful! txid: {txid}")
 
-        # Verify transaction on blockchain
+        # Wait for transaction to be broadcast and confirmed
+        print("Waiting for transaction to be broadcast and confirmed...")
+        # Makers receive !push asynchronously (~60s later) and broadcast.
+        # Auto-miner will mine it when it appears in mempool.
+        max_retries = 20  # Up to ~3 minutes
+        retry_delay = 3  # Check every 3 seconds
+        found = False
+
+        for attempt in range(max_retries):
+            await asyncio.sleep(retry_delay)
+
+            tx_info = await bitcoin_backend.get_transaction(txid)
+            if tx_info is not None and tx_info.confirmations > 0:
+                print(
+                    f"Transaction confirmed with {tx_info.confirmations} "
+                    f"confirmation(s) after {(attempt + 1) * retry_delay}s"
+                )
+                found = True
+                break
+
+            if (attempt + 1) % 5 == 0:
+                print(f"Still waiting... ({(attempt + 1) * retry_delay}s elapsed)")
+
+        if not found:
+            raise AssertionError(
+                f"Transaction {txid} not confirmed after {max_retries * retry_delay}s. "
+                f"This indicates the makers failed to broadcast the transaction."
+            )
+
+        # Verify transaction details
         tx_info = await bitcoin_backend.get_transaction(txid)
         if tx_info:
             print(f"Transaction info: {tx_info}")
@@ -1144,9 +1173,6 @@ async def test_coinjoin_with_multi_utxo_maker(
                         "✓ Successfully tested multi-UTXO maker "
                         f"(maker used {num_inputs - 1} UTXOs)"
                     )
-
-        # Mine a block to confirm
-        await mine_blocks(1, dest_address)
 
         # Verify the transaction has confirmations
         height = await bitcoin_backend.get_block_height()
