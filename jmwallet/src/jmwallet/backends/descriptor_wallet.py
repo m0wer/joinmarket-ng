@@ -677,6 +677,9 @@ class DescriptorWalletBackend(BlockchainBackend):
             return []
 
         try:
+            # Get current block height for calculating UTXO height
+            tip_height = await self.get_block_height()
+
             # listunspent params: minconf, maxconf, addresses, include_unsafe, query_options
             # minconf=0 includes unconfirmed, maxconf=9999999 includes all confirmed
             # NOTE: When addresses is empty, we must omit it entirely (not pass [])
@@ -704,14 +707,19 @@ class DescriptorWalletBackend(BlockchainBackend):
 
             utxos = []
             for utxo_data in result:
+                confirmations = utxo_data.get("confirmations", 0)
+                height = None
+                if confirmations > 0:
+                    height = tip_height - confirmations + 1
+
                 utxo = UTXO(
                     txid=utxo_data["txid"],
                     vout=utxo_data["vout"],
                     value=btc_to_sats(utxo_data["amount"]),
                     address=utxo_data.get("address", ""),
-                    confirmations=utxo_data.get("confirmations", 0),
+                    confirmations=confirmations,
                     scriptpubkey=utxo_data.get("scriptPubKey", ""),
-                    height=None,  # listunspent doesn't provide block height directly
+                    height=height,
                 )
                 utxos.append(utxo)
 

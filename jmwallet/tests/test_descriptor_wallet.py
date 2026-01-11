@@ -62,7 +62,7 @@ class TestDescriptorWalletBackendUnit:
 
         call_count = 0
 
-        async def mock_rpc(method, params=None, use_wallet=None, client=None):
+        async def mock_rpc(method, params=None, client=None, use_wallet=True):
             nonlocal call_count
             call_count += 1
             if method == "listwallets":
@@ -83,7 +83,7 @@ class TestDescriptorWalletBackendUnit:
         """Test create_wallet creating a new wallet."""
         backend = DescriptorWalletBackend(wallet_name="new_wallet")
 
-        async def mock_rpc(method, params=None, use_wallet=None, client=None):
+        async def mock_rpc(method, params=None, client=None, use_wallet=True):
             if method == "listwallets":
                 return []
             elif method == "loadwallet":
@@ -115,7 +115,7 @@ class TestDescriptorWalletBackendUnit:
             {"desc": "wpkh(xpub.../1/*)", "range": [0, 999]},
         ]
 
-        async def mock_rpc(method, params=None, use_wallet=None, client=None):
+        async def mock_rpc(method, params=None, client=None, use_wallet=True):
             if method == "getdescriptorinfo":
                 # Return descriptor with checksum
                 desc = params[0]
@@ -142,7 +142,7 @@ class TestDescriptorWalletBackendUnit:
 
         descriptors = ["desc1", "desc2", "desc3"]
 
-        async def mock_rpc(method, params=None, use_wallet=None, client=None):
+        async def mock_rpc(method, params=None, client=None, use_wallet=True):
             if method == "getdescriptorinfo":
                 return {"descriptor": f"{params[0]}#check"}
             elif method == "importdescriptors":
@@ -240,7 +240,14 @@ class TestDescriptorWalletBackendUnit:
             },
         ]
 
-        backend._rpc_call = AsyncMock(return_value=mock_utxos)
+        async def mock_rpc(method, params=None, client=None, use_wallet=True):
+            if method == "getblockchaininfo":
+                return {"blocks": 1000}
+            elif method == "listunspent":
+                return mock_utxos
+            raise ValueError(f"Unexpected method: {method}")
+
+        backend._rpc_call = mock_rpc
 
         utxos = await backend.get_utxos(["bc1qtest1", "bc1qtest2"])
 
@@ -248,9 +255,13 @@ class TestDescriptorWalletBackendUnit:
         assert utxos[0].txid == "abc123"
         assert utxos[0].value == 1_000_000  # 0.01 BTC in sats
         assert utxos[0].confirmations == 6
+        # height = tip (1000) - confirmations (6) + 1 = 995
+        assert utxos[0].height == 995
+
         assert utxos[1].txid == "def456"
         assert utxos[1].value == 2_000_000
         assert utxos[1].confirmations == 0  # Unconfirmed visible
+        assert utxos[1].height is None
 
     @pytest.mark.asyncio
     async def test_get_utxos_filter_addresses(self):
@@ -269,8 +280,10 @@ class TestDescriptorWalletBackendUnit:
             {"txid": "abc", "vout": 0, "amount": 0.01, "address": "bc1qtest1", "confirmations": 1},
         ]
 
-        async def mock_rpc(method, params=None, use_wallet=None, client=None):
-            if method == "listunspent":
+        async def mock_rpc(method, params=None, client=None, use_wallet=True):
+            if method == "getblockchaininfo":
+                return {"blocks": 1000}
+            elif method == "listunspent":
                 # Verify that addresses are passed to Bitcoin Core
                 assert params is not None
                 assert len(params) >= 3, "Should have minconf, maxconf, addresses"
@@ -286,6 +299,7 @@ class TestDescriptorWalletBackendUnit:
 
         assert len(utxos) == 1
         assert utxos[0].address == "bc1qtest1"
+        assert utxos[0].height == 1000  # 1000 - 1 + 1
 
     @pytest.mark.asyncio
     async def test_get_utxos_no_filter(self):
@@ -303,8 +317,10 @@ class TestDescriptorWalletBackendUnit:
             {"txid": "ghi", "vout": 0, "amount": 0.03, "address": "bc1qtest3", "confirmations": 1},
         ]
 
-        async def mock_rpc(method, params=None, use_wallet=None, client=None):
-            if method == "listunspent":
+        async def mock_rpc(method, params=None, client=None, use_wallet=True):
+            if method == "getblockchaininfo":
+                return {"blocks": 1000}
+            elif method == "listunspent":
                 # When no addresses, params should only have minconf and maxconf
                 assert params is not None
                 assert len(params) == 2, f"Should only have minconf, maxconf but got {params}"
