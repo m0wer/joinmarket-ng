@@ -6,7 +6,7 @@ services:
     container_name: joinmarket_taker
     environment:
       - MNEMONIC_FILE=/home/jm/.joinmarket-ng/wallets/taker.mnemonic
-      - BACKEND_TYPE=full_node
+      - BACKEND_TYPE=descriptor_wallet
       - BITCOIN_RPC_URL=http://bitcoind:8332
       - BITCOIN_RPC_USER=rpcuser
       - BITCOIN_RPC_PASSWORD=rpcpassword

@@ -420,7 +420,8 @@ def info(
     ] = False,
     network: Annotated[str, typer.Option("--network", "-n", help="Bitcoin network")] = "mainnet",
     backend_type: Annotated[
-        str, typer.Option("--backend", "-b", help="Backend: full_node | neutrino")
+        str,
+        typer.Option("--backend", "-b", help="Backend: full_node | descriptor_wallet | neutrino"),
     ] = "full_node",
     rpc_url: Annotated[
         str, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")
@@ -493,6 +494,7 @@ async def _show_wallet_info(
     from jmcore.paths import get_default_data_dir
 
     from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
+    from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
     from jmwallet.backends.neutrino import NeutrinoBackend
     from jmwallet.history import get_address_history_types, get_used_addresses
     from jmwallet.wallet.service import WalletService
@@ -501,7 +503,7 @@ async def _show_wallet_info(
     resolved_data_dir = data_dir if data_dir else get_default_data_dir()
 
     # Create backend
-    backend: BitcoinCoreBackend | NeutrinoBackend
+    backend: BitcoinCoreBackend | DescriptorWalletBackend | NeutrinoBackend
     if backend_type == "neutrino":
         backend = NeutrinoBackend(neutrino_url=neutrino_url, network=network)
         logger.info("Waiting for neutrino to sync...")
@@ -509,8 +511,21 @@ async def _show_wallet_info(
         if not synced:
             logger.error("Neutrino sync timeout")
             raise typer.Exit(1)
-    else:
+    elif backend_type == "descriptor_wallet":
+        from jmwallet.backends.descriptor_wallet import (
+            generate_wallet_name,
+            get_mnemonic_fingerprint,
+        )
+
+        fingerprint = get_mnemonic_fingerprint(mnemonic, bip39_passphrase or "")
+        wallet_name = generate_wallet_name(fingerprint, network)
+        backend = DescriptorWalletBackend(
+            rpc_url=rpc_url, rpc_user=rpc_user, rpc_password=rpc_password, wallet_name=wallet_name
+        )
+    elif backend_type == "full_node":
         backend = BitcoinCoreBackend(rpc_url=rpc_url, rpc_user=rpc_user, rpc_password=rpc_password)
+    else:
+        raise ValueError(f"Unknown backend type: {backend_type}")
 
     # Create wallet with data_dir for history lookups
     wallet = WalletService(
@@ -523,12 +538,39 @@ async def _show_wallet_info(
     )
 
     try:
-        await wallet.sync_all()
+        # Use descriptor wallet sync if available
+        if backend_type == "descriptor_wallet":
+            from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
+
+            if isinstance(backend, DescriptorWalletBackend):
+                # Check if wallet needs setup
+                if not await wallet.is_descriptor_wallet_ready():
+                    logger.info("Descriptor wallet not set up. Setting up...")
+                    await wallet.setup_descriptor_wallet(rescan=True)
+                    logger.info("Descriptor wallet setup complete")
+
+                # Use fast descriptor wallet sync
+                await wallet.sync_with_descriptor_wallet()
+        else:
+            # Use standard sync (scantxoutset for full_node, BIP157/158 for neutrino)
+            await wallet.sync_all()
 
         from jmcore.bitcoin import format_amount
 
         total_balance = await wallet.get_total_balance()
         print(f"\nTotal Balance: {format_amount(total_balance)}")
+
+        # Show pending transactions if any
+        from jmwallet.history import get_pending_transactions
+
+        pending = get_pending_transactions(resolved_data_dir)
+        if pending:
+            print(f"\nPending Transactions: {len(pending)}")
+            for entry in pending:
+                if entry.txid:
+                    print(f"  {entry.txid[:16]}... - {entry.role} - {entry.confirmations} confs")
+                else:
+                    print(f"  [Broadcasting...] - {entry.role}")
 
         # Get history info for address status
         used_addresses = get_used_addresses(resolved_data_dir)
@@ -568,7 +610,17 @@ def _show_extended_wallet_info(
     """
     from jmcore.bitcoin import sats_to_btc
 
+    from jmwallet.history import get_pending_transactions
     from jmwallet.wallet.service import FIDELITY_BOND_BRANCH
+
+    # Get pending transactions to mark addresses
+    pending_txs = get_pending_transactions(wallet.data_dir)
+    pending_addresses = set()
+    for entry in pending_txs:
+        if entry.destination_address:
+            pending_addresses.add(entry.destination_address)
+        if entry.change_address:
+            pending_addresses.add(entry.change_address)
 
     for md in range(wallet.mixdepth_count):
         # Get account zpub (BIP84 format for native segwit)
@@ -590,7 +642,10 @@ def _show_extended_wallet_info(
             ext_balance += addr_info.balance
             # Format: path  address  balance  status
             # Pad path to ensure consistent alignment regardless of index digits
-            print(f"{addr_info.path:<24}{addr_info.address}\t{btc_balance:.8f}\t{addr_info.status}")
+            status_display: str = addr_info.status
+            if addr_info.address in pending_addresses:
+                status_display += " (pending)"
+            print(f"{addr_info.path:<24}{addr_info.address}\t{btc_balance:.8f}\t{status_display}")
 
         print(f"Balance:\t{sats_to_btc(ext_balance):.8f}")
 
@@ -606,7 +661,10 @@ def _show_extended_wallet_info(
             btc_balance = sats_to_btc(addr_info.balance)
             int_balance += addr_info.balance
             # Pad path to ensure consistent alignment regardless of index digits
-            print(f"{addr_info.path:<24}{addr_info.address}\t{btc_balance:.8f}\t{addr_info.status}")
+            status_str: str = addr_info.status
+            if addr_info.address in pending_addresses:
+                status_str += " (pending)"
+            print(f"{addr_info.path:<24}{addr_info.address}\t{btc_balance:.8f}\t{status_str}")
 
         print(f"Balance:\t{sats_to_btc(int_balance):.8f}")
 

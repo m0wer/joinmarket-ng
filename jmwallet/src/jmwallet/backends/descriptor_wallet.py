@@ -19,7 +19,6 @@ Trade-offs:
 
 from __future__ import annotations
 
-import hashlib
 import os
 from collections.abc import Sequence
 from typing import Any
@@ -707,17 +706,34 @@ def generate_wallet_name(mnemonic_fingerprint: str, network: str = "mainnet") ->
     return f"jm_{mnemonic_fingerprint}_{network}"
 
 
-def get_mnemonic_fingerprint(mnemonic: str) -> str:
+def get_mnemonic_fingerprint(mnemonic: str, passphrase: str = "") -> str:
     """
-    Get a fingerprint for a mnemonic phrase.
+    Get BIP32 master key fingerprint from mnemonic (like SeedSigner).
 
-    Used to generate deterministic wallet names.
+    This creates the master HD key from the seed and derives m/0 to get
+    the fingerprint, following the same approach as SeedSigner and other
+    Bitcoin wallet software.
 
     Args:
         mnemonic: BIP39 mnemonic phrase
+        passphrase: Optional BIP39 passphrase (13th/25th word)
 
     Returns:
-        First 8 chars of SHA256 hash
+        8-character hex string (4 bytes) of the m/0 fingerprint
     """
-    h = hashlib.sha256(mnemonic.encode()).hexdigest()
-    return h[:8]
+    from jmwallet.wallet.bip32 import HDKey, mnemonic_to_seed
+
+    # Convert mnemonic to seed bytes
+    seed = mnemonic_to_seed(mnemonic, passphrase)
+
+    # Create master HD key from seed
+    root = HDKey.from_seed(seed)
+
+    # Derive m/0 child key (following SeedSigner approach)
+    child = root.derive("m/0")
+
+    # Get fingerprint (4 bytes)
+    fingerprint_bytes = child.fingerprint
+
+    # Convert to 8-character hex string
+    return fingerprint_bytes.hex()
