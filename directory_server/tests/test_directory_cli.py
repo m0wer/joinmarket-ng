@@ -12,6 +12,8 @@ import pytest
 
 from directory_server.cli import format_status_output, health_command, status_command
 
+pytestmark = pytest.mark.docker
+
 
 class MockHTTPHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:

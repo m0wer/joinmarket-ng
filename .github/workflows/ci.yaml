@@ -362,6 +362,31 @@ jobs:
             coverage.xml
         if: always()
 
+  test-directory-server-docker:
+    needs: build-images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-python-deps
+        with:
+          components: jmcore,directory_server
+          install-dev: 'true'
+
+      - name: Run directory-server docker-marked tests
+        run: |
+          pytest -c pytest.ini -m docker directory_server/tests/ \
+            --junitxml=junit/directory-server-docker-tests.xml \
+            --cov=directory_server --cov-report=term-missing --cov-report=xml \
+            -v -s --timeout=300 --fail-on-skip
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: directory-server-docker-results
+          path: |
+            junit/directory-server-docker-tests.xml
+            coverage.xml
+        if: always()
+
   test-reference-interop:
     needs: build-images
     runs-on: ubuntu-latest
@@ -1163,6 +1188,7 @@ jobs:
       # Component integration tests (run docker-marked tests only)
       - test-jmwallet
       - test-maker
+      - test-directory-server-docker
       # Integration tests (depend on build-images)
       - test-e2e
       - test-reference-interop
