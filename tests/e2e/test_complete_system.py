@@ -1163,16 +1163,19 @@ async def test_coinjoin_with_multi_utxo_maker(
         tx_info = await bitcoin_backend.get_transaction(txid)
         if tx_info:
             print(f"Transaction info: {tx_info}")
-            # Count inputs to verify multi-UTXO usage
-            if "vin" in tx_info:
-                num_inputs = len(tx_info["vin"])
-                print(f"Transaction has {num_inputs} inputs")
-                # If we have >2 inputs (1 taker + >1 maker), we successfully tested multi-UTXO
-                if num_inputs > 2:
-                    print(
-                        "✓ Successfully tested multi-UTXO maker "
-                        f"(maker used {num_inputs - 1} UTXOs)"
-                    )
+            # Count inputs to verify multi-UTXO usage by parsing the raw transaction
+            from jmwallet.wallet.signing import deserialize_transaction
+
+            tx_bytes = bytes.fromhex(tx_info.raw)
+            tx = deserialize_transaction(tx_bytes)
+            num_inputs = len(tx.inputs)
+            print(f"Transaction has {num_inputs} inputs")
+            # If we have >2 inputs (1 taker + >1 maker), we successfully tested multi-UTXO
+            if num_inputs > 2:
+                print(
+                    "✓ Successfully tested multi-UTXO maker "
+                    f"(maker used {num_inputs - 1} UTXOs)"
+                )
 
         # Verify the transaction has confirmations
         height = await bitcoin_backend.get_block_height()
