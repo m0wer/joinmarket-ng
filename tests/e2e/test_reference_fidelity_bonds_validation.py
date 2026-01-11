@@ -71,58 +71,64 @@ def test_our_orderbook_watcher_receives_reference_maker_bonds(reference_services
     import httpx
 
     async def check_orderbook():
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    "http://localhost:8080/orderbook.json", timeout=10.0
-                )
-                if response.status_code == 200:
-                    data = response.json()
+        max_retries = 12
+        retry_delay = 5
 
-                    # Check offers that have fidelity bond data (proof received)
-                    # Bond value will be 0 in regtest since we can't use Mempool API,
-                    # but the important part is that we received and parsed the bond data
-                    offers_with_bonds = [
-                        offer
-                        for offer in data.get("offers", [])
-                        if offer.get("fidelity_bond_data") is not None
-                    ]
-
-                    offer_count = len(data.get("offers", []))
-
-                    logger.info(
-                        f"Orderbook watcher sees: {offer_count} offers, "
-                        f"{len(offers_with_bonds)} with fidelity bond proofs"
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        "http://localhost:8080/orderbook.json", timeout=10.0
                     )
+                    if response.status_code == 200:
+                        data = response.json()
 
-                    if len(offers_with_bonds) > 0:
+                        # Check offers that have fidelity bond data (proof received)
+                        # Bond value will be 0 in regtest since we can't use Mempool API,
+                        # but the important part is that we received and parsed the bond data
+                        offers_with_bonds = [
+                            offer
+                            for offer in data.get("offers", [])
+                            if offer.get("fidelity_bond_data") is not None
+                        ]
+
+                        offer_count = len(data.get("offers", []))
+
                         logger.info(
-                            "✓ Orderbook watcher received fidelity bond proofs from makers"
+                            f"Orderbook watcher sees (attempt {attempt + 1}/{max_retries}): {offer_count} offers, "
+                            f"{len(offers_with_bonds)} with fidelity bond proofs"
                         )
 
-                        # Log offers with bond data
-                        for offer in offers_with_bonds:
-                            bond_data = offer.get("fidelity_bond_data", {})
-                            if bond_data:
-                                logger.info(
-                                    f"  Maker {offer['counterparty']} sent bond proof: "
-                                    f"txid={bond_data.get('utxo_txid', 'N/A')[:16]}..., "
-                                    f"locktime={bond_data.get('locktime', 'N/A')}"
-                                )
-                                logger.info(
-                                    f"    (Bond value is {offer.get('fidelity_bond_value', 0)} "
-                                    "- expected 0 in regtest without Mempool API)"
-                                )
-                        return True
-                    else:
-                        logger.info(
-                            "No bond proofs received - makers may not have bonds"
-                        )
-                        return False
-        except Exception as e:
-            logger.error(f"Failed to check orderbook: {e}")
-            pytest.skip("Orderbook watcher not accessible")
-            return False
+                        if len(offers_with_bonds) > 0:
+                            logger.info(
+                                "✓ Orderbook watcher received fidelity bond proofs from makers"
+                            )
+
+                            # Log offers with bond data
+                            for offer in offers_with_bonds:
+                                bond_data = offer.get("fidelity_bond_data", {})
+                                if bond_data:
+                                    logger.info(
+                                        f"  Maker {offer['counterparty']} sent bond proof: "
+                                        f"txid={bond_data.get('utxo_txid', 'N/A')[:16]}..., "
+                                        f"locktime={bond_data.get('locktime', 'N/A')}"
+                                    )
+                                    logger.info(
+                                        f"    (Bond value is {offer.get('fidelity_bond_value', 0)} "
+                                        "- expected 0 in regtest without Mempool API)"
+                                    )
+                            return True
+                        else:
+                            logger.info(
+                                "No bond proofs received yet - makers may not have bonds or announced them"
+                            )
+            except Exception as e:
+                logger.error(f"Failed to check orderbook: {e}")
+
+            # Wait before retrying
+            await asyncio.sleep(retry_delay)
+
+        return False
 
     has_bonds = asyncio.run(check_orderbook())
 

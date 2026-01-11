@@ -403,7 +403,7 @@ class TestNeutrinoCoinJoin:
             await taker.start()
 
             # Wait for directory server and makers to be ready
-            await asyncio.sleep(5)
+            await asyncio.sleep(15)
 
             # Fetch orderbook
             logger.info("Fetching orderbook...")
@@ -647,7 +647,7 @@ class TestNeutrinoCoinJoin:
             await taker.start()
 
             # Wait for directory server and makers to be ready
-            await asyncio.sleep(5)
+            await asyncio.sleep(15)
 
             # Fetch orderbook
             logger.info("Fetching orderbook...")

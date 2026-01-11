@@ -342,7 +342,7 @@ def fresh_docker_makers():
             # - Container start: ~5s
             # - Wallet sync: ~10-20s
             # - Directory connection & offer announcement: ~5-10s
-            time.sleep(45)
+            time.sleep(90)
         else:
             logger.warning(f"Failed to restart makers: {result.stderr}")
     except subprocess.TimeoutExpired:

@@ -349,6 +349,13 @@ services:
       # Fidelity bond configuration (manual specification without registry)
       - FIDELITY_BOND_LOCKTIMES=4099766400
       - FIDELITY_BOND_INDEX=0
+      # Tor configuration for direct connections
+      - TOR_SOCKS_HOST=jm-tor
+      - TOR_SOCKS_PORT=9050
+      - TOR_CONTROL_HOST=jm-tor
+      - TOR_CONTROL_PORT=9051
+      - ONION_SERVING_HOST=0.0.0.0
+      - ONION_SERVING_PORT=5000
     volumes:
       - maker1-data:/home/jm/.joinmarket-ng
     networks:
@@ -359,6 +366,8 @@ services:
       directory:
         condition: service_healthy
       directory2:
+        condition: service_healthy
+      tor:
         condition: service_healthy
       wallet-funder:
         condition: service_completed_successfully
@@ -394,6 +403,13 @@ services:
       - MIN_SIZE=10000
       - TX_FEE_CONTRIBUTION=500
       - CJ_FEE_RELATIVE=0.00025
+      # Tor configuration for direct connections
+      - TOR_SOCKS_HOST=jm-tor
+      - TOR_SOCKS_PORT=9050
+      - TOR_CONTROL_HOST=jm-tor
+      - TOR_CONTROL_PORT=9051
+      - ONION_SERVING_HOST=0.0.0.0
+      - ONION_SERVING_PORT=5000
     volumes:
       - maker2-data:/home/jm/.joinmarket-ng
     networks:
@@ -404,6 +420,8 @@ services:
       directory:
         condition: service_healthy
       directory2:
+        condition: service_healthy
+      tor:
         condition: service_healthy
       wallet-funder:
         condition: service_completed_successfully
@@ -610,6 +628,9 @@ services:
       timeout: 10s
       retries: 60
       start_period: 120s
+    ports:
+      - "19050:9050"
+      - "19051:9051"
     volumes:
       - ./tests/e2e/reference/tor/conf:/etc/tor:ro
       - tor-data:/var/lib/tor

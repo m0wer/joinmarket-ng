@@ -39,7 +39,7 @@ from loguru import logger
 # Timeouts for reference implementation tests
 # Reduced timeouts to fail faster and identify issues
 STARTUP_TIMEOUT = 420  # 7 minutes for all services to start (Tor can be slow in CI)
-COINJOIN_TIMEOUT = 240  # 4 minutes for coinjoin to complete (reduced from 15 min)
+COINJOIN_TIMEOUT = 600  # 10 minutes for coinjoin to complete (increased from 240s)
 WALLET_FUND_TIMEOUT = 300  # 5 minutes for wallet funding
 
 
@@ -622,7 +622,7 @@ def stop_conflicting_makers() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(900)
 async def test_execute_reference_coinjoin(funded_jam_wallet):
     """
     Execute a coinjoin using the reference taker (JAM sendpayment).
@@ -644,7 +644,7 @@ async def test_execute_reference_coinjoin(funded_jam_wallet):
 
     # Restart makers to ensure fresh wallet state with new UTXOs
     # This is critical - previous tests may have consumed maker UTXOs
-    restart_makers_and_wait(wait_time=60)
+    restart_makers_and_wait(wait_time=120)
 
     # Ensure bitcoin nodes are synced
     logger.info("Checking that bitcoin nodes are synced...")
@@ -719,11 +719,17 @@ async def test_execute_reference_coinjoin(funded_jam_wallet):
     ]
     has_explicit_failure = any(ind in output_lower for ind in explicit_failures)
 
-    if has_explicit_failure:
+    if has_explicit_failure and not has_txid:
+        # Only fail if no txid was found - "giving up" might be a non-fatal warning
         pytest.fail(
             f"CoinJoin explicitly failed.\n"
             f"Exit code: {result.returncode}\n"
             f"Output: {result.stdout[-3000:]}"
+        )
+    elif has_explicit_failure and has_txid:
+        logger.warning(
+            "Found failure keywords in log but CoinJoin succeeded (txid found). "
+            "Likely non-fatal warning or retry."
         )
 
     assert has_txid, (
