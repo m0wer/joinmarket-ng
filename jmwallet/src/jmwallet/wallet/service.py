@@ -61,6 +61,9 @@ class WalletService:
 
         self.address_cache: dict[str, tuple[int, int, int]] = {}
         self.utxo_cache: dict[int, list[UTXOInfo]] = {}
+        # Track addresses that have ever had UTXOs (including spent ones)
+        # This is used to correctly label addresses as "used-empty" vs "new"
+        self.addresses_with_history: set[str] = set()
 
         logger.info(f"Initialized wallet with {mixdepth_count} mixdepths")
 
@@ -285,6 +288,8 @@ class WalletService:
 
                     if addr_utxos:
                         consecutive_empty = 0
+                        # Track that this address has had UTXOs
+                        self.addresses_with_history.add(address)
                         for utxo in addr_utxos:
                             path = f"{self.root_path}/{mixdepth}'/{change}/{index + i}"
                             utxo_info = UTXOInfo(
@@ -361,6 +366,8 @@ class WalletService:
 
                     if addr_utxos:
                         consecutive_empty = 0
+                        # Track that this address has had UTXOs
+                        self.addresses_with_history.add(address)
                         for utxo in addr_utxos:
                             # Path includes locktime notation
                             path = (
@@ -670,6 +677,9 @@ class WalletService:
             # Generate the address and cache it
             address = self.get_address(mixdepth, change, index)
 
+            # Track that this address has had UTXOs
+            self.addresses_with_history.add(address)
+
             # Build path string
             path = f"{self.root_path}/{mixdepth}'/{change}/{index}"
 
@@ -904,6 +914,8 @@ class WalletService:
             if address in bond_address_to_info:
                 locktime, index = bond_address_to_info[address]
                 path = f"{self.root_path}/0'/{FIDELITY_BOND_BRANCH}/{index}:{locktime}"
+                # Track that this address has had UTXOs
+                self.addresses_with_history.add(address)
                 utxo_info = UTXOInfo(
                     txid=utxo.txid,
                     vout=utxo.vout,
@@ -927,6 +939,9 @@ class WalletService:
 
             mixdepth, change, index = path_info
             path = f"{self.root_path}/{mixdepth}'/{change}/{index}"
+
+            # Track that this address has had UTXOs
+            self.addresses_with_history.add(address)
 
             utxo_info = UTXOInfo(
                 txid=utxo.txid,
@@ -1407,13 +1422,13 @@ class WalletService:
             address: The address to check
             balance: Current balance in satoshis
             is_external: True if external (receive) address
-            used_addresses: Set of addresses used in history
+            used_addresses: Set of addresses used in CoinJoin history
             history_addresses: Dict mapping address -> type (cj_out, change, etc.)
 
         Returns:
             Status string for display
         """
-        # Check if it was used in history
+        # Check if it was used in CoinJoin history
         history_type = history_addresses.get(address)
 
         if balance > 0:
@@ -1429,7 +1444,11 @@ class WalletService:
                 return "non-cj-change"
         else:
             # No funds
-            if address in used_addresses:
+            # Check if address was used in CoinJoin history OR had blockchain activity
+            was_used_in_cj = address in used_addresses
+            had_blockchain_activity = address in self.addresses_with_history
+
+            if was_used_in_cj or had_blockchain_activity:
                 # Was used but now empty
                 if history_type == "cj_out":
                     return "used-empty"  # CJ output that was spent
