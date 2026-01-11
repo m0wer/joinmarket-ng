@@ -726,6 +726,15 @@ async def test_execute_reference_coinjoin(funded_jam_wallet):
 
     logger.info("CoinJoin completed successfully!")
 
+    # Mine blocks to confirm the transaction so subsequent tests verify cleanly
+    # and makers don't offer spent UTXOs (scantxoutset only sees on-chain state)
+    logger.info("Mining 1 block to confirm CoinJoin transaction...")
+    run_bitcoin_cmd(["generatetoaddress", "1", dest_address])
+
+    # Wait for sync so all nodes see the confirmation
+    if not _wait_for_node_sync(max_attempts=30):
+        logger.warning("Nodes did not sync after mining confirmation block")
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s", "--timeout=600"])

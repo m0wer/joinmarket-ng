@@ -300,6 +300,14 @@ async def test_reference_taker_coinjoin_with_our_makers(
 
     logger.info("✓ CoinJoin completed successfully with our makers!")
 
+    # Mine blocks to confirm the transaction so subsequent tests verify cleanly
+    logger.info("Mining 1 block to confirm CoinJoin transaction...")
+    run_bitcoin_cmd(["generatetoaddress", "1", dest_address])
+
+    # Wait for sync so all nodes see the confirmation
+    if not _wait_for_node_sync(max_attempts=30):
+        logger.warning("Nodes did not sync after mining confirmation block")
+
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(300)
