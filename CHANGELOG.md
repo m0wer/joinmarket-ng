@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Automatic descriptor import and wallet setup on first use
   - **New default backend** for maker, taker, and wallet commands (changed from `full_node`)
   - Docker compose examples updated to use `descriptor_wallet` by default
+- **Orderbook Watcher: Maker direct reachability tracking**.
+  - Each offer now includes `directly_reachable` field (true/false/null) showing if maker is reachable via direct Tor connection.
+  - Health checker extracts maker features from handshake, useful when directory servers don't provide peerlist features.
+  - Reachability info available in orderbook.json API response for monitoring and debugging.
+  - Note: Unreachable makers are NOT removed from orderbook - directory may still have valid connection.
 - **Operator Notifications**: Push notification system via Apprise for CoinJoin events.
   - Supports 100+ notification services (Gotify, Telegram, Discord, Pushover, email, etc.)
   - Privacy-aware: configurable amount/txid/nick inclusion
@@ -79,6 +84,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Taker failing when Maker uses multiple UTXOs**: Fixed handling of multiple `!sig` messages from makers with multiple inputs.
+- **Orderbook Watcher bond deduplication logging noise**: Fixed false "stale offer replacement" logs when the same offer from the same maker was seen from multiple directories.
+  - Same (nick, oid) pairs are now silently deduplicated instead of logging as "stale replacement".
+  - Only logs when an actual different maker reuses the same bond UTXO (e.g., after nick restart).
+- **Orderbook Watcher aggressive offer pruning**: Fixed overly aggressive cleanup that was removing valid offers.
+  - **Removed age-based staleness cleanup entirely** - makers can run for months, offer age is not a valid signal.
+  - Maker health check no longer removes offers from makers that are unreachable via direct connection (directory may still have valid connection).
+  - Peerlist-based cleanup now skips if any directory refresh fails (avoids false positives).
+  - Philosophy changed to **"show offers when in doubt"** rather than aggressive pruning.
+  - Only removes offers when explicitly signaled by directory (`;D` disconnect marker or nick absent from ALL directories' peerlists).
 - **Orderbook Watcher showing only few offers despite receiving many from directories**.
   - Directory servers send realtime PEERLIST updates (one per peer) when peers connect/disconnect.
   - DirectoryClient was incorrectly treating these partial updates as complete peerlist replacements.

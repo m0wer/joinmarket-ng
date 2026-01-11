@@ -593,7 +593,7 @@ class DirectoryClient:
         for nick in explicitly_disconnected:
             self.remove_offers_for_nick(nick)
 
-        logger.info(
+        logger.trace(
             f"Received {len(peers)} active peers with features from {self.host}:{self.port}"
             + (
                 f", {len(explicitly_disconnected)} explicitly disconnected"
