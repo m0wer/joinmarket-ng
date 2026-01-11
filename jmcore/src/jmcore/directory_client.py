@@ -217,6 +217,8 @@ class DirectoryClient:
         self._peerlist_supported: bool | None = None  # None = unknown, True/False = known
         self._last_peerlist_request_time: float = 0.0
         self._peerlist_min_interval: float = 60.0  # Minimum seconds between peerlist requests
+        self._peerlist_timeout: float = 120.0  # Longer timeout for peerlist (can be large over Tor)
+        self._peerlist_timeout_count: int = 0  # Track consecutive timeouts
 
     async def connect(self) -> None:
         """Connect to the directory server and perform handshake."""
@@ -340,6 +342,9 @@ class DirectoryClient:
         Note: Reference implementation directories do NOT support GETPEERLIST.
         This method shares peerlist support tracking with get_peerlist_with_features().
 
+        For directories that announced peerlist_features during handshake, we use
+        a longer timeout and don't permanently disable requests on timeout.
+
         Returns:
             List of active peer nicks. Returns empty list if directory doesn't
             support GETPEERLIST. Returns None if rate-limited (use cached data).
@@ -348,7 +353,8 @@ class DirectoryClient:
             raise DirectoryClientError("Not connected")
 
         # Skip if we already know this directory doesn't support GETPEERLIST
-        if self._peerlist_supported is False:
+        # (only applies to directories that didn't announce peerlist_features)
+        if self._peerlist_supported is False and not self.directory_peerlist_features:
             logger.debug("Skipping GETPEERLIST - directory doesn't support it")
             return []
 
@@ -372,20 +378,21 @@ class DirectoryClient:
         start_time = asyncio.get_event_loop().time()
         response = None
 
+        # Use longer timeout for directories that support peerlist_features
+        # (the peerlist can be large and slow to transmit over Tor)
+        peerlist_timeout = (
+            self._peerlist_timeout if self.directory_peerlist_features else self.timeout
+        )
+
         while True:
             elapsed = asyncio.get_event_loop().time() - start_time
-            if elapsed > self.timeout:
-                # Timeout without PEERLIST response - directory likely doesn't support it
-                logger.info(
-                    f"Timed out waiting for PEERLIST from {self.host}:{self.port} - "
-                    "directory likely doesn't support GETPEERLIST (reference implementation)"
-                )
-                self._peerlist_supported = False
+            if elapsed > peerlist_timeout:
+                self._handle_peerlist_timeout()
                 return []
 
             try:
                 response_data = await asyncio.wait_for(
-                    self.connection.receive(), timeout=self.timeout - elapsed
+                    self.connection.receive(), timeout=peerlist_timeout - elapsed
                 )
                 response = json.loads(response_data.decode("utf-8"))
                 msg_type = response.get("type")
@@ -398,17 +405,12 @@ class DirectoryClient:
                     f"Skipping unexpected message type {msg_type} while waiting for PEERLIST"
                 )
             except TimeoutError:
-                # Timeout without PEERLIST response - directory likely doesn't support it
-                logger.info(
-                    f"Timed out waiting for PEERLIST from {self.host}:{self.port} - "
-                    "directory likely doesn't support GETPEERLIST (reference implementation)"
-                )
-                self._peerlist_supported = False
+                self._handle_peerlist_timeout()
                 return []
             except Exception as e:
                 logger.warning(f"Error receiving/parsing message while waiting for PEERLIST: {e}")
-                if asyncio.get_event_loop().time() - start_time > self.timeout:
-                    self._peerlist_supported = False
+                if asyncio.get_event_loop().time() - start_time > peerlist_timeout:
+                    self._handle_peerlist_timeout()
                     return []
 
         peerlist_str = response["line"]
@@ -416,6 +418,7 @@ class DirectoryClient:
 
         # Mark peerlist as supported since we got a valid response
         self._peerlist_supported = True
+        self._peerlist_timeout_count = 0
 
         if not peerlist_str:
             return []
@@ -453,6 +456,10 @@ class DirectoryClient:
         This method tracks whether the directory supports it and skips requests
         to unsupported directories to avoid spamming warnings in their logs.
 
+        For directories that announced peerlist_features during handshake, we use
+        a longer timeout and don't permanently disable requests on timeout (the
+        peerlist may simply be large and slow to transmit over Tor).
+
         Returns:
             List of (nick, location, features) tuples for active peers.
             Features will be empty for directories that don't support peerlist_features.
@@ -462,7 +469,8 @@ class DirectoryClient:
             raise DirectoryClientError("Not connected")
 
         # Skip if we already know this directory doesn't support GETPEERLIST
-        if self._peerlist_supported is False:
+        # (only applies to directories that didn't announce peerlist_features)
+        if self._peerlist_supported is False and not self.directory_peerlist_features:
             logger.debug("Skipping GETPEERLIST - directory doesn't support it")
             return []
 
@@ -486,20 +494,21 @@ class DirectoryClient:
         start_time = asyncio.get_event_loop().time()
         response = None
 
+        # Use longer timeout for directories that support peerlist_features
+        # (the peerlist can be large and slow to transmit over Tor)
+        peerlist_timeout = (
+            self._peerlist_timeout if self.directory_peerlist_features else self.timeout
+        )
+
         while True:
             elapsed = asyncio.get_event_loop().time() - start_time
-            if elapsed > self.timeout:
-                # Timeout without PEERLIST response - directory likely doesn't support it
-                logger.info(
-                    f"Timed out waiting for PEERLIST from {self.host}:{self.port} - "
-                    "directory likely doesn't support GETPEERLIST (reference implementation)"
-                )
-                self._peerlist_supported = False
+            if elapsed > peerlist_timeout:
+                self._handle_peerlist_timeout()
                 return []
 
             try:
                 response_data = await asyncio.wait_for(
-                    self.connection.receive(), timeout=self.timeout - elapsed
+                    self.connection.receive(), timeout=peerlist_timeout - elapsed
                 )
                 response = json.loads(response_data.decode("utf-8"))
                 msg_type = response.get("type")
@@ -512,21 +521,40 @@ class DirectoryClient:
                     f"Skipping unexpected message type {msg_type} while waiting for PEERLIST"
                 )
             except TimeoutError:
-                # Timeout without PEERLIST response - directory likely doesn't support it
-                logger.info(
-                    f"Timed out waiting for PEERLIST from {self.host}:{self.port} - "
-                    "directory likely doesn't support GETPEERLIST (reference implementation)"
-                )
-                self._peerlist_supported = False
+                self._handle_peerlist_timeout()
                 return []
             except Exception as e:
                 logger.warning(f"Error receiving/parsing message while waiting for PEERLIST: {e}")
-                if asyncio.get_event_loop().time() - start_time > self.timeout:
-                    self._peerlist_supported = False
+                if asyncio.get_event_loop().time() - start_time > peerlist_timeout:
+                    self._handle_peerlist_timeout()
                     return []
 
+        # Success - reset timeout counter and mark as supported
+        self._peerlist_timeout_count = 0
+        self._peerlist_supported = True
         peerlist_str = response["line"]
         return self._handle_peerlist_response(peerlist_str)
+
+    def _handle_peerlist_timeout(self) -> None:
+        """Handle timeout when waiting for PEERLIST response."""
+        self._peerlist_timeout_count += 1
+
+        if self.directory_peerlist_features:
+            # Directory announced peerlist_features during handshake, so it supports
+            # GETPEERLIST. Timeout is likely due to large peerlist or network issues.
+            logger.warning(
+                f"Timed out waiting for PEERLIST from {self.host}:{self.port} "
+                f"(attempt {self._peerlist_timeout_count}) - "
+                "peerlist may be large or network is slow"
+            )
+            # Don't disable peerlist requests - directory supports it, just slow
+        else:
+            # Directory didn't announce peerlist_features - likely reference impl
+            logger.info(
+                f"Timed out waiting for PEERLIST from {self.host}:{self.port} - "
+                "directory likely doesn't support GETPEERLIST (reference implementation)"
+            )
+            self._peerlist_supported = False
 
     def _handle_peerlist_response(self, peerlist_str: str) -> list[tuple[str, str, FeatureSet]]:
         """
