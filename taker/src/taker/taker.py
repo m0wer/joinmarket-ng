@@ -717,11 +717,17 @@ class Taker:
             age_hours = (datetime.now() - timestamp).total_seconds() / 3600
 
             # For Neutrino, be more patient before warning since we can't see mempool
+            # Only log at WARNING level if it's been a long time, otherwise DEBUG to reduce noise
             if age_hours > 10:  # 10 hour timeout for Neutrino
                 logger.warning(
                     f"Transaction {entry.txid[:16]}... not confirmed after "
                     f"{age_hours:.1f} hours. May still be in mempool (not visible to Neutrino) "
                     "or may have been rejected/never broadcast."
+                )
+            elif age_hours > 1:  # Log at debug for txs older than 1 hour
+                logger.debug(
+                    f"Transaction {entry.txid[:16]}... not confirmed after "
+                    f"{age_hours:.1f} hours (may be in mempool, waiting for confirmation)"
                 )
 
     async def _periodic_rescan(self) -> None:

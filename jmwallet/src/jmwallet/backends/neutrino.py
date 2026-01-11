@@ -124,6 +124,14 @@ class NeutrinoBackend(BlockchainBackend):
             response.raise_for_status()
             return response.json()
 
+        except httpx.HTTPStatusError as e:
+            # 404 responses are expected during normal operation (unconfirmed txs, spent UTXOs)
+            # Don't log them as errors to avoid confusing users
+            if e.response.status_code == 404:
+                logger.debug(f"Neutrino API returned 404: {endpoint}")
+            else:
+                logger.error(f"Neutrino API call failed: {endpoint} - {e}")
+            raise
         except httpx.HTTPError as e:
             logger.error(f"Neutrino API call failed: {endpoint} - {e}")
             raise
