@@ -226,6 +226,10 @@ class Offer(BaseModel):
         default_factory=dict,
         description="Features supported by this maker (from handshake)",
     )
+    directly_reachable: bool | None = Field(
+        default=None,
+        description="Whether maker is directly reachable via their onion address (None = not checked)",
+    )
 
     @field_validator("cjfee")
     @classmethod

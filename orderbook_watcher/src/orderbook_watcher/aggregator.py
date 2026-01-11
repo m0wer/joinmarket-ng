@@ -353,8 +353,8 @@ class OrderbookAggregator:
         2. Remove offers from nicks that are no longer in ANY directory's peerlist
         3. Deduplicate offers that use the same fidelity bond UTXO
 
-        This is critical for orderbook accuracy - it ensures we don't show offers
-        from makers that have gone offline or restarted with different nicks.
+        IMPORTANT: Cleanup only happens if ALL directories with peerlist support report
+        the nick as gone. We err on the side of showing offers when in doubt.
         """
         # Initial wait to let connections stabilize
         await asyncio.sleep(120)
@@ -362,37 +362,45 @@ class OrderbookAggregator:
         while True:
             try:
                 # Collect active nicks from ALL connected directories
+                # Always collect nicks even if refresh fails - use cached state
                 all_active_nicks: set[str] = set()
                 directories_checked = 0
                 directories_with_peerlist_support = 0
+                refresh_failures = 0
 
                 for node_id, client in self.clients.items():
                     try:
                         # Refresh peerlist for this client
                         # This updates the client's active_peers tracking
                         await client.get_peerlist_with_features()
-                        active_nicks = client.get_active_nicks()
-                        all_active_nicks.update(active_nicks)
-                        directories_checked += 1
 
                         # Track if this directory supports peerlist
                         if client._peerlist_supported:
                             directories_with_peerlist_support += 1
-
-                        logger.debug(f"Directory {node_id}: {len(active_nicks)} active nicks")
                     except Exception as e:
                         logger.debug(f"Failed to refresh peerlist from {node_id}: {e}")
+                        refresh_failures += 1
+
+                    # ALWAYS collect active nicks, even if refresh failed
+                    # The client's _active_peers contains accumulated state from previous responses
+                    active_nicks = client.get_active_nicks()
+                    all_active_nicks.update(active_nicks)
+                    directories_checked += 1
+
+                    logger.debug(f"Directory {node_id}: {len(active_nicks)} active nicks")
 
                 if directories_checked > 0:
                     logger.info(
                         f"Peerlist refresh: {len(all_active_nicks)} unique nicks "
                         f"across {directories_checked} directories "
-                        f"({directories_with_peerlist_support} support GETPEERLIST)"
+                        f"({directories_with_peerlist_support} support GETPEERLIST, "
+                        f"{refresh_failures} refresh failures)"
                     )
 
                     # Clean up offers from nicks that are no longer in ANY directory's peerlist
-                    # Only do this if at least one directory supports GETPEERLIST
-                    if directories_with_peerlist_support > 0:
+                    # Only do this if at least one directory supports GETPEERLIST AND
+                    # we successfully refreshed from all peerlist-supporting directories
+                    if directories_with_peerlist_support > 0 and refresh_failures == 0:
                         total_removed = 0
                         all_stale_nicks: set[str] = set()
                         for client in self.clients.values():
@@ -411,6 +419,11 @@ class OrderbookAggregator:
                                 f"Peerlist cleanup: removed {total_removed} offers from "
                                 f"{len(all_stale_nicks)} nicks no longer in any peerlist"
                             )
+                    elif refresh_failures > 0:
+                        logger.debug(
+                            "Skipping peerlist cleanup due to refresh failures - "
+                            "avoiding false positives"
+                        )
 
                 # Sleep for 5 minutes before next refresh
                 await asyncio.sleep(300)
@@ -424,48 +437,6 @@ class OrderbookAggregator:
 
         logger.info("Peerlist refresh task stopped")
 
-    async def _periodic_staleness_cleanup(self) -> None:
-        """Background task to periodically clean up stale offers.
-
-        This is a fallback mechanism for directories that don't support GETPEERLIST
-        (reference implementation). It removes offers that haven't been re-announced
-        within a configurable period (default 30 minutes).
-
-        For directories that support GETPEERLIST, the peerlist refresh task handles
-        cleanup more accurately by detecting when nicks leave.
-        """
-        # Initial wait to let orderbook populate
-        await asyncio.sleep(300)  # 5 minutes
-
-        # Staleness threshold: offers older than this are removed
-        max_age_seconds = 1800.0  # 30 minutes
-
-        while True:
-            try:
-                total_removed = 0
-
-                for _node_id, client in self.clients.items():
-                    # Only do staleness cleanup for directories without peerlist support
-                    # For directories with peerlist support, we use peerlist-based cleanup
-                    if client._peerlist_supported is False:
-                        removed = client.cleanup_stale_offers(max_age_seconds)
-                        total_removed += removed
-
-                if total_removed > 0:
-                    logger.info(f"Staleness cleanup: removed {total_removed} stale offers")
-
-                # Run every 10 minutes
-                await asyncio.sleep(600)
-
-            except asyncio.CancelledError:
-                logger.info("Staleness cleanup task cancelled")
-                break
-            except Exception as e:
-                logger.error(f"Error in staleness cleanup task: {e}")
-                await asyncio.sleep(600)
-
-        logger.info("Staleness cleanup task stopped")
-
     async def _periodic_maker_health_check(self) -> None:
         """Background task to periodically check maker reachability via direct connections.
 
@@ -473,12 +444,11 @@ class OrderbookAggregator:
         1. Collect all makers with valid onion addresses from current offers
         2. Check if they're reachable via direct Tor connection
         3. Extract features from handshake (for directories without peerlist_features)
-        4. Track unreachable makers and remove their offers after repeated failures
+        4. Log reachability statistics for monitoring
 
-        This provides:
-        - More accurate maker availability than relying solely on directory peerlists
-        - Feature detection for non-peerlist directories (reference implementation)
-        - Early detection of makers that went offline
+        NOTE: This task does NOT remove offers from unreachable makers. The directory
+        server may still have a valid connection to the maker even if we can't reach
+        them directly. We trust the directory's peerlist for offer validity.
         """
         # Initial wait to let orderbook populate
         await asyncio.sleep(600)  # 10 minutes
@@ -523,37 +493,19 @@ class OrderbookAggregator:
                     makers_list = list(makers_to_check.values())
                     health_statuses = await self.health_checker.check_makers_batch(makers_list)
 
-                    # Get locations that are unreachable (3+ consecutive failures)
+                    # Log unreachable makers for debugging but DO NOT remove offers
+                    # The directory server may still have a valid connection to the maker
+                    # even if we can't reach them directly. Trust the directory's peerlist
+                    # for offer validity, not our own direct connection attempts.
                     unreachable_locations = self.health_checker.get_unreachable_locations(
                         max_consecutive_failures=3
                     )
 
-                    if unreachable_locations:
-                        logger.warning(
-                            f"Maker health check: {len(unreachable_locations)} makers are "
-                            "unreachable (3+ consecutive failures)"
-                        )
-
-                        # Remove offers from unreachable makers
-                        total_removed = 0
-                        for location in unreachable_locations:
-                            # Find the nick for this location
-                            status = health_statuses.get(location)
-                            if not status:
-                                continue
-
-                            nick = status.nick
-
-                            # Remove offers from this maker in all directory clients
-                            for client in self.clients.values():
-                                removed = client.remove_offers_for_nick(nick)
-                                total_removed += removed
-
-                        if total_removed > 0:
-                            logger.info(
-                                f"Maker health check: Removed {total_removed} offers from "
-                                f"{len(unreachable_locations)} unreachable makers"
-                            )
+                    reachable_count = sum(1 for s in health_statuses.values() if s.reachable)
+                    logger.info(
+                        f"Maker health check: {reachable_count}/{len(makers_to_check)} makers "
+                        f"directly reachable, {len(unreachable_locations)} unreachable"
+                    )
 
                 # Sleep until next check
                 await asyncio.sleep(check_interval)
@@ -641,11 +593,8 @@ class OrderbookAggregator:
         peerlist_task = asyncio.create_task(self._periodic_peerlist_refresh())
         self.listener_tasks.append(peerlist_task)
 
-        # Start periodic staleness cleanup task (for directories without GETPEERLIST)
-        staleness_task = asyncio.create_task(self._periodic_staleness_cleanup())
-        self.listener_tasks.append(staleness_task)
-
         # Start periodic maker health check task (direct onion reachability verification)
+        # This extracts features from handshake and tracks reachability but does NOT remove offers
         health_check_task = asyncio.create_task(self._periodic_maker_health_check())
         self.listener_tasks.append(health_check_task)
 
@@ -776,13 +725,21 @@ class OrderbookAggregator:
                     # Keep this offer (either first with this bond or more recent)
                     if existing is not None:
                         old_offer = existing[0]
-                        bond_replacements += 1
-                        logger.info(
-                            f"Bond deduplication: Replacing stale offer from {old_offer.counterparty} "
-                            f"(oid={old_offer.oid}) with {offer.counterparty} (oid={offer.oid}) "
-                            f"[same bond UTXO: {bond_utxo_key[:20]}..., "
-                            f"age_diff={(timestamp - existing[1]):.1f}s]"
+                        # Only count as "replacement" if it's actually a different maker
+                        # Same nick+oid from different directories is just a duplicate, not stale
+                        is_same_offer = (
+                            old_offer.counterparty == offer.counterparty
+                            and old_offer.oid == offer.oid
                         )
+                        if not is_same_offer:
+                            bond_replacements += 1
+                            logger.info(
+                                f"Bond deduplication: Replacing offer from {old_offer.counterparty} "
+                                f"(oid={old_offer.oid}) with {offer.counterparty} (oid={offer.oid}) "
+                                f"[same bond UTXO: {bond_utxo_key[:20]}..., "
+                                f"age_diff={(timestamp - existing[1]):.1f}s]"
+                            )
+                        # else: same offer from different directory, just keep newer timestamp silently
                     else:
                         logger.debug(
                             f"Bond deduplication: First offer for bond {bond_utxo_key[:20]}... "
@@ -790,7 +747,7 @@ class OrderbookAggregator:
                         )
                     bond_to_best_offer[bond_utxo_key] = (offer, timestamp)
             else:
-                # Offer without bond - check if it's in the active peerlist
+                # Offer without bond
                 offers_without_bonds += 1
                 logger.debug(
                     f"Offer without bond from {offer.counterparty} (oid={offer.oid}, "
@@ -798,13 +755,20 @@ class OrderbookAggregator:
                 )
                 offers_without_bond.append(offer)
 
-        logger.info(
-            f"Bond deduplication: Processed {total_offers_processed} offers "
-            f"({offers_with_bonds} with bonds, {offers_without_bonds} without bonds). "
-            f"Replaced {bond_replacements} stale offers. "
-            f"Result: {len(bond_to_best_offer)} unique bond offers + "
-            f"{len(offers_without_bond)} non-bond offers"
-        )
+        # Only log summary if there's something interesting (replacements or at debug level)
+        if bond_replacements > 0:
+            logger.info(
+                f"Bond deduplication: Replaced {bond_replacements} offers from makers who "
+                f"restarted with same bond. Result: {len(bond_to_best_offer)} unique bond offers + "
+                f"{len(offers_without_bond)} non-bond offers"
+            )
+        else:
+            logger.debug(
+                f"Bond deduplication: Processed {total_offers_processed} offers "
+                f"({offers_with_bonds} with bonds, {offers_without_bonds} without bonds). "
+                f"Result: {len(bond_to_best_offer)} unique bond offers + "
+                f"{len(offers_without_bond)} non-bond offers"
+            )
 
         # Build final offers list
         deduplicated_offers = [offer for offer, _ts in bond_to_best_offer.values()]
@@ -892,6 +856,26 @@ class OrderbookAggregator:
                             f"Linked standalone bond from {bond.counterparty} "
                             f"(txid={bond.utxo_txid[:16]}...) to offer oid={offer.oid}"
                         )
+
+        # Populate direct reachability and features from health check cache
+        # This provides valuable information about whether makers are reachable beyond
+        # what the directory server reports, and extracts features from handshake
+        for offer in orderbook.offers:
+            # Try to find the maker's location from any directory client
+            location = None
+            for client in self.clients.values():
+                location = client._active_peers.get(offer.counterparty)
+                if location and location != "NOT-SERVING-ONION":
+                    break
+
+            if location and location != "NOT-SERVING-ONION":
+                # Check if we have health status for this location
+                health_status = self.health_checker.health_status.get(location)
+                if health_status:
+                    offer.directly_reachable = health_status.reachable
+                    # Update features from handshake if available and not already set
+                    if health_status.features and not offer.features:
+                        offer.features = health_status.features.to_dict()
 
         return orderbook
 
