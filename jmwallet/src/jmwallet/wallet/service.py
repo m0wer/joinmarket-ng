@@ -203,7 +203,7 @@ class WalletService:
             self.fidelity_bond_locktime_cache: dict[str, int] = {}
         self.fidelity_bond_locktime_cache[address] = locktime
 
-        logger.debug(f"Created fidelity bond address {address} with locktime {locktime}")
+        logger.trace(f"Created fidelity bond address {address} with locktime {locktime}")
         return address
 
     def get_fidelity_bond_script(self, index: int, locktime: int) -> bytes:
