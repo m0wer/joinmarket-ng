@@ -217,7 +217,7 @@ class DescriptorWalletBackend(BlockchainBackend):
         self,
         descriptors: Sequence[str | dict[str, Any]],
         rescan: bool = True,
-        timestamp: str | int = "now",
+        timestamp: str | int | None = None,
     ) -> dict[str, Any]:
         """
         Import descriptors into the wallet.
@@ -229,20 +229,29 @@ class DescriptorWalletBackend(BlockchainBackend):
             descriptors: List of output descriptors. Can be:
                 - Simple strings: "wpkh(xpub.../0/*)"
                 - Dicts with range: {"desc": "wpkh(xpub.../0/*)", "range": [0, 999]}
-            rescan: If True, rescan blockchain for historical transactions
-            timestamp: Either "now" for current time or Unix timestamp for rescan start
+            rescan: If True, rescan blockchain from genesis (timestamp=0).
+                   If False, only track new transactions (timestamp="now").
+            timestamp: Override timestamp. If None, uses 0 (rescan=True) or "now" (rescan=False).
+                      Can be Unix timestamp for partial rescan from specific time.
 
         Returns:
             Import result from Bitcoin Core
 
         Example:
+            # Import and rescan entire blockchain (slow on mainnet)
             await backend.import_descriptors([
                 {"desc": "wpkh(xpub.../0/*)", "range": [0, 999], "internal": False},
-                {"desc": "wpkh(xpub.../1/*)", "range": [0, 999], "internal": True},
-            ])
+            ], rescan=True)
+
+            # Import without rescanning (for new wallets with no history)
+            await backend.import_descriptors([...], rescan=False)
         """
         if not self._wallet_loaded:
             raise RuntimeError("Wallet not loaded. Call create_wallet() first.")
+
+        # Determine timestamp based on rescan parameter if not explicitly provided
+        if timestamp is None:
+            timestamp = 0 if rescan else "now"
 
         # Format descriptors for importdescriptors RPC
         import_requests = []
@@ -275,7 +284,13 @@ class DescriptorWalletBackend(BlockchainBackend):
         if SENSITIVE_LOGGING:
             logger.debug(f"Importing {len(import_requests)} descriptor(s): {import_requests}")
         else:
-            logger.info(f"Importing {len(import_requests)} descriptor(s) into wallet...")
+            rescan_info = (
+                "from genesis (timestamp=0)" if timestamp == 0 else f"timestamp={timestamp}"
+            )
+            logger.info(
+                f"Importing {len(import_requests)} descriptor(s) into wallet "
+                f"(rescan={rescan}, {rescan_info})..."
+            )
 
         try:
             result = await self._rpc_call(

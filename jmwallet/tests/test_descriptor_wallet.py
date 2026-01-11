@@ -7,6 +7,7 @@ Integration tests (marked with @pytest.mark.docker) require a running Bitcoin Co
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -167,6 +168,52 @@ class TestDescriptorWalletBackendUnit:
 
         with pytest.raises(RuntimeError, match="Wallet not loaded"):
             await backend.import_descriptors(["desc1"])
+
+    @pytest.mark.asyncio
+    async def test_import_descriptors_rescan_timestamps(self):
+        """Test that rescan parameter correctly sets timestamp."""
+        backend = DescriptorWalletBackend(wallet_name="test_wallet")
+        backend._wallet_loaded = True
+
+        captured_requests = []
+
+        async def mock_rpc(
+            method: str,
+            params: list | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            if method == "getdescriptorinfo":
+                return {"descriptor": f"{params[0]}#check"}  # type: ignore
+            elif method == "importdescriptors":
+                # Capture the import requests to verify timestamp
+                captured_requests.extend(params[0])  # type: ignore
+                return [{"success": True} for _ in params[0]]  # type: ignore
+            elif method == "listdescriptors":
+                return {"descriptors": [{"desc": "test"}]}
+            raise ValueError(f"Unexpected method: {method}")
+
+        backend._rpc_call = mock_rpc  # type: ignore
+
+        # Test rescan=True (should use timestamp=0)
+        captured_requests.clear()
+        await backend.import_descriptors(["desc1"], rescan=True)
+        assert len(captured_requests) == 1
+        assert captured_requests[0]["timestamp"] == 0, "rescan=True should use timestamp=0"
+
+        # Test rescan=False (should use timestamp="now")
+        captured_requests.clear()
+        await backend.import_descriptors(["desc2"], rescan=False)
+        assert len(captured_requests) == 1
+        assert captured_requests[0]["timestamp"] == "now", "rescan=False should use timestamp='now'"
+
+        # Test explicit timestamp override
+        captured_requests.clear()
+        await backend.import_descriptors(["desc3"], rescan=True, timestamp=1234567890)
+        assert len(captured_requests) == 1
+        assert captured_requests[0]["timestamp"] == 1234567890, (
+            "explicit timestamp should override rescan"
+        )
 
     @pytest.mark.asyncio
     async def test_get_utxos(self):
