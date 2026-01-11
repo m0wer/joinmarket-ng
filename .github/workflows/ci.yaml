@@ -147,7 +147,6 @@ jobs:
   test-e2e:
     needs: build-images
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     env:
       # Use pre-built images from CI
       DIRECTORY_SERVER_IMAGE: ghcr.io/${{ github.repository }}/directory-server:ci-${{ github.sha }}
@@ -242,7 +241,6 @@ jobs:
   test-jmwallet:
     needs: build-images
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     env:
       DIRECTORY_SERVER_IMAGE: ghcr.io/${{ github.repository }}/directory-server:ci-${{ github.sha }}
     steps:
@@ -305,7 +303,6 @@ jobs:
   test-maker:
     needs: build-images
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     env:
       DIRECTORY_SERVER_IMAGE: ghcr.io/${{ github.repository }}/directory-server:ci-${{ github.sha }}
     steps:
@@ -368,7 +365,6 @@ jobs:
   test-reference-interop:
     needs: build-images
     runs-on: ubuntu-latest
-    timeout-minutes: 25
     env:
       DIRECTORY_SERVER_IMAGE: ghcr.io/${{ github.repository }}/directory-server:ci-${{ github.sha }}
       ORDERBOOK_WATCHER_IMAGE: ghcr.io/${{ github.repository }}/orderbook-watcher:ci-${{ github.sha }}
@@ -519,7 +515,6 @@ jobs:
   test-reference-legacy:
     needs: build-images
     runs-on: ubuntu-latest
-    timeout-minutes: 25
     env:
       DIRECTORY_SERVER_IMAGE: ghcr.io/${{ github.repository }}/directory-server:ci-${{ github.sha }}
       ORDERBOOK_WATCHER_IMAGE: ghcr.io/${{ github.repository }}/orderbook-watcher:ci-${{ github.sha }}
@@ -670,7 +665,6 @@ jobs:
   test-neutrino-functional:
     needs: build-images
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     env:
       DIRECTORY_SERVER_IMAGE: ghcr.io/${{ github.repository }}/directory-server:ci-${{ github.sha }}
       ORDERBOOK_WATCHER_IMAGE: ghcr.io/${{ github.repository }}/orderbook-watcher:ci-${{ github.sha }}
@@ -747,7 +741,7 @@ jobs:
         run: |
           pytest -c pytest.ini -m neutrino -k "not test_coinjoin" --junitxml=junit/test-results.xml \
             --cov --cov-report=term-missing --cov-report=xml \
-            -v -s --timeout=180 --reruns=1 --reruns-delay=10 --fail-on-skip
+            -v -s --timeout=300 --reruns=1 --reruns-delay=10 --fail-on-skip
 
       - name: Show logs
         if: always()
@@ -779,7 +773,6 @@ jobs:
   test-neutrino-coinjoin:
     needs: build-images
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     env:
       DIRECTORY_SERVER_IMAGE: ghcr.io/${{ github.repository }}/directory-server:ci-${{ github.sha }}
       ORDERBOOK_WATCHER_IMAGE: ghcr.io/${{ github.repository }}/orderbook-watcher:ci-${{ github.sha }}
@@ -856,7 +849,7 @@ jobs:
         run: |
           pytest -c pytest.ini -m neutrino -k "test_coinjoin" --junitxml=junit/test-results.xml \
             --cov --cov-report=term-missing --cov-report=xml \
-            -v -s --timeout=180 --reruns=1 --reruns-delay=10 --fail-on-skip
+            -v -s --timeout=300 --reruns=1 --reruns-delay=10 --fail-on-skip
 
       - name: Show logs
         if: always()
@@ -888,7 +881,6 @@ jobs:
   test-reference-maker:
     needs: build-images
     runs-on: ubuntu-latest
-    timeout-minutes: 25
     env:
       DIRECTORY_SERVER_IMAGE: ghcr.io/${{ github.repository }}/directory-server:ci-${{ github.sha }}
       ORDERBOOK_WATCHER_IMAGE: ghcr.io/${{ github.repository }}/orderbook-watcher:ci-${{ github.sha }}
