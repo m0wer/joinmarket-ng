@@ -207,23 +207,69 @@ class TestDescriptorWalletBackendUnit:
 
     @pytest.mark.asyncio
     async def test_get_utxos_filter_addresses(self):
-        """Test that get_utxos filters by address when provided."""
+        """Test that get_utxos passes addresses to Bitcoin Core for filtering.
+
+        When addresses are provided, we pass them to listunspent RPC and Bitcoin Core
+        does the filtering. The mock simulates Bitcoin Core's behavior of returning
+        only matching UTXOs.
+        """
         backend = DescriptorWalletBackend(wallet_name="test_wallet")
         backend._wallet_loaded = True
 
-        mock_utxos = [
+        # Simulate Bitcoin Core returning only the filtered UTXO
+        # (Bitcoin Core does the filtering when addresses are provided)
+        filtered_utxos = [
             {"txid": "abc", "vout": 0, "amount": 0.01, "address": "bc1qtest1", "confirmations": 1},
-            {"txid": "def", "vout": 0, "amount": 0.02, "address": "bc1qtest2", "confirmations": 1},
-            {"txid": "ghi", "vout": 0, "amount": 0.03, "address": "bc1qtest3", "confirmations": 1},
         ]
 
-        backend._rpc_call = AsyncMock(return_value=mock_utxos)
+        async def mock_rpc(method, params=None, use_wallet=None, client=None):
+            if method == "listunspent":
+                # Verify that addresses are passed to Bitcoin Core
+                assert params is not None
+                assert len(params) >= 3, "Should have minconf, maxconf, addresses"
+                addresses = params[2]
+                assert addresses == ["bc1qtest1"], "Should pass addresses to Bitcoin Core"
+                return filtered_utxos
+            raise ValueError(f"Unexpected method: {method}")
+
+        backend._rpc_call = mock_rpc
 
         # Filter to only bc1qtest1
         utxos = await backend.get_utxos(["bc1qtest1"])
 
         assert len(utxos) == 1
         assert utxos[0].address == "bc1qtest1"
+
+    @pytest.mark.asyncio
+    async def test_get_utxos_no_filter(self):
+        """Test that get_utxos returns all UTXOs when no addresses provided.
+
+        When addresses list is empty, we omit the addresses parameter entirely
+        so Bitcoin Core returns all wallet UTXOs.
+        """
+        backend = DescriptorWalletBackend(wallet_name="test_wallet")
+        backend._wallet_loaded = True
+
+        all_utxos = [
+            {"txid": "abc", "vout": 0, "amount": 0.01, "address": "bc1qtest1", "confirmations": 1},
+            {"txid": "def", "vout": 0, "amount": 0.02, "address": "bc1qtest2", "confirmations": 1},
+            {"txid": "ghi", "vout": 0, "amount": 0.03, "address": "bc1qtest3", "confirmations": 1},
+        ]
+
+        async def mock_rpc(method, params=None, use_wallet=None, client=None):
+            if method == "listunspent":
+                # When no addresses, params should only have minconf and maxconf
+                assert params is not None
+                assert len(params) == 2, f"Should only have minconf, maxconf but got {params}"
+                return all_utxos
+            raise ValueError(f"Unexpected method: {method}")
+
+        backend._rpc_call = mock_rpc
+
+        # Get all UTXOs (empty address list)
+        utxos = await backend.get_utxos([])
+
+        assert len(utxos) == 3
 
     @pytest.mark.asyncio
     async def test_get_wallet_balance(self):
@@ -516,6 +562,97 @@ async def test_descriptor_wallet_with_funds():
         # Check balance
         balance = await backend.get_wallet_balance()
         assert balance["total"] > 0
+
+    finally:
+        try:
+            await backend.unload_wallet()
+        except Exception:
+            pass
+        await backend.close()
+
+
+@pytest.mark.docker
+@pytest.mark.asyncio
+async def test_descriptor_wallet_service_integration():
+    """Test WalletService with DescriptorWalletBackend - full workflow.
+
+    This test validates the complete flow:
+    1. Create a WalletService with DescriptorWalletBackend
+    2. Check if descriptor wallet is ready
+    3. Setup descriptor wallet (import descriptors)
+    4. Verify descriptors were imported
+    5. Sync wallet and find UTXOs
+    """
+    import uuid
+
+    from jmwallet.backends.descriptor_wallet import (
+        get_mnemonic_fingerprint,
+    )
+    from jmwallet.wallet.service import WalletService
+
+    # Use the standard test mnemonic which has funds in regtest
+    mnemonic = "abandon " * 11 + "about"
+    network = "regtest"
+
+    # Generate deterministic wallet name
+    fingerprint = get_mnemonic_fingerprint(mnemonic, "")
+    # Use unique suffix to avoid conflicts with other tests
+    wallet_name = f"jm_{fingerprint}_{uuid.uuid4().hex[:8]}_test"
+
+    backend = DescriptorWalletBackend(
+        rpc_url="http://localhost:18443",
+        rpc_user="test",
+        rpc_password="test",
+        wallet_name=wallet_name,
+    )
+
+    try:
+        # Check connection
+        try:
+            await backend.get_block_height()
+        except Exception:
+            pytest.skip("Bitcoin Core not available")
+            return
+
+        # Create wallet service
+        wallet = WalletService(
+            mnemonic=mnemonic,
+            backend=backend,
+            network=network,
+            mixdepth_count=5,
+            passphrase="",
+        )
+
+        # Check initial state - wallet should not be ready
+        is_ready = await wallet.is_descriptor_wallet_ready()
+        assert is_ready is False, "Fresh wallet should not be ready"
+
+        # Setup descriptor wallet
+        setup_result = await wallet.setup_descriptor_wallet(rescan=False)
+        assert setup_result is True
+
+        # Verify wallet is now ready
+        is_ready = await wallet.is_descriptor_wallet_ready()
+        assert is_ready is True, "Wallet should be ready after setup"
+
+        # Verify descriptors were actually imported
+        descriptors = await backend.list_descriptors()
+        assert len(descriptors) >= 10, (
+            f"Expected 10 descriptors (5 mixdepths x 2), got {len(descriptors)}"
+        )
+
+        # Sync wallet using descriptor wallet method
+        await wallet.sync_with_descriptor_wallet()
+
+        # The test mnemonic should have UTXOs in mixdepth 0 (from regtest funder)
+        total_balance = await wallet.get_total_balance()
+        # Note: May or may not have funds depending on test order
+        # Just verify the sync completed without error
+        assert total_balance >= 0
+
+        # Verify first address matches expected derivation
+        first_addr = wallet.get_receive_address(0, 0)
+        assert first_addr.startswith("bcrt1"), f"Expected regtest address, got {first_addr}"
 
     finally:
         try:

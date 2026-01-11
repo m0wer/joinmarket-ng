@@ -293,8 +293,25 @@ class DescriptorWalletBackend(BlockchainBackend):
                     if not r.get("success", False)
                 ]
                 logger.warning(f"Import completed with {error_count} error(s): {errors}")
+                # Log full results for debugging
+                for i, r in enumerate(result):
+                    if not r.get("success", False):
+                        logger.debug(f"  Descriptor {i} failed: {r}")
             else:
                 logger.info(f"Successfully imported {success_count} descriptor(s)")
+
+            # Verify import by listing descriptors
+            try:
+                verify_result = await self._rpc_call("listdescriptors")
+                actual_count = len(verify_result.get("descriptors", []))
+                logger.debug(f"Verification: wallet now has {actual_count} descriptor(s)")
+                if actual_count == 0 and success_count > 0:
+                    logger.error(
+                        f"CRITICAL: Import reported {success_count} successes but wallet has "
+                        f"0 descriptors! This may indicate a Bitcoin Core bug or wallet issue."
+                    )
+            except Exception as e:
+                logger.warning(f"Could not verify descriptor import: {e}")
 
             self._descriptors_imported = True
             return {"success_count": success_count, "error_count": error_count, "results": result}
@@ -429,29 +446,36 @@ class DescriptorWalletBackend(BlockchainBackend):
         try:
             # listunspent params: minconf, maxconf, addresses, include_unsafe, query_options
             # minconf=0 includes unconfirmed, maxconf=9999999 includes all confirmed
-            result = await self._rpc_call(
-                "listunspent",
-                [
-                    0,  # minconf - include unconfirmed
-                    9999999,  # maxconf
-                    addresses if addresses else [],  # filter addresses
-                    True,  # include_unsafe (include unconfirmed from mempool)
-                ],
-            )
+            # NOTE: When addresses is empty, we must omit it entirely (not pass [])
+            # because Bitcoin Core interprets [] as "filter to 0 addresses" = return nothing
+            if addresses:
+                # Filter to specific addresses
+                result = await self._rpc_call(
+                    "listunspent",
+                    [
+                        0,  # minconf - include unconfirmed
+                        9999999,  # maxconf
+                        addresses,  # filter addresses
+                        True,  # include_unsafe (include unconfirmed from mempool)
+                    ],
+                )
+            else:
+                # Get all wallet UTXOs - omit addresses parameter
+                result = await self._rpc_call(
+                    "listunspent",
+                    [
+                        0,  # minconf - include unconfirmed
+                        9999999,  # maxconf
+                    ],
+                )
 
             utxos = []
             for utxo_data in result:
-                address = utxo_data.get("address", "")
-
-                # If addresses filter was provided, ensure we only return matching UTXOs
-                if addresses and address not in addresses:
-                    continue
-
                 utxo = UTXO(
                     txid=utxo_data["txid"],
                     vout=utxo_data["vout"],
                     value=btc_to_sats(utxo_data["amount"]),
-                    address=address,
+                    address=utxo_data.get("address", ""),
                     confirmations=utxo_data.get("confirmations", 0),
                     scriptpubkey=utxo_data.get("scriptPubKey", ""),
                     height=None,  # listunspent doesn't provide block height directly
