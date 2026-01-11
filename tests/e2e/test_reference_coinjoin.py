@@ -687,9 +687,17 @@ async def test_execute_reference_coinjoin(funded_jam_wallet):
     logger.info(f"Running sendpayment: {' '.join(cmd)}")
 
     # Reduced timeout - if coinjoin takes longer than 240s, something is wrong
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=240, check=False
-    )
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=240, check=False
+        )
+    except subprocess.TimeoutExpired as e:
+        logger.error("CoinJoin timed out!")
+        if e.stdout:
+            logger.info(f"sendpayment stdout (partial):\n{e.stdout}")
+        if e.stderr:
+            logger.error(f"sendpayment stderr (partial):\n{e.stderr}")
+        raise
 
     logger.info(f"sendpayment stdout:\n{result.stdout}")
     logger.info(f"sendpayment stderr:\n{result.stderr}")
