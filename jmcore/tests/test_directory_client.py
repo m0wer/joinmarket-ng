@@ -54,6 +54,96 @@ async def test_get_peerlist_with_features_logs_correctly():
 
 
 @pytest.mark.asyncio
+async def test_peerlist_timeout_with_announced_features_does_not_disable():
+    """
+    Test that when directory announced peerlist_features during handshake,
+    timeout does not permanently disable peerlist requests (it may just be slow).
+    """
+    # Mock the connection
+    mock_connection = AsyncMock()
+    mock_connection.receive.side_effect = TimeoutError("simulated timeout")
+
+    # Initialize client with directory that announced peerlist_features
+    client = DirectoryClient("host", 1234, "mainnet")
+    client.connection = mock_connection
+    client.directory_peerlist_features = True  # Directory announced feature
+    client._peerlist_timeout = 0.1  # Very short timeout for test
+
+    # First request - should timeout but NOT disable peerlist
+    peers = await client.get_peerlist_with_features()
+    assert peers == []
+    assert client._peerlist_supported is not False  # Should NOT be disabled
+    assert client._peerlist_timeout_count == 1
+
+    # Reset rate limit to allow another request
+    client._last_peerlist_request_time = 0
+
+    # Second request - should also timeout but still NOT disable peerlist
+    peers = await client.get_peerlist_with_features()
+    assert peers == []
+    assert client._peerlist_supported is not False  # Still NOT disabled
+    assert client._peerlist_timeout_count == 2
+
+
+@pytest.mark.asyncio
+async def test_peerlist_timeout_without_announced_features_disables():
+    """
+    Test that when directory did NOT announce peerlist_features,
+    timeout permanently disables peerlist requests (likely reference impl).
+    """
+    # Mock the connection
+    mock_connection = AsyncMock()
+    mock_connection.receive.side_effect = TimeoutError("simulated timeout")
+
+    # Initialize client without peerlist_features announcement
+    client = DirectoryClient("host", 1234, "mainnet")
+    client.connection = mock_connection
+    client.directory_peerlist_features = False  # Directory did NOT announce feature
+    client.timeout = 0.1  # Very short timeout for test
+
+    # First request - should timeout AND disable peerlist
+    peers = await client.get_peerlist_with_features()
+    assert peers == []
+    assert client._peerlist_supported is False  # Should be disabled
+
+    # Reset rate limit
+    client._last_peerlist_request_time = 0
+
+    # Second request - should be skipped because peerlist is disabled
+    mock_connection.send.reset_mock()
+    peers = await client.get_peerlist_with_features()
+    assert peers == []
+    mock_connection.send.assert_not_called()  # Should skip the request entirely
+
+
+@pytest.mark.asyncio
+async def test_peerlist_success_resets_timeout_count():
+    """Test that successful peerlist response resets the timeout counter."""
+    # Mock the connection
+    mock_connection = AsyncMock()
+
+    # Initialize client
+    client = DirectoryClient("host", 1234, "mainnet")
+    client.connection = mock_connection
+    client.directory_peerlist_features = True
+    client._peerlist_timeout_count = 5  # Simulate previous timeouts
+
+    # Setup successful response
+    response_data = {
+        "type": MessageType.PEERLIST.value,
+        "line": "nick1;location1",
+    }
+    mock_connection.receive.return_value = json.dumps(response_data).encode("utf-8")
+
+    # Run the method
+    await client.get_peerlist_with_features()
+
+    # Verify timeout count was reset
+    assert client._peerlist_timeout_count == 0
+    assert client._peerlist_supported is True
+
+
+@pytest.mark.asyncio
 async def test_privmsg_fidelity_bond_taker_nick():
     """
     Test that when receiving an offer via PRIVMSG, the fidelity bond is verified
