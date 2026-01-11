@@ -416,37 +416,17 @@ class MakerBot:
 
     async def _regenerate_nick(self) -> None:
         """
-        Regenerate nick identity for privacy.
+        Regenerate nick identity for privacy (currently disabled).
 
-        This should be called:
-        1. After a successful CoinJoin (to prevent linking multiple CJs)
-        2. When offers are updated due to wallet changes (new funds, etc.)
+        Nick regeneration is disabled because:
+        1. Reference implementation doesn't regenerate nicks after CoinJoin
+        2. Fidelity bond makers need stable identity for reputation
+        3. Causes timing issues with !push (taker waits ~60s to collect signatures)
+        4. Privacy is maintained through Tor hidden services
 
-        Benefits:
-        - Prevents takers from tracking maker activity across multiple CoinJoins
-        - Makes it harder to correlate orderbook changes with specific makers
-        - Improves overall privacy without affecting functionality
-
-        Note: Offers will need to be recreated with the new nick.
+        Future consideration: Could be re-enabled as opt-in feature with grace period.
         """
-        # DISABLED: Nick regeneration causes issues with Taker broadcast (!push)
-        # The Taker waits ~60s to collect all signatures before sending !push.
-        # If we regenerate nick immediately after signing, we won't receive the !push.
-        # TODO: Implement a grace period or keep old nick active for a while.
-        return
-
-        old_nick = self.nick
-
-        # Generate new identity
-        self.nick_identity = NickIdentity(JM_VERSION)
-        self.nick = self.nick_identity.nick
-
-        # Update offer manager's maker_nick (don't recreate to preserve mocks in tests)
-        self.offer_manager.maker_nick = self.nick
-
-        logger.info(f"Regenerated nick for privacy: {old_nick} -> {self.nick}")
-
-        # Note: Offers are recreated by the caller (usually _update_offers)
+        pass
 
     async def start(self) -> None:
         """
@@ -1783,20 +1763,9 @@ class MakerBot:
                     del self.active_sessions[taker_nick]
                     self._cleanup_session_lock(taker_nick)
 
-                    # NOTE: Nick regeneration disabled for now to match reference implementation
-                    # The reference implementation does NOT regenerate nicks after CoinJoin.
-                    # Reasons to keep nick stable:
-                    # 1. Enables !push to work without timing issues
-                    # 2. Fidelity bond makers need stable identity anyway
-                    # 3. Reference implementation relies on stable nicks
-                    # 4. Privacy is maintained through Tor hidden services
-                    #
-                    # Future consideration: Add as opt-in feature flag if desired
-                    # await self._regenerate_nick()
+                    # Nick regeneration disabled - see _regenerate_nick() docstring for rationale
 
                     # Schedule wallet re-sync in background to avoid blocking !push handling
-                    # The transaction hasn't been broadcast yet, so we should not block here
-                    # After re-sync, offers will be updated (with same nick)
                     asyncio.create_task(self._deferred_wallet_resync())
                 else:
                     logger.error(f"TX verification failed: {response.get('error')}")

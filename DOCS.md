@@ -263,127 +263,16 @@ JoinMarket NG supports three blockchain backends with different tradeoffs:
 
 ### Descriptor Wallet Backend (Recommended)
 
-- **Method**: `importdescriptors` + `listunspent` RPC (uses Bitcoin Core descriptor wallet)
-- **Requirements**: Bitcoin Core v24+ (descriptor wallet support)
+- **Method**: `importdescriptors` + `listunspent` RPC
+- **Requirements**: Bitcoin Core v24+
 - **Validation**: Full validation
 - **Storage**: ~500 GB (full node) + small wallet file
 - **Privacy**: High (local node)
-- **Sync Speed**: Fast after initial setup
+- **Sync Speed**: Fast after initial descriptor import
 
-**Key Advantages:**
-- **Persistent UTXO tracking**: Once descriptors are imported, Bitcoin Core tracks UTXOs automatically
-- **Real-time updates**: Balance updates as blocks arrive, no need for full UTXO set scans
-- **Mempool awareness**: Sees unconfirmed transactions immediately
-- **Efficient queries**: O(wallet UTXOs) instead of O(entire UTXO set)
+Uses Bitcoin Core's descriptor wallet feature to persistently track addresses. After one-time descriptor import, subsequent syncs use `listunspent` which is O(wallet UTXOs) instead of scanning the entire UTXO set. Provides mempool awareness and real-time balance updates.
 
-**Setup:**
-```python
-from jmwallet.backends import DescriptorWalletBackend, get_mnemonic_fingerprint, generate_wallet_name
-
-# Create backend with deterministic wallet name
-fingerprint = get_mnemonic_fingerprint(mnemonic)
-wallet_name = generate_wallet_name(fingerprint, "mainnet")
-
-backend = DescriptorWalletBackend(
-    rpc_url="http://127.0.0.1:8332",
-    rpc_user="user",
-    rpc_password="pass",
-    wallet_name=wallet_name,
-)
-
-# One-time setup: create wallet and import descriptors
-wallet_service = WalletService(mnemonic, backend, network="mainnet")
-await wallet_service.setup_descriptor_wallet(scan_range=1000, rescan=True)
-
-# Fast sync using listunspent
-utxos = await wallet_service.sync_with_descriptor_wallet()
-```
-
-**Trade-offs:**
-- Requires wallet creation in Bitcoin Core (one-time)
-- Wallet files persist on disk (privacy consideration for shared systems)
-- Initial descriptor import can take time for large ranges with rescan
-
-**Wallet Import/Recovery Workflow:**
-
-When restoring a JoinMarket wallet from mnemonic, follow this workflow:
-
-1. **First Time Setup** (new wallet or recovery):
-```python
-from jmwallet.backends import DescriptorWalletBackend, get_mnemonic_fingerprint, generate_wallet_name
-from jmwallet.wallet import WalletService
-
-# Generate deterministic wallet name from mnemonic
-fingerprint = get_mnemonic_fingerprint(mnemonic)
-wallet_name = generate_wallet_name(fingerprint, network)
-
-# Create backend
-backend = DescriptorWalletBackend(
-    rpc_url="http://127.0.0.1:8332",
-    rpc_user="user",
-    rpc_password="pass",
-    wallet_name=wallet_name,  # Same name for same mnemonic
-)
-
-# Create wallet service
-wallet = WalletService(mnemonic, backend, network=network)
-
-# ONE-TIME: Import descriptors into Bitcoin Core
-# This creates the wallet and imports all address descriptors
-# Set rescan=True to find historical transactions (can be slow on mainnet)
-await wallet.setup_descriptor_wallet(
-    scan_range=1000,        # Import first 1000 addresses per branch
-    rescan=True,            # Scan blockchain for historical txs
-)
-```
-
-2. **Subsequent Uses** (wallet already imported):
-```python
-# Same setup as above
-fingerprint = get_mnemonic_fingerprint(mnemonic)
-wallet_name = generate_wallet_name(fingerprint, network)
-backend = DescriptorWalletBackend(...)
-wallet = WalletService(mnemonic, backend, network=network)
-
-# Fast sync - just queries existing wallet
-utxos = await wallet.sync_with_descriptor_wallet()
-```
-
-**Key Points:**
-- `setup_descriptor_wallet()` should only be called **once** when first importing a wallet
-- Bitcoin Core wallet persists on disk - subsequent runs just load the existing wallet
-- Wallet name is deterministic based on mnemonic, so same mnemonic = same wallet name
-- If you need to expand address range later, call `setup_descriptor_wallet()` again with larger `scan_range`
-- Fidelity bonds require special handling - pass `fidelity_bond_addresses` parameter
-
-**Expanding Address Range:**
-
-If you've used more than 1000 addresses and need to expand:
-```python
-# Re-import with larger range (no rescan needed if already synced)
-await wallet.setup_descriptor_wallet(
-    scan_range=2000,
-    rescan=False,  # Don't rescan - just expand range
-)
-```
-
-**Fidelity Bond Recovery:**
-
-Fidelity bonds use timelocked addresses that aren't part of the standard derivation:
-```python
-# Discover active fidelity bonds (scans all timenumbers)
-bonds = await wallet.discover_fidelity_bonds(max_index=1)
-
-# Extract addresses for import
-bond_addresses = [(b.address, b.locktime, b.index) for b in bonds]
-
-# Import with fidelity bond support
-await wallet.setup_descriptor_wallet(
-    scan_range=1000,
-    fidelity_bond_addresses=bond_addresses,
-    rescan=True,
-)
-```
+Trade-off: Wallet files persist on disk (privacy consideration for shared systems).
 
 ### Bitcoin Core Backend (Legacy)
 
@@ -392,12 +281,9 @@ await wallet.setup_descriptor_wallet(
 - **Validation**: Full validation
 - **Storage**: ~500 GB
 - **Privacy**: High (local node)
-- **Sync Speed**: Slow (scans entire UTXO set each time)
+- **Sync Speed**: Slow (~90s per scan on mainnet)
 
-**Use Case**: Simple scripts or one-off operations where persistent tracking isn't needed.
-
-**Note**: `scantxoutset` scans ~150-200M UTXOs on mainnet, taking 90+ seconds per scan.
-For ongoing wallet operations, use DescriptorWalletBackend instead.
+Scans the entire UTXO set each time. Useful for one-off operations where persistent tracking isn't needed.
 
 ### Neutrino Backend
 
