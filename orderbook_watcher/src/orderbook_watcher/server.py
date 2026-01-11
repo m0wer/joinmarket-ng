@@ -88,6 +88,7 @@ class OrderbookServer:
         for offer in orderbook.offers:
             key = (offer.counterparty, offer.oid)
             if key not in grouped_offers:
+                # Use directory_nodes (plural) which is already populated by the aggregator
                 grouped_offers[key] = {
                     "counterparty": offer.counterparty,
                     "oid": offer.oid,
@@ -97,19 +98,12 @@ class OrderbookServer:
                     "txfee": offer.txfee,
                     "cjfee": offer.cjfee,
                     "fidelity_bond_value": offer.fidelity_bond_value,
-                    "directory_nodes": [offer.directory_node] if offer.directory_node else [],
+                    "directory_nodes": offer.directory_nodes.copy(),
                     "fidelity_bond_data": offer.fidelity_bond_data,
-                    "features": offer.features,
+                    "features": offer.features.copy(),
                 }
-            elif (
-                offer.directory_node
-                and offer.directory_node not in grouped_offers[key]["directory_nodes"]
-            ):
-                grouped_offers[key]["directory_nodes"].append(offer.directory_node)
-                # Merge features from multiple directories
-                for feature, value in offer.features.items():
-                    if value:
-                        grouped_offers[key]["features"][feature] = value
+            # Offers are already deduplicated by the aggregator with directory_nodes populated
+            # This branch should not be reached, but handle it gracefully just in case
 
         # Calculate feature statistics
         feature_stats: dict[str, int] = {}

@@ -5,6 +5,7 @@ These tests verify that:
 1. Offers with the same fidelity bond UTXO are deduplicated (keeping newest)
 2. Offers from disconnected makers are removed on peerlist refresh
 3. Bond-based deduplication works correctly across nick changes
+4. directory_nodes tracks all directories that announced an offer
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from __future__ import annotations
 import time
 
 from jmcore.directory_client import DirectoryClient, OfferWithTimestamp
-from jmcore.models import Offer, OfferType
+from jmcore.models import FidelityBond, Offer, OfferType, OrderBook
 
 
 class TestOfferWithTimestamp:
@@ -157,6 +158,50 @@ class TestDirectoryClientBondDeduplication:
 
         assert len(client.offers) == 1
         assert ("J5nobond", 0) in client.offers
+
+    def test_store_offer_same_maker_multiple_oids_same_bond(self) -> None:
+        """Same maker can have multiple offers (different oids) with the same bond."""
+        client = DirectoryClient(
+            host="test.onion",
+            port=5222,
+            network="regtest",
+        )
+
+        bond_utxo = "abc123def456:0"
+
+        # Store first offer from maker
+        offer1 = Offer(
+            counterparty="J5maker",
+            oid=0,
+            ordertype=OfferType.SW0_ABSOLUTE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="100",
+        )
+        client._store_offer(("J5maker", 0), offer1, bond_utxo)
+
+        # Store second offer from SAME maker, different oid, same bond
+        offer2 = Offer(
+            counterparty="J5maker",
+            oid=1,
+            ordertype=OfferType.SW0_ABSOLUTE,
+            minsize=50000,
+            maxsize=2000000,
+            txfee=500,
+            cjfee="150",
+        )
+        client._store_offer(("J5maker", 1), offer2, bond_utxo)
+
+        # Both offers should coexist (same maker, different oids)
+        assert len(client.offers) == 2
+        assert ("J5maker", 0) in client.offers
+        assert ("J5maker", 1) in client.offers
+
+        # Both should be tracked in the bond mapping
+        assert bond_utxo in client._bond_to_offers
+        assert ("J5maker", 0) in client._bond_to_offers[bond_utxo]
+        assert ("J5maker", 1) in client._bond_to_offers[bond_utxo]
 
 
 class TestDirectoryClientNickLeave:
@@ -427,3 +472,587 @@ class TestDirectoryClientStalenessCleanup:
 
         removed = client.cleanup_stale_offers(max_age_seconds=1800.0)
         assert removed == 0
+
+
+class TestOfferDirectoryNodesTracking:
+    """Tests for tracking multiple directory nodes per offer."""
+
+    def test_offer_directory_nodes_default_empty(self) -> None:
+        """Offer.directory_nodes should default to empty list."""
+        offer = Offer(
+            counterparty="J5test",
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="0.001",
+        )
+        assert offer.directory_nodes == []
+
+    def test_offer_directory_nodes_can_be_set(self) -> None:
+        """Offer.directory_nodes can be set to a list of directory nodes."""
+        offer = Offer(
+            counterparty="J5test",
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="0.001",
+            directory_nodes=["dir1.onion:5222", "dir2.onion:5222"],
+        )
+        assert offer.directory_nodes == ["dir1.onion:5222", "dir2.onion:5222"]
+
+    def test_orderbook_get_offers_by_directory_uses_directory_nodes(self) -> None:
+        """OrderBook.get_offers_by_directory() should use directory_nodes list."""
+        # Create an offer announced by multiple directories
+        offer = Offer(
+            counterparty="J5test",
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="0.001",
+            directory_nodes=["dir1.onion:5222", "dir2.onion:5222", "dir3.onion:5222"],
+        )
+
+        orderbook = OrderBook()
+        orderbook.offers.append(offer)
+
+        offers_by_dir = orderbook.get_offers_by_directory()
+
+        # The offer should appear under each directory it was announced on
+        assert "dir1.onion:5222" in offers_by_dir
+        assert "dir2.onion:5222" in offers_by_dir
+        assert "dir3.onion:5222" in offers_by_dir
+        assert len(offers_by_dir["dir1.onion:5222"]) == 1
+        assert len(offers_by_dir["dir2.onion:5222"]) == 1
+        assert len(offers_by_dir["dir3.onion:5222"]) == 1
+        assert offers_by_dir["dir1.onion:5222"][0] == offer
+        assert offers_by_dir["dir2.onion:5222"][0] == offer
+        assert offers_by_dir["dir3.onion:5222"][0] == offer
+
+    def test_orderbook_get_offers_by_directory_fallback_to_directory_node(self) -> None:
+        """OrderBook.get_offers_by_directory() should fallback to directory_node if list empty."""
+        # Create an offer with only directory_node set (not directory_nodes)
+        offer = Offer(
+            counterparty="J5test",
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="0.001",
+            directory_node="dir1.onion:5222",
+        )
+
+        orderbook = OrderBook()
+        orderbook.offers.append(offer)
+
+        offers_by_dir = orderbook.get_offers_by_directory()
+
+        # Should fallback to directory_node (singular)
+        assert "dir1.onion:5222" in offers_by_dir
+        assert len(offers_by_dir["dir1.onion:5222"]) == 1
+
+    def test_orderbook_get_offers_by_directory_unknown_when_no_directory(self) -> None:
+        """OrderBook.get_offers_by_directory() should use 'unknown' if no directory info."""
+        offer = Offer(
+            counterparty="J5test",
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="0.001",
+        )
+
+        orderbook = OrderBook()
+        orderbook.offers.append(offer)
+
+        offers_by_dir = orderbook.get_offers_by_directory()
+
+        assert "unknown" in offers_by_dir
+        assert len(offers_by_dir["unknown"]) == 1
+
+
+class TestBondDirectoryNodesTracking:
+    """Tests for tracking multiple directory nodes per fidelity bond.
+
+    Bonds inherit directory_nodes from their associated offers - a bond is
+    counted in all directories where the maker's offers appeared.
+    """
+
+    def test_bond_directory_nodes_default_empty(self) -> None:
+        """FidelityBond.directory_nodes should default to empty list."""
+        bond = FidelityBond(
+            counterparty="J5test",
+            utxo_txid="0" * 64,
+            utxo_vout=0,
+            locktime=500000,
+            amount=10000000,
+            script="0014abcd",
+            utxo_confirmations=100,
+            cert_expiry=1700000000,
+        )
+        assert bond.directory_nodes == []
+
+    def test_bond_directory_nodes_can_be_set(self) -> None:
+        """FidelityBond.directory_nodes can be set to a list of directory nodes."""
+        bond = FidelityBond(
+            counterparty="J5test",
+            utxo_txid="0" * 64,
+            utxo_vout=0,
+            locktime=500000,
+            amount=10000000,
+            script="0014abcd",
+            utxo_confirmations=100,
+            cert_expiry=1700000000,
+            directory_nodes=["dir1.onion:5222", "dir2.onion:5222"],
+        )
+        assert bond.directory_nodes == ["dir1.onion:5222", "dir2.onion:5222"]
+
+    def test_bond_inherits_directory_nodes_from_offers(self) -> None:
+        """Bond directory_nodes should be populated from associated offers.
+
+        This simulates the aggregator's logic where bonds inherit directory_nodes
+        from all offers of the same counterparty.
+        """
+        # Create a bond
+        bond = FidelityBond(
+            counterparty="J5test",
+            utxo_txid="a" * 64,
+            utxo_vout=0,
+            locktime=500000,
+            amount=10000000,
+            script="0014abcd",
+            utxo_confirmations=100,
+            cert_expiry=1700000000,
+        )
+
+        # Create offers from the same maker seen on different directories
+        offer1 = Offer(
+            counterparty="J5test",
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="0.001",
+            directory_nodes=["dir1.onion:5222", "dir2.onion:5222"],
+        )
+
+        offer2 = Offer(
+            counterparty="J5test",
+            oid=1,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="0.001",
+            directory_nodes=["dir2.onion:5222", "dir3.onion:5222"],
+        )
+
+        # Simulate aggregator logic: populate bond directory_nodes from offers
+        maker_offers = [offer1, offer2]
+        all_directories: set[str] = set()
+        for offer in maker_offers:
+            all_directories.update(offer.directory_nodes)
+        bond.directory_nodes = sorted(all_directories)
+
+        # Bond should be counted in all directories where offers appeared
+        assert len(bond.directory_nodes) == 3
+        assert "dir1.onion:5222" in bond.directory_nodes
+        assert "dir2.onion:5222" in bond.directory_nodes
+        assert "dir3.onion:5222" in bond.directory_nodes
+
+
+class TestBondDeduplicationAcrossDirectories:
+    """Tests for bond deduplication logic in the aggregator.
+
+    This tests the scenario where the same maker with the same bond appears
+    on multiple directories, and ensures we don't lose directory tracking.
+    """
+
+    def test_same_maker_same_bond_across_directories_merges_nodes(self) -> None:
+        """When same maker+bond appears on multiple directories, merge directory_nodes.
+
+        This simulates the aggregator's get_live_orderbook() logic processing offers
+        from multiple directories where the same maker is present.
+        """
+        # Simulate the aggregator's bond_to_best_offer dict structure
+        bond_utxo_key = "abc123def456:0"
+        bond_to_best_offer: dict[str, tuple[Offer, float, list[str]]] = {}
+
+        # First directory announces the offer
+        offer1 = Offer(
+            counterparty="J5maker",
+            oid=0,
+            ordertype=OfferType.SW0_ABSOLUTE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="100",
+            directory_node="dir1.onion:5222",
+        )
+        timestamp1 = 1000.0
+        directory_nodes = [offer1.directory_node] if offer1.directory_node else []
+        bond_to_best_offer[bond_utxo_key] = (offer1, timestamp1, directory_nodes)
+
+        # Second directory announces the SAME offer (same maker, same oid, same bond)
+        offer2 = Offer(
+            counterparty="J5maker",
+            oid=0,
+            ordertype=OfferType.SW0_ABSOLUTE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="100",
+            directory_node="dir2.onion:5222",
+        )
+        timestamp2 = 1005.0  # Slightly newer
+
+        # Simulate aggregator logic
+        old_offer, old_timestamp, directory_nodes = bond_to_best_offer[bond_utxo_key]
+        is_same_maker = old_offer.counterparty == offer2.counterparty
+
+        if is_same_maker:
+            # Merge directory_nodes
+            if offer2.directory_node and offer2.directory_node not in directory_nodes:
+                directory_nodes.append(offer2.directory_node)
+            # Keep newer timestamp
+            if timestamp2 > old_timestamp:
+                bond_to_best_offer[bond_utxo_key] = (offer2, timestamp2, directory_nodes)
+
+        # Verify: Should have merged directory_nodes
+        _final_offer, _final_timestamp, final_directories = bond_to_best_offer[bond_utxo_key]
+        assert len(final_directories) == 2
+        assert "dir1.onion:5222" in final_directories
+        assert "dir2.onion:5222" in final_directories
+
+    def test_different_maker_same_bond_with_large_time_diff_replaces(self) -> None:
+        """When different maker uses same bond after >60s, treat as legitimate restart."""
+        bond_utxo_key = "abc123def456:0"
+        bond_to_best_offer: dict[str, tuple[Offer, float, list[str]]] = {}
+
+        # First maker with bond
+        offer1 = Offer(
+            counterparty="J5oldnick",
+            oid=0,
+            ordertype=OfferType.SW0_ABSOLUTE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="100",
+            directory_node="dir1.onion:5222",
+        )
+        timestamp1 = 1000.0
+        directory_nodes = [offer1.directory_node] if offer1.directory_node else []
+        bond_to_best_offer[bond_utxo_key] = (offer1, timestamp1, directory_nodes)
+
+        # Second maker with SAME bond, 120 seconds later
+        offer2 = Offer(
+            counterparty="J5newnick",
+            oid=0,
+            ordertype=OfferType.SW0_ABSOLUTE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="100",
+            directory_node="dir1.onion:5222",
+        )
+        timestamp2 = 1120.0  # 120s later
+
+        # Simulate aggregator logic
+        old_offer, old_timestamp, directory_nodes = bond_to_best_offer[bond_utxo_key]
+        is_same_maker = old_offer.counterparty == offer2.counterparty
+
+        if not is_same_maker:
+            time_diff = timestamp2 - old_timestamp
+            # Only replace if time difference suggests legitimate restart (>60s)
+            if time_diff > 60:
+                # Reset directory_nodes for new maker
+                new_directory_nodes = [offer2.directory_node] if offer2.directory_node else []
+                bond_to_best_offer[bond_utxo_key] = (offer2, timestamp2, new_directory_nodes)
+
+        # Verify: Should have replaced with new maker
+        final_offer, _final_timestamp, final_directories = bond_to_best_offer[bond_utxo_key]
+        assert final_offer.counterparty == "J5newnick"
+        assert len(final_directories) == 1
+        assert "dir1.onion:5222" in final_directories
+
+    def test_different_maker_same_bond_with_small_time_diff_ignored(self) -> None:
+        """When different maker uses same bond with <60s diff, likely clock skew - ignore."""
+        bond_utxo_key = "abc123def456:0"
+        bond_to_best_offer: dict[str, tuple[Offer, float, list[str]]] = {}
+
+        # First maker with bond
+        offer1 = Offer(
+            counterparty="J5maker1",
+            oid=0,
+            ordertype=OfferType.SW0_ABSOLUTE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="100",
+            directory_node="dir1.onion:5222",
+        )
+        timestamp1 = 1000.0
+        directory_nodes = [offer1.directory_node] if offer1.directory_node else []
+        bond_to_best_offer[bond_utxo_key] = (offer1, timestamp1, directory_nodes)
+
+        # Second maker with SAME bond, only 5 seconds later (likely clock skew)
+        offer2 = Offer(
+            counterparty="J5maker2",
+            oid=0,
+            ordertype=OfferType.SW0_ABSOLUTE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="100",
+            directory_node="dir2.onion:5222",
+        )
+        timestamp2 = 1005.0  # 5s later
+
+        # Simulate aggregator logic
+        old_offer, old_timestamp, directory_nodes = bond_to_best_offer[bond_utxo_key]
+        is_same_maker = old_offer.counterparty == offer2.counterparty
+
+        if not is_same_maker:
+            time_diff = timestamp2 - old_timestamp
+            # Ignore if time difference is too small (<60s) - likely clock skew
+            if abs(time_diff) >= 60:
+                new_directory_nodes = [offer2.directory_node] if offer2.directory_node else []
+                bond_to_best_offer[bond_utxo_key] = (offer2, timestamp2, new_directory_nodes)
+            # else: ignore, keep old offer
+
+        # Verify: Should have kept the original maker (not replaced)
+        final_offer, _final_timestamp, final_directories = bond_to_best_offer[bond_utxo_key]
+        assert final_offer.counterparty == "J5maker1"
+        assert len(final_directories) == 1
+        assert "dir1.onion:5222" in final_directories
+
+
+class TestBondDeduplicationDirectoryTracking:
+    """Tests for bond deduplication tracking directory_nodes.
+
+    Bonds can be announced on multiple directories, and should track all of them
+    independently of whether the maker has offers.
+    """
+
+    def test_bond_deduplication_merges_directory_nodes(self) -> None:
+        """When same bond appears on multiple directories, merge directory_nodes."""
+        # Simulate bond deduplication logic
+        unique_bonds: dict[str, FidelityBond] = {}
+
+        # First directory announces bond
+        bond1 = FidelityBond(
+            counterparty="J5maker",
+            utxo_txid="a" * 64,
+            utxo_vout=0,
+            locktime=500000,
+            amount=10000000,
+            script="0014abcd",
+            utxo_confirmations=100,
+            cert_expiry=1700000000,
+            directory_node="dir1.onion:5222",
+        )
+        cache_key = f"{bond1.utxo_txid}:{bond1.utxo_vout}"
+
+        if cache_key not in unique_bonds:
+            if bond1.directory_node:
+                bond1.directory_nodes = [bond1.directory_node]
+            unique_bonds[cache_key] = bond1
+
+        # Second directory announces SAME bond
+        bond2 = FidelityBond(
+            counterparty="J5maker",
+            utxo_txid="a" * 64,
+            utxo_vout=0,
+            locktime=500000,
+            amount=10000000,
+            script="0014abcd",
+            utxo_confirmations=100,
+            cert_expiry=1700000000,
+            directory_node="dir2.onion:5222",
+        )
+
+        if cache_key not in unique_bonds:
+            if bond2.directory_node:
+                bond2.directory_nodes = [bond2.directory_node]
+            unique_bonds[cache_key] = bond2
+        else:
+            # Merge directory_nodes
+            existing_bond = unique_bonds[cache_key]
+            if bond2.directory_node and bond2.directory_node not in existing_bond.directory_nodes:
+                existing_bond.directory_nodes.append(bond2.directory_node)
+
+        # Verify: Should have merged both directories
+        final_bond = unique_bonds[cache_key]
+        assert len(final_bond.directory_nodes) == 2
+        assert "dir1.onion:5222" in final_bond.directory_nodes
+        assert "dir2.onion:5222" in final_bond.directory_nodes
+
+    def test_bond_without_offers_keeps_announcement_directories(self) -> None:
+        """Bond announced on directories should track them even without offers.
+
+        This tests the scenario where a maker has a bond but no active offers.
+        The bond should still be counted in the directory statistics.
+        """
+        # Create bond announced on multiple directories (from deduplication)
+        bond = FidelityBond(
+            counterparty="J5maker",
+            utxo_txid="a" * 64,
+            utxo_vout=0,
+            locktime=500000,
+            amount=10000000,
+            script="0014abcd",
+            utxo_confirmations=100,
+            cert_expiry=1700000000,
+            directory_nodes=["dir1.onion:5222", "dir2.onion:5222"],
+        )
+
+        # No offers from this maker
+        maker_offers: list[Offer] = []
+
+        # Simulate aggregator's bond directory_nodes population
+        if maker_offers:
+            all_directories: set[str] = set(bond.directory_nodes)
+            for offer in maker_offers:
+                all_directories.update(offer.directory_nodes)
+            bond.directory_nodes = sorted(all_directories)
+        # else: Keep bond's existing directory_nodes
+
+        # Verify: Bond should keep its announcement directories
+        assert len(bond.directory_nodes) == 2
+        assert "dir1.onion:5222" in bond.directory_nodes
+        assert "dir2.onion:5222" in bond.directory_nodes
+
+    def test_bond_merges_announcement_and_offer_directories(self) -> None:
+        """Bond should track BOTH announcement directories AND offer directories.
+
+        A bond might be announced on directory A and B, while the maker's offers
+        appear on directory B and C. The bond should be counted in all three.
+        """
+        # Bond announced on dir1 and dir2 (from deduplication)
+        bond = FidelityBond(
+            counterparty="J5maker",
+            utxo_txid="a" * 64,
+            utxo_vout=0,
+            locktime=500000,
+            amount=10000000,
+            script="0014abcd",
+            utxo_confirmations=100,
+            cert_expiry=1700000000,
+            directory_nodes=["dir1.onion:5222", "dir2.onion:5222"],
+        )
+
+        # Maker has offers on dir2 and dir3
+        offer = Offer(
+            counterparty="J5maker",
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="0.001",
+            directory_nodes=["dir2.onion:5222", "dir3.onion:5222"],
+        )
+        maker_offers = [offer]
+
+        # Simulate aggregator's bond directory_nodes population
+        if maker_offers:
+            all_directories: set[str] = set(bond.directory_nodes)  # Start with bond's own
+            for offer in maker_offers:
+                all_directories.update(offer.directory_nodes)
+            bond.directory_nodes = sorted(all_directories)
+
+        # Verify: Bond should be in all three directories (merged)
+        assert len(bond.directory_nodes) == 3
+        assert "dir1.onion:5222" in bond.directory_nodes
+        assert "dir2.onion:5222" in bond.directory_nodes
+        assert "dir3.onion:5222" in bond.directory_nodes
+
+
+class TestOfferDeduplicationPreservesDirectoryNodes:
+    """Tests that the second deduplication pass preserves directory_nodes.
+
+    The aggregator has two deduplication passes:
+    1. Bond-based: groups by bond UTXO, accumulates directory_nodes
+    2. Offer-based: groups by (counterparty, oid), merges directory_nodes
+
+    The bug was that the second pass would reset directory_nodes to just
+    [offer.directory_node] for the first occurrence, discarding the
+    accumulated list from the bond deduplication.
+    """
+
+    def test_bond_offer_preserves_directory_nodes_in_second_pass(self) -> None:
+        """Bond offer with accumulated directory_nodes should not be reset in second pass."""
+        # Simulate bond deduplication output: offer with multiple directory_nodes
+        offer = Offer(
+            counterparty="J5maker",
+            oid=0,
+            ordertype=OfferType.SW0_ABSOLUTE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="100",
+            directory_node="dir1.onion:5222",  # Original directory_node
+            directory_nodes=[
+                "dir1.onion:5222",
+                "dir2.onion:5222",
+                "dir3.onion:5222",
+            ],  # Accumulated
+        )
+
+        # Simulate second pass deduplication
+        offer_key_to_offer: dict[tuple[str, int], Offer] = {}
+        key = (offer.counterparty, offer.oid)
+
+        if key not in offer_key_to_offer:
+            # First time seeing this offer
+            # BUG: Old code would reset directory_nodes here
+            # FIX: Preserve existing directory_nodes (from bond deduplication) or initialize
+            if not offer.directory_nodes and offer.directory_node:
+                offer.directory_nodes = [offer.directory_node]
+            offer_key_to_offer[key] = offer
+
+        # Verify: directory_nodes should NOT be reset to single item
+        result_offer = offer_key_to_offer[key]
+        assert len(result_offer.directory_nodes) == 3
+        assert "dir1.onion:5222" in result_offer.directory_nodes
+        assert "dir2.onion:5222" in result_offer.directory_nodes
+        assert "dir3.onion:5222" in result_offer.directory_nodes
+
+    def test_non_bond_offer_still_initializes_directory_nodes(self) -> None:
+        """Non-bond offer without directory_nodes should initialize from directory_node."""
+        # Non-bond offer: has directory_node but not directory_nodes
+        offer = Offer(
+            counterparty="J5maker",
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="0.001",
+            directory_node="dir1.onion:5222",
+            # directory_nodes is empty by default
+        )
+        assert offer.directory_nodes == []
+
+        # Simulate second pass deduplication
+        offer_key_to_offer: dict[tuple[str, int], Offer] = {}
+        key = (offer.counterparty, offer.oid)
+
+        if key not in offer_key_to_offer:
+            # Preserve existing directory_nodes or initialize from directory_node
+            if not offer.directory_nodes and offer.directory_node:
+                offer.directory_nodes = [offer.directory_node]
+            offer_key_to_offer[key] = offer
+
+        # Verify: directory_nodes should be initialized from directory_node
+        result_offer = offer_key_to_offer[key]
+        assert len(result_offer.directory_nodes) == 1
+        assert "dir1.onion:5222" in result_offer.directory_nodes

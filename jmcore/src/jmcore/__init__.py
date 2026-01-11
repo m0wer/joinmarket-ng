@@ -70,6 +70,14 @@ from jmcore.models import (
     get_default_directory_nodes,
 )
 from jmcore.nick_tracker import NickTracker
+from jmcore.notifications import (
+    NotificationConfig,
+    NotificationPriority,
+    Notifier,
+    get_notifier,
+    load_notification_config,
+    reset_notifier,
+)
 from jmcore.paths import get_commitment_blacklist_path, get_default_data_dir
 from jmcore.podle import (
     PoDLECommitment,
@@ -160,6 +168,13 @@ __all__ = [
     "PeerInfo",
     # Nick tracking
     "NickTracker",
+    # Notifications
+    "NotificationConfig",
+    "NotificationPriority",
+    "Notifier",
+    "get_notifier",
+    "load_notification_config",
+    "reset_notifier",
     # Paths
     "get_commitment_blacklist_path",
     "get_default_data_dir",

@@ -217,6 +217,8 @@ class DirectoryClient:
         self._peerlist_supported: bool | None = None  # None = unknown, True/False = known
         self._last_peerlist_request_time: float = 0.0
         self._peerlist_min_interval: float = 60.0  # Minimum seconds between peerlist requests
+        self._peerlist_timeout: float = 120.0  # Longer timeout for peerlist (can be large over Tor)
+        self._peerlist_timeout_count: int = 0  # Track consecutive timeouts
 
     async def connect(self) -> None:
         """Connect to the directory server and perform handshake."""
@@ -340,6 +342,9 @@ class DirectoryClient:
         Note: Reference implementation directories do NOT support GETPEERLIST.
         This method shares peerlist support tracking with get_peerlist_with_features().
 
+        For directories that announced peerlist_features during handshake, we use
+        a longer timeout and don't permanently disable requests on timeout.
+
         Returns:
             List of active peer nicks. Returns empty list if directory doesn't
             support GETPEERLIST. Returns None if rate-limited (use cached data).
@@ -348,7 +353,8 @@ class DirectoryClient:
             raise DirectoryClientError("Not connected")
 
         # Skip if we already know this directory doesn't support GETPEERLIST
-        if self._peerlist_supported is False:
+        # (only applies to directories that didn't announce peerlist_features)
+        if self._peerlist_supported is False and not self.directory_peerlist_features:
             logger.debug("Skipping GETPEERLIST - directory doesn't support it")
             return []
 
@@ -372,20 +378,21 @@ class DirectoryClient:
         start_time = asyncio.get_event_loop().time()
         response = None
 
+        # Use longer timeout for directories that support peerlist_features
+        # (the peerlist can be large and slow to transmit over Tor)
+        peerlist_timeout = (
+            self._peerlist_timeout if self.directory_peerlist_features else self.timeout
+        )
+
         while True:
             elapsed = asyncio.get_event_loop().time() - start_time
-            if elapsed > self.timeout:
-                # Timeout without PEERLIST response - directory likely doesn't support it
-                logger.info(
-                    f"Timed out waiting for PEERLIST from {self.host}:{self.port} - "
-                    "directory likely doesn't support GETPEERLIST (reference implementation)"
-                )
-                self._peerlist_supported = False
+            if elapsed > peerlist_timeout:
+                self._handle_peerlist_timeout()
                 return []
 
             try:
                 response_data = await asyncio.wait_for(
-                    self.connection.receive(), timeout=self.timeout - elapsed
+                    self.connection.receive(), timeout=peerlist_timeout - elapsed
                 )
                 response = json.loads(response_data.decode("utf-8"))
                 msg_type = response.get("type")
@@ -398,17 +405,12 @@ class DirectoryClient:
                     f"Skipping unexpected message type {msg_type} while waiting for PEERLIST"
                 )
             except TimeoutError:
-                # Timeout without PEERLIST response - directory likely doesn't support it
-                logger.info(
-                    f"Timed out waiting for PEERLIST from {self.host}:{self.port} - "
-                    "directory likely doesn't support GETPEERLIST (reference implementation)"
-                )
-                self._peerlist_supported = False
+                self._handle_peerlist_timeout()
                 return []
             except Exception as e:
                 logger.warning(f"Error receiving/parsing message while waiting for PEERLIST: {e}")
-                if asyncio.get_event_loop().time() - start_time > self.timeout:
-                    self._peerlist_supported = False
+                if asyncio.get_event_loop().time() - start_time > peerlist_timeout:
+                    self._handle_peerlist_timeout()
                     return []
 
         peerlist_str = response["line"]
@@ -416,6 +418,7 @@ class DirectoryClient:
 
         # Mark peerlist as supported since we got a valid response
         self._peerlist_supported = True
+        self._peerlist_timeout_count = 0
 
         if not peerlist_str:
             return []
@@ -453,6 +456,10 @@ class DirectoryClient:
         This method tracks whether the directory supports it and skips requests
         to unsupported directories to avoid spamming warnings in their logs.
 
+        For directories that announced peerlist_features during handshake, we use
+        a longer timeout and don't permanently disable requests on timeout (the
+        peerlist may simply be large and slow to transmit over Tor).
+
         Returns:
             List of (nick, location, features) tuples for active peers.
             Features will be empty for directories that don't support peerlist_features.
@@ -462,7 +469,8 @@ class DirectoryClient:
             raise DirectoryClientError("Not connected")
 
         # Skip if we already know this directory doesn't support GETPEERLIST
-        if self._peerlist_supported is False:
+        # (only applies to directories that didn't announce peerlist_features)
+        if self._peerlist_supported is False and not self.directory_peerlist_features:
             logger.debug("Skipping GETPEERLIST - directory doesn't support it")
             return []
 
@@ -486,20 +494,21 @@ class DirectoryClient:
         start_time = asyncio.get_event_loop().time()
         response = None
 
+        # Use longer timeout for directories that support peerlist_features
+        # (the peerlist can be large and slow to transmit over Tor)
+        peerlist_timeout = (
+            self._peerlist_timeout if self.directory_peerlist_features else self.timeout
+        )
+
         while True:
             elapsed = asyncio.get_event_loop().time() - start_time
-            if elapsed > self.timeout:
-                # Timeout without PEERLIST response - directory likely doesn't support it
-                logger.info(
-                    f"Timed out waiting for PEERLIST from {self.host}:{self.port} - "
-                    "directory likely doesn't support GETPEERLIST (reference implementation)"
-                )
-                self._peerlist_supported = False
+            if elapsed > peerlist_timeout:
+                self._handle_peerlist_timeout()
                 return []
 
             try:
                 response_data = await asyncio.wait_for(
-                    self.connection.receive(), timeout=self.timeout - elapsed
+                    self.connection.receive(), timeout=peerlist_timeout - elapsed
                 )
                 response = json.loads(response_data.decode("utf-8"))
                 msg_type = response.get("type")
@@ -512,31 +521,59 @@ class DirectoryClient:
                     f"Skipping unexpected message type {msg_type} while waiting for PEERLIST"
                 )
             except TimeoutError:
-                # Timeout without PEERLIST response - directory likely doesn't support it
-                logger.info(
-                    f"Timed out waiting for PEERLIST from {self.host}:{self.port} - "
-                    "directory likely doesn't support GETPEERLIST (reference implementation)"
-                )
-                self._peerlist_supported = False
+                self._handle_peerlist_timeout()
                 return []
             except Exception as e:
                 logger.warning(f"Error receiving/parsing message while waiting for PEERLIST: {e}")
-                if asyncio.get_event_loop().time() - start_time > self.timeout:
-                    self._peerlist_supported = False
+                if asyncio.get_event_loop().time() - start_time > peerlist_timeout:
+                    self._handle_peerlist_timeout()
                     return []
 
+        # Success - reset timeout counter and mark as supported
+        self._peerlist_timeout_count = 0
+        self._peerlist_supported = True
         peerlist_str = response["line"]
         return self._handle_peerlist_response(peerlist_str)
+
+    def _handle_peerlist_timeout(self) -> None:
+        """Handle timeout when waiting for PEERLIST response."""
+        self._peerlist_timeout_count += 1
+
+        if self.directory_peerlist_features:
+            # Directory announced peerlist_features during handshake, so it supports
+            # GETPEERLIST. Timeout is likely due to large peerlist or network issues.
+            logger.warning(
+                f"Timed out waiting for PEERLIST from {self.host}:{self.port} "
+                f"(attempt {self._peerlist_timeout_count}) - "
+                "peerlist may be large or network is slow"
+            )
+            # Don't disable peerlist requests - directory supports it, just slow
+        else:
+            # Directory didn't announce peerlist_features - likely reference impl
+            logger.info(
+                f"Timed out waiting for PEERLIST from {self.host}:{self.port} - "
+                "directory likely doesn't support GETPEERLIST (reference implementation)"
+            )
+            self._peerlist_supported = False
 
     def _handle_peerlist_response(self, peerlist_str: str) -> list[tuple[str, str, FeatureSet]]:
         """
         Process a PEERLIST response and update internal state.
 
+        Note: Some directories send multiple partial PEERLIST responses (one per peer)
+        instead of a single complete list. We handle this by only adding/updating
+        peers from each response, not removing nicks that aren't present.
+
+        Removal of stale offers is handled by:
+        1. Explicit disconnect markers (;D suffix) in peerlist entries
+        2. The periodic peerlist refresh in OrderbookAggregator
+        3. Staleness cleanup for directories without GETPEERLIST support
+
         Args:
             peerlist_str: Comma-separated list of peer entries
 
         Returns:
-            List of active peers (nick, location, features)
+            List of active peers (nick, location, features) in this response
         """
         logger.debug(f"Peerlist string: {peerlist_str}")
 
@@ -544,16 +581,12 @@ class DirectoryClient:
         self._peerlist_supported = True
 
         if not peerlist_str:
-            # Empty peerlist - clear our active peers tracking
-            old_nicks = set(self._active_peers.keys())
-            self._active_peers.clear()
-            # Remove offers from nicks that are no longer active
-            for nick in old_nicks:
-                self.remove_offers_for_nick(nick)
+            # Empty peerlist response - just return empty list
+            # Don't remove offers as this might be a partial response
             return []
 
         peers: list[tuple[str, str, FeatureSet]] = []
-        new_active_peers: dict[str, str] = {}
+        explicitly_disconnected: list[str] = []
 
         for entry in peerlist_str.split(","):
             # Skip empty entries
@@ -570,9 +603,13 @@ class DirectoryClient:
                     f"Parsed peer: {nick} at {location}, "
                     f"disconnected={disconnected}, features={features.to_comma_string()}"
                 )
-                if not disconnected:
+                if disconnected:
+                    # Nick explicitly marked as disconnected - remove their offers
+                    explicitly_disconnected.append(nick)
+                else:
                     peers.append((nick, location, features))
-                    new_active_peers[nick] = location
+                    # Update/add this nick to active peers
+                    self._active_peers[nick] = location
                     # Always update peer_features cache to track that we've seen this peer
                     # This prevents triggering "new peer" logic for every message from this peer
                     self.peer_features[nick] = features.to_dict()
@@ -580,21 +617,17 @@ class DirectoryClient:
                 logger.warning(f"Failed to parse peerlist entry '{entry}': {e}")
                 continue
 
-        # Find nicks that left (were in old peerlist but not in new)
-        old_nicks = set(self._active_peers.keys())
-        new_nicks = set(new_active_peers.keys())
-        left_nicks = old_nicks - new_nicks
-
-        # Remove offers from nicks that left
-        for nick in left_nicks:
+        # Only remove offers for nicks that are explicitly marked as disconnected
+        for nick in explicitly_disconnected:
             self.remove_offers_for_nick(nick)
 
-        # Update active peers
-        self._active_peers = new_active_peers
-
-        logger.info(
+        logger.trace(
             f"Received {len(peers)} active peers with features from {self.host}:{self.port}"
-            + (f", {len(left_nicks)} nicks left" if left_nicks else "")
+            + (
+                f", {len(explicitly_disconnected)} explicitly disconnected"
+                if explicitly_disconnected
+                else ""
+            )
         )
         return peers
 
@@ -1204,17 +1237,24 @@ class DirectoryClient:
             # Get all offer keys that previously used this bond
             old_offer_keys = self._bond_to_offers.get(bond_utxo_key, set()).copy()
 
-            # Remove old offers (from different nicks using same bond)
+            # Remove old offers from DIFFERENT makers using same bond (maker restart scenario)
+            # Keep multiple offers from SAME maker (same counterparty, different oids)
             for old_key in old_offer_keys:
-                if old_key != offer_key and old_key in self.offers:
-                    logger.info(
+                if (
+                    old_key != offer_key
+                    and old_key in self.offers
+                    and old_key[0] != offer_key[0]  # Different counterparty
+                ):
+                    logger.debug(
                         f"Removing stale offer from {old_key[0]} oid={old_key[1]} - "
                         f"same bond UTXO now used by {offer_key[0]}"
                     )
                     del self.offers[old_key]
 
-            # Clear the old bond -> offers mapping and set up new one
-            self._bond_to_offers[bond_utxo_key] = {offer_key}
+            # Update bond -> offers mapping: add this offer to the set
+            if bond_utxo_key not in self._bond_to_offers:
+                self._bond_to_offers[bond_utxo_key] = set()
+            self._bond_to_offers[bond_utxo_key].add(offer_key)
         else:
             # Remove this offer from any previous bond mapping
             old_offer_data = self.offers.get(offer_key)

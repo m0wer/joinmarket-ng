@@ -231,7 +231,8 @@ main() {
         --cov=orderbook_watcher --cov=maker --cov=taker \
         --cov-report=term-missing \
         "$PROJECT_ROOT/maker/tests/integration/" \
-        "$PROJECT_ROOT/jmwallet/tests/"
+        "$PROJECT_ROOT/jmwallet/tests/" \
+        "$PROJECT_ROOT/directory_server/tests/"
 
     # Save e2e coverage
     if [ -f .coverage.e2e ]; then

@@ -259,15 +259,38 @@ Privacy tradeoff: More inputs = faster consolidation but reveals UTXO clustering
 
 ## Backend Systems
 
-JoinMarket NG supports two blockchain backends with different tradeoffs:
+JoinMarket NG supports three blockchain backends with different tradeoffs:
 
-### Bitcoin Core Backend
+### Descriptor Wallet Backend (Recommended)
+
+- **Method**: `importdescriptors` + `listunspent` RPC
+- **Requirements**: Bitcoin Core v24+
+- **Validation**: Full validation
+- **Storage**: ~900 GB (full node) + small wallet file
+- **Privacy**: High (local node)
+- **Sync Speed**: Fast after initial descriptor import
+
+Uses Bitcoin Core's descriptor wallet feature to persistently track addresses. After one-time descriptor import, subsequent syncs use `listunspent` which is O(wallet UTXOs) instead of scanning the entire UTXO set. Provides mempool awareness and real-time balance updates.
+
+Trade-off: Wallet files persist on disk on the node. Funds are not at risk, but all your addresses are stored in the node's wallet. So never use this with a third-party node.
+
+**Smart Scan for Fast Startup**: By default, descriptor import uses "smart scan" which only scans the blockchain from approximately 1 year ago (52,560 blocks). This allows fast startup on mainnet (seconds instead of 20+ minutes). A full background rescan from genesis is triggered automatically to ensure no old transactions are missed.
+
+Configuration options in `WalletConfig`:
+- `smart_scan: bool = True` - Use fast startup with partial scan
+- `background_full_rescan: bool = True` - Trigger full rescan in background
+- `scan_lookback_blocks: int = 52_560` - How far back to scan initially (~1 year)
+
+### Bitcoin Core Backend (Legacy)
 
 - **Method**: `scantxoutset` RPC (no wallet required)
 - **Requirements**: Bitcoin Core v30+
 - **Validation**: Full validation
-- **Storage**: ~500 GB
+- **Storage**: ~900 GB
 - **Privacy**: High (local node)
+- **Sync Speed**: Slow (~90s per scan on mainnet)
+
+Scans the entire UTXO set each time. Useful for one-off operations where persistent tracking isn't needed.
 
 ### Neutrino Backend
 
@@ -279,7 +302,8 @@ JoinMarket NG supports two blockchain backends with different tradeoffs:
 - **Sync**: Minutes instead of days
 
 **Decision Matrix**:
-- Use Core if: You run a full node, need full validation
+- Use DescriptorWalletBackend if: You run a full node and want fast ongoing operations (recommended)
+- Use BitcoinCoreBackend if: You need simple one-off UTXO queries without wallet setup
 - Use Neutrino if: Limited storage, fast setup, light client needed
 
 
@@ -635,6 +659,98 @@ nick1;host.onion:5222;F:feat1+feat2,nick2;host2.onion:5222
 ```
 
 The `F:` prefix identifies the features field and maintains backward compatibility with legacy clients that don't understand the extension.
+
+---
+
+## Operator Notifications
+
+JoinMarket NG supports push notifications for CoinJoin events via [Apprise](https://github.com/caronc/apprise), enabling alerts through 100+ services including Gotify, Telegram, Discord, Pushover, and email.
+
+### Installation
+
+Notifications are an optional feature. Install with:
+
+```bash
+pip install jmcore[notifications]
+# or
+pip install apprise>=1.8.0
+```
+
+### Configuration
+
+All configuration is via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NOTIFY_URLS` | (none) | Comma-separated Apprise URLs (required to enable) |
+| `NOTIFY_ENABLED` | auto | Set `false` to disable, otherwise enabled if URLs provided |
+| `NOTIFY_TITLE_PREFIX` | `JoinMarket NG` | Prefix for notification titles |
+
+**Privacy settings:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NOTIFY_INCLUDE_AMOUNTS` | `true` | Include satoshi amounts in notifications |
+| `NOTIFY_INCLUDE_TXIDS` | `false` | Include transaction IDs (privacy risk) |
+| `NOTIFY_INCLUDE_NICK` | `true` | Include peer nicks (full, not truncated) |
+
+**Tor/Proxy settings:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NOTIFY_USE_TOR` | `true` | Route notifications through Tor SOCKS proxy |
+
+When enabled, notifications use `TOR_SOCKS_HOST` and `TOR_SOCKS_PORT` environment variables (defaults: `127.0.0.1:9050`).
+
+**Per-event toggles:**
+
+| Variable | Default | Component | Description |
+|----------|---------|-----------|-------------|
+| `NOTIFY_FILL` | `true` | Maker | Notify on !fill requests |
+| `NOTIFY_REJECTION` | `true` | Maker | Notify on rejections |
+| `NOTIFY_SIGNING` | `true` | Maker | Notify on TX signing |
+| `NOTIFY_MEMPOOL` | `true` | Both | Notify when CJ in mempool |
+| `NOTIFY_CONFIRMED` | `true` | Both | Notify on confirmation |
+| `NOTIFY_NICK_CHANGE` | `true` | Maker | Notify on nick change |
+| `NOTIFY_DISCONNECT` | `true` | Maker | Notify on directory disconnect |
+| `NOTIFY_COINJOIN_START` | `true` | Taker | Notify on CoinJoin start |
+| `NOTIFY_COINJOIN_COMPLETE` | `true` | Taker | Notify on CoinJoin complete |
+| `NOTIFY_COINJOIN_FAILED` | `true` | Taker | Notify on CoinJoin failure |
+| `NOTIFY_PEER_EVENTS` | `false` | Directory | Notify on peer connect/disconnect |
+| `NOTIFY_RATE_LIMIT` | `true` | Directory | Notify on rate limit bans |
+| `NOTIFY_STARTUP` | `true` | All | Notify on component startup |
+
+### Example URLs
+
+```bash
+# Gotify (self-hosted)
+export NOTIFY_URLS="gotify://your-server.com/AaBbCcDdEeFf"
+
+# Telegram
+export NOTIFY_URLS="tgram://bot_token/chat_id"
+
+# Discord webhook
+export NOTIFY_URLS="discord://webhook_id/webhook_token"
+
+# Multiple services
+export NOTIFY_URLS="gotify://host/token,tgram://bot/chat"
+
+# Email
+export NOTIFY_URLS="mailto://user:pass@smtp.example.com"
+```
+
+See [Apprise documentation](https://github.com/caronc/apprise#supported-notifications) for 100+ supported services.
+
+### Docker Usage
+
+```yaml
+services:
+  maker:
+    image: joinmarket-ng/maker
+    environment:
+      - NOTIFY_URLS=gotify://your-server.com/token
+      - NOTIFY_INCLUDE_TXIDS=false
+```
 
 ---
 
@@ -1036,6 +1152,46 @@ jm-wallet registry-show bc1q...
 - `txid`, `vout`, `value`: UTXO info (populated after `registry-sync`)
 - `is_funded`: Whether the bond has a confirmed UTXO
 - `is_expired`: Whether the locktime has passed
+
+### Descriptor Wallet Lifecycle
+
+**Important:** The `descriptor_wallet` backend requires importing bond addresses into Bitcoin Core's wallet before they can be detected on-chain.
+
+#### Bond Creation Flow
+
+When you create a new bond with `generate-bond-address`:
+1. ✅ Bond metadata is saved to `fidelity_bonds.json`
+2. ❌ Address is **NOT** imported to descriptor wallet yet
+
+#### Bond Discovery Flow
+
+When you discover bonds with `recover-bonds`:
+1. ✅ Scans blockchain for bonds at all timelocks
+2. ✅ Saves found bonds to `fidelity_bonds.json`
+3. ✅ **Automatically imports** discovered addresses to descriptor wallet (for descriptor_wallet backend)
+
+#### Bond Syncing Flow
+
+When you sync with `registry-sync`:
+1. ✅ Reads bonds from `fidelity_bonds.json`
+2. ✅ **Automatically imports** bond addresses if using descriptor_wallet backend
+3. ✅ Updates UTXO info (txid, vout, value, confirmations)
+
+#### Maker Bot Startup
+
+When the maker bot starts:
+1. ✅ Loads bonds from `fidelity_bonds.json`
+2. ✅ **Automatically imports** bond addresses during wallet setup
+3. ✅ Detects funded bonds and includes proof in offers
+
+#### Manual Operations (info/send)
+
+When using `jm-wallet info` or `jm-wallet send`:
+1. ✅ Loads bonds from `fidelity_bonds.json`
+2. ✅ **Automatically imports** bond addresses if wallet exists
+3. ✅ Shows bond UTXOs in balance/transaction
+
+**Key Point:** All commands now handle descriptor import automatically. You don't need to manually import bond addresses.
 
 ### Spending Fidelity Bonds
 

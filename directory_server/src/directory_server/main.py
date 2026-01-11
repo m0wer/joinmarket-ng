@@ -27,10 +27,15 @@ async def run_server() -> None:
     settings = get_settings()
     setup_logging(settings.log_level)
 
+    server_nick = f"directory-{settings.network}"
+
+    logger.info("=" * 80)
     logger.info("Starting JoinMarket Directory Server")
     logger.info(f"Network: {settings.network}")
+    logger.info(f"Server nick: {server_nick}")
     logger.info(f"Port: {settings.port}")
     logger.info(f"Max peers: {settings.max_peers}")
+    logger.info("=" * 80)
 
     server = DirectoryServer(settings)
 

@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Descriptor Wallet Backend now exposed via CLI**: Users can now select `--backend descriptor_wallet` for fast UTXO tracking.
+  - Available in all CLIs: `jm-wallet`, `jm-maker`, `jm-taker`
+  - Uses Bitcoin Core's `importdescriptors` for one-time wallet setup
+  - Fast syncs via `listunspent` (~1s vs ~90s for scantxoutset)
+  - Automatic descriptor import and wallet setup on first use
+  - **New default backend** for maker, taker, and wallet commands (changed from `full_node`)
+  - Docker compose examples updated to use `descriptor_wallet` by default
+- **Orderbook Watcher: Maker direct reachability tracking**.
+  - Each offer now includes `directly_reachable` field (true/false/null) showing if maker is reachable via direct Tor connection.
+  - Health checker extracts maker features from handshake, useful when directory servers don't provide peerlist features.
+  - Reachability info available in orderbook.json API response for monitoring and debugging.
+  - Note: Unreachable makers are NOT removed from orderbook - directory may still have valid connection.
+- **Operator Notifications**: Push notification system via Apprise for CoinJoin events.
+  - Supports 100+ notification services (Gotify, Telegram, Discord, Pushover, email, etc.)
+  - Privacy-aware: configurable amount/txid/nick inclusion
+  - Per-event toggles for fine-grained control
+  - Fire-and-forget: notifications never block protocol operations
+  - New optional dependency: `pip install jmcore[notifications]`
+  - Components integrated: Maker, Taker, Directory Server, Orderbook Watcher
+  - Docker images now include `apprise` by default for notification support
+- **DescriptorWalletBackend**: New Bitcoin Core backend using descriptor wallets for efficient UTXO tracking.
+  - Uses `importdescriptors` RPC for one-time wallet setup
+  - Uses `listunspent` RPC for fast UTXO queries (O(wallet) vs O(UTXO set))
+  - Persistent tracking: Bitcoin Core maintains UTXO state automatically
+  - Real-time mempool awareness: sees unconfirmed transactions immediately
+  - Deterministic wallet naming based on mnemonic fingerprint
+- `setup_descriptor_wallet()` method in WalletService for one-time descriptor import
+- `sync_with_descriptor_wallet()` method for fast wallet sync via listunspent
+- Helper functions `generate_wallet_name()` and `get_mnemonic_fingerprint()` for deterministic wallet naming
 - Early backend connection validation in taker CLI before wallet sync.
 - Estimated transaction fee logging before user confirmation prompt (assumes 1 input per maker + 20% buffer).
 - Final transaction summary before broadcast with exact input/output counts, maker fees, and mining fees.
@@ -17,9 +46,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `BroadcastPolicy.MULTIPLE_PEERS` - new broadcast policy that sends to N random makers (default 3).
 - `broadcast_peer_count` configuration parameter to control number of peers for MULTIPLE_PEERS policy.
 - Unified broadcast behavior between full node and Neutrino clients.
+- Comprehensive backend comparison documentation in jmwallet README with performance characteristics and use cases.
+- **Smart Scan for Descriptor Wallet**: Fast startup for descriptor wallet import on mainnet.
+  - Initial import only scans ~1 year of blockchain history (52,560 blocks)
+  - Reduces first-time wallet sync from 20+ minutes to seconds on mainnet
+  - Background full rescan runs automatically to ensure no old transactions are missed
+  - Configurable via `smart_scan`, `background_full_rescan`, `scan_lookback_blocks` in WalletConfig
 
 ### Changed
 
+- **Default backend changed from `full_node` to `descriptor_wallet`** for all components (maker, taker, wallet CLI).
+  - Full node (scantxoutset) still available via `--backend full_node`
+  - Provides significant performance improvement for ongoing operations (~1s vs ~90s per sync)
+  - Docker compose examples updated to use descriptor_wallet by default
 - Fee rate handling improvements:
   - Changed default fee rate from 10 sat/vB to 1 sat/vB fallback.
   - Added support for sub-1 sat/vB fee rates (float instead of int).
@@ -31,7 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Backend `estimate_fee()` now returns `float` for precision with sub-sat rates.
 - Added `can_estimate_fee()` method to backends for capability detection.
 - Increased default counterparty count from 3 to 10 makers.
-- Reduced logging verbosity: parsed offers now logged at DEBUG level instead of INFO.
+- Reduced logging verbosity: parsed offers, fidelity bond creation, and Neutrino operations now logged at DEBUG level.
+- Improved sweep coinjoin logging: initial "Starting CoinJoin" message now shows "ALL (sweep)" instead of "0 sats".
 - **Default broadcast policy changed from RANDOM_PEER to MULTIPLE_PEERS** (sends to 3 random makers).
 - **Unified broadcast behavior**: All policies (SELF, RANDOM_PEER, MULTIPLE_PEERS, NOT_SELF) work
   the same way for both full node and Neutrino backends. The only difference is Neutrino skips
@@ -39,9 +79,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - RANDOM_PEER and MULTIPLE_PEERS now allow self-fallback if all makers fail (both full node and Neutrino).
 - Neutrino pending transaction timeout reduced from 48h to 10h before warning.
 - Neutrino pending transaction monitoring uses block-based UTXO verification (cannot access mempool).
+- Neutrino backend UTXO detection improved with incremental rescans and retries for better robustness.
 
 ### Fixed
 
+- **Taker failing when Maker uses multiple UTXOs**: Fixed handling of multiple `!sig` messages from makers with multiple inputs.
+- **Orderbook Watcher peerlist timeout with JoinMarket NG directories**: Fixed incorrect timeout handling when directory announces `peerlist_features` during handshake.
+  - Directories announcing `peerlist_features` now use a longer timeout (120s vs 30s) for peerlist requests over Tor.
+  - Timeout on directories with `peerlist_features` no longer permanently disables peerlist requests (the peerlist may simply be large and slow to transmit).
+  - Improved log messages to distinguish between "likely reference implementation" timeouts and "large peerlist or slow network" timeouts.
+- **Orderbook Watcher bond deduplication logging noise**: Fixed false "stale offer replacement" logs when the same offer from the same maker was seen from multiple directories.
+  - Same (nick, oid) pairs are now silently deduplicated instead of logging as "stale replacement".
+  - Only logs when an actual different maker reuses the same bond UTXO (e.g., after nick restart).
+- **Orderbook Watcher aggressive offer pruning**: Fixed overly aggressive cleanup that was removing valid offers.
+  - **Removed age-based staleness cleanup entirely** - makers can run for months, offer age is not a valid signal.
+  - Maker health check no longer removes offers from makers that are unreachable via direct connection (directory may still have valid connection).
+  - Peerlist-based cleanup now skips if any directory refresh fails (avoids false positives).
+  - Philosophy changed to **"show offers when in doubt"** rather than aggressive pruning.
+  - Only removes offers when explicitly signaled by directory (`;D` disconnect marker or nick absent from ALL directories' peerlists).
+- **Orderbook Watcher showing only few offers despite receiving many from directories**.
+  - Directory servers send realtime PEERLIST updates (one per peer) when peers connect/disconnect.
+  - DirectoryClient was incorrectly treating these partial updates as complete peerlist replacements.
+  - Now accumulates active peers from partial responses instead of replacing the entire list.
+  - Only removes offers for nicks explicitly marked as disconnected (`;D` suffix).
+  - Periodic peerlist refresh now collects active nicks from ALL directories before cleanup.
+  - This fixes orderbooks being pruned down to just the most recently seen makers.
 - Critical maker transaction fee calculation bug causing "Change output value too low" errors.
   - Maker `txfee` from offers is the total transaction fee contribution (in satoshis), not per-input/output.
   - Previously incorrectly multiplied `offer.txfee` by `(num_inputs + num_outputs + 1)`, causing maker change calculations to fail.

@@ -302,8 +302,8 @@ def fresh_docker_makers():
             taker_commitments.unlink()
             logger.info(f"Cleared taker used commitments: {taker_commitments}")
 
-        # Clear commitment blacklists for both makers before restarting
-        for maker in ["jm-maker1", "jm-maker2"]:
+        # Clear commitment blacklists for all makers before restarting
+        for maker in ["jm-maker1", "jm-maker2", "jm-maker3", "jm-maker-neutrino"]:
             try:
                 subprocess.run(
                     [
@@ -322,9 +322,16 @@ def fresh_docker_makers():
             except Exception as e:
                 logger.warning(f"Failed to clear commitment blacklist for {maker}: {e}")
 
-        # Restart the e2e profile makers
+        # Restart the e2e profile makers (including neutrino maker for neutrino tests)
         result = subprocess.run(
-            ["docker", "restart", "jm-maker1", "jm-maker2"],
+            [
+                "docker",
+                "restart",
+                "jm-maker1",
+                "jm-maker2",
+                "jm-maker3",
+                "jm-maker-neutrino",
+            ],
             capture_output=True,
             text=True,
             timeout=60,
@@ -335,7 +342,7 @@ def fresh_docker_makers():
             # - Container start: ~5s
             # - Wallet sync: ~10-20s
             # - Directory connection & offer announcement: ~5-10s
-            time.sleep(45)
+            time.sleep(90)
         else:
             logger.warning(f"Failed to restart makers: {result.stderr}")
     except subprocess.TimeoutExpired:

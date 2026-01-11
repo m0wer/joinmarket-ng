@@ -353,8 +353,8 @@ class OrderbookAggregator:
         2. Remove offers from nicks that are no longer in ANY directory's peerlist
         3. Deduplicate offers that use the same fidelity bond UTXO
 
-        This is critical for orderbook accuracy - it ensures we don't show offers
-        from makers that have gone offline or restarted with different nicks.
+        IMPORTANT: Cleanup only happens if ALL directories with peerlist support report
+        the nick as gone. We err on the side of showing offers when in doubt.
         """
         # Initial wait to let connections stabilize
         await asyncio.sleep(120)
@@ -362,26 +362,68 @@ class OrderbookAggregator:
         while True:
             try:
                 # Collect active nicks from ALL connected directories
+                # Always collect nicks even if refresh fails - use cached state
                 all_active_nicks: set[str] = set()
                 directories_checked = 0
+                directories_with_peerlist_support = 0
+                refresh_failures = 0
 
                 for node_id, client in self.clients.items():
                     try:
                         # Refresh peerlist for this client
-                        # This also triggers cleanup of offers for nicks that left
+                        # This updates the client's active_peers tracking
                         await client.get_peerlist_with_features()
-                        active_nicks = client.get_active_nicks()
-                        all_active_nicks.update(active_nicks)
-                        directories_checked += 1
-                        logger.debug(f"Directory {node_id}: {len(active_nicks)} active nicks")
+
+                        # Track if this directory supports peerlist
+                        if client._peerlist_supported:
+                            directories_with_peerlist_support += 1
                     except Exception as e:
                         logger.debug(f"Failed to refresh peerlist from {node_id}: {e}")
+                        refresh_failures += 1
+
+                    # ALWAYS collect active nicks, even if refresh failed
+                    # The client's _active_peers contains accumulated state from previous responses
+                    active_nicks = client.get_active_nicks()
+                    all_active_nicks.update(active_nicks)
+                    directories_checked += 1
+
+                    logger.debug(f"Directory {node_id}: {len(active_nicks)} active nicks")
 
                 if directories_checked > 0:
                     logger.info(
                         f"Peerlist refresh: {len(all_active_nicks)} unique nicks "
-                        f"across {directories_checked} directories"
+                        f"across {directories_checked} directories "
+                        f"({directories_with_peerlist_support} support GETPEERLIST, "
+                        f"{refresh_failures} refresh failures)"
                     )
+
+                    # Clean up offers from nicks that are no longer in ANY directory's peerlist
+                    # Only do this if at least one directory supports GETPEERLIST AND
+                    # we successfully refreshed from all peerlist-supporting directories
+                    if directories_with_peerlist_support > 0 and refresh_failures == 0:
+                        total_removed = 0
+                        all_stale_nicks: set[str] = set()
+                        for client in self.clients.values():
+                            # Get all nicks with offers in this client
+                            client_nicks = {key[0] for key in client.offers}
+
+                            # Remove offers from nicks not in the global active list
+                            stale_nicks = client_nicks - all_active_nicks
+                            all_stale_nicks.update(stale_nicks)
+                            for nick in stale_nicks:
+                                removed = client.remove_offers_for_nick(nick)
+                                total_removed += removed
+
+                        if total_removed > 0:
+                            logger.info(
+                                f"Peerlist cleanup: removed {total_removed} offers from "
+                                f"{len(all_stale_nicks)} nicks no longer in any peerlist"
+                            )
+                    elif refresh_failures > 0:
+                        logger.debug(
+                            "Skipping peerlist cleanup due to refresh failures - "
+                            "avoiding false positives"
+                        )
 
                 # Sleep for 5 minutes before next refresh
                 await asyncio.sleep(300)
@@ -395,48 +437,6 @@ class OrderbookAggregator:
 
         logger.info("Peerlist refresh task stopped")
 
-    async def _periodic_staleness_cleanup(self) -> None:
-        """Background task to periodically clean up stale offers.
-
-        This is a fallback mechanism for directories that don't support GETPEERLIST
-        (reference implementation). It removes offers that haven't been re-announced
-        within a configurable period (default 30 minutes).
-
-        For directories that support GETPEERLIST, the peerlist refresh task handles
-        cleanup more accurately by detecting when nicks leave.
-        """
-        # Initial wait to let orderbook populate
-        await asyncio.sleep(300)  # 5 minutes
-
-        # Staleness threshold: offers older than this are removed
-        max_age_seconds = 1800.0  # 30 minutes
-
-        while True:
-            try:
-                total_removed = 0
-
-                for _node_id, client in self.clients.items():
-                    # Only do staleness cleanup for directories without peerlist support
-                    # For directories with peerlist support, we use peerlist-based cleanup
-                    if client._peerlist_supported is False:
-                        removed = client.cleanup_stale_offers(max_age_seconds)
-                        total_removed += removed
-
-                if total_removed > 0:
-                    logger.info(f"Staleness cleanup: removed {total_removed} stale offers")
-
-                # Run every 10 minutes
-                await asyncio.sleep(600)
-
-            except asyncio.CancelledError:
-                logger.info("Staleness cleanup task cancelled")
-                break
-            except Exception as e:
-                logger.error(f"Error in staleness cleanup task: {e}")
-                await asyncio.sleep(600)
-
-        logger.info("Staleness cleanup task stopped")
-
     async def _periodic_maker_health_check(self) -> None:
         """Background task to periodically check maker reachability via direct connections.
 
@@ -444,12 +444,11 @@ class OrderbookAggregator:
         1. Collect all makers with valid onion addresses from current offers
         2. Check if they're reachable via direct Tor connection
         3. Extract features from handshake (for directories without peerlist_features)
-        4. Track unreachable makers and remove their offers after repeated failures
+        4. Log reachability statistics for monitoring
 
-        This provides:
-        - More accurate maker availability than relying solely on directory peerlists
-        - Feature detection for non-peerlist directories (reference implementation)
-        - Early detection of makers that went offline
+        NOTE: This task does NOT remove offers from unreachable makers. The directory
+        server may still have a valid connection to the maker even if we can't reach
+        them directly. We trust the directory's peerlist for offer validity.
         """
         # Initial wait to let orderbook populate
         await asyncio.sleep(600)  # 10 minutes
@@ -494,37 +493,19 @@ class OrderbookAggregator:
                     makers_list = list(makers_to_check.values())
                     health_statuses = await self.health_checker.check_makers_batch(makers_list)
 
-                    # Get locations that are unreachable (3+ consecutive failures)
+                    # Log unreachable makers for debugging but DO NOT remove offers
+                    # The directory server may still have a valid connection to the maker
+                    # even if we can't reach them directly. Trust the directory's peerlist
+                    # for offer validity, not our own direct connection attempts.
                     unreachable_locations = self.health_checker.get_unreachable_locations(
                         max_consecutive_failures=3
                     )
 
-                    if unreachable_locations:
-                        logger.warning(
-                            f"Maker health check: {len(unreachable_locations)} makers are "
-                            "unreachable (3+ consecutive failures)"
-                        )
-
-                        # Remove offers from unreachable makers
-                        total_removed = 0
-                        for location in unreachable_locations:
-                            # Find the nick for this location
-                            status = health_statuses.get(location)
-                            if not status:
-                                continue
-
-                            nick = status.nick
-
-                            # Remove offers from this maker in all directory clients
-                            for client in self.clients.values():
-                                removed = client.remove_offers_for_nick(nick)
-                                total_removed += removed
-
-                        if total_removed > 0:
-                            logger.info(
-                                f"Maker health check: Removed {total_removed} offers from "
-                                f"{len(unreachable_locations)} unreachable makers"
-                            )
+                    reachable_count = sum(1 for s in health_statuses.values() if s.reachable)
+                    logger.info(
+                        f"Maker health check: {reachable_count}/{len(makers_to_check)} makers "
+                        f"directly reachable, {len(unreachable_locations)} unreachable"
+                    )
 
                 # Sleep until next check
                 await asyncio.sleep(check_interval)
@@ -564,7 +545,7 @@ class OrderbookAggregator:
         try:
             await client.connect()
             status.mark_connected()
-            logger.info(f"Successfully connected to directory: {node_id}")
+            logger.info(f"Successfully connected to directory: {node_id} (our nick: {client.nick})")
             return client
 
         except Exception as e:
@@ -612,11 +593,8 @@ class OrderbookAggregator:
         peerlist_task = asyncio.create_task(self._periodic_peerlist_refresh())
         self.listener_tasks.append(peerlist_task)
 
-        # Start periodic staleness cleanup task (for directories without GETPEERLIST)
-        staleness_task = asyncio.create_task(self._periodic_staleness_cleanup())
-        self.listener_tasks.append(staleness_task)
-
         # Start periodic maker health check task (direct onion reachability verification)
+        # This extracts features from handshake and tracks reachability but does NOT remove offers
         health_check_task = asyncio.create_task(self._periodic_maker_health_check())
         self.listener_tasks.append(health_check_task)
 
@@ -729,7 +707,10 @@ class OrderbookAggregator:
         # Deduplicate offers by bond UTXO
         # For offers with the same bond UTXO, keep only the most recent one
         # This handles the case where a maker restarts with a new nick but same bond
-        bond_to_best_offer: dict[str, tuple[Offer, float]] = {}  # bond_utxo -> (offer, timestamp)
+        # We also track all directory_nodes that announced each offer for statistics
+        bond_to_best_offer: dict[
+            str, tuple[Offer, float, list[str]]
+        ] = {}  # bond_utxo -> (offer, timestamp, directory_nodes)
         offers_without_bond: list[Offer] = []
 
         # Track statistics for logging
@@ -743,25 +724,68 @@ class OrderbookAggregator:
                 # Offer has a fidelity bond
                 offers_with_bonds += 1
                 existing = bond_to_best_offer.get(bond_utxo_key)
-                if existing is None or timestamp > existing[1]:
-                    # Keep this offer (either first with this bond or more recent)
-                    if existing is not None:
-                        old_offer = existing[0]
-                        bond_replacements += 1
-                        logger.info(
-                            f"Bond deduplication: Replacing stale offer from {old_offer.counterparty} "
-                            f"(oid={old_offer.oid}) with {offer.counterparty} (oid={offer.oid}) "
-                            f"[same bond UTXO: {bond_utxo_key[:20]}..., "
-                            f"age_diff={(timestamp - existing[1]):.1f}s]"
+                if existing is None:
+                    # First offer for this bond
+                    directory_nodes = [offer.directory_node] if offer.directory_node else []
+                    logger.debug(
+                        f"Bond deduplication: First offer for bond {bond_utxo_key[:20]}... "
+                        f"from {offer.counterparty} (oid={offer.oid})"
+                    )
+                    bond_to_best_offer[bond_utxo_key] = (offer, timestamp, directory_nodes)
+                else:
+                    old_offer, old_timestamp, directory_nodes = existing
+                    # Check if this is the same maker (regardless of oid)
+                    # Makers can have different oids across directories but same counterparty+bond = same maker
+                    is_same_maker = old_offer.counterparty == offer.counterparty
+
+                    if is_same_maker:
+                        # Same maker from different directory - merge directory_nodes
+                        if offer.directory_node and offer.directory_node not in directory_nodes:
+                            directory_nodes.append(offer.directory_node)
+                        # Keep newer timestamp but preserve accumulated directory_nodes
+                        if timestamp > old_timestamp:
+                            bond_to_best_offer[bond_utxo_key] = (offer, timestamp, directory_nodes)
+                        logger.debug(
+                            f"Bond deduplication: Same maker {offer.counterparty} (oid={offer.oid}) "
+                            f"seen on {len(directory_nodes)} directories for bond {bond_utxo_key[:20]}..."
                         )
                     else:
-                        logger.debug(
-                            f"Bond deduplication: First offer for bond {bond_utxo_key[:20]}... "
-                            f"from {offer.counterparty} (oid={offer.oid})"
-                        )
-                    bond_to_best_offer[bond_utxo_key] = (offer, timestamp)
+                        # Different maker using same bond UTXO
+                        # This is the "maker restart with new nick" scenario
+                        # Only replace if timestamp difference suggests legitimate restart (>60s)
+                        # Otherwise it might be clock skew between directories
+                        time_diff = timestamp - old_timestamp
+
+                        if abs(time_diff) < 60:
+                            # Likely clock skew between directories, not a real restart
+                            # Keep the older one (more stable) and log warning
+                            logger.warning(
+                                f"Bond deduplication: Ignoring potential duplicate from {offer.counterparty} "
+                                f"(oid={offer.oid}) - same bond as {old_offer.counterparty} "
+                                f"(oid={old_offer.oid}) with only {abs(time_diff):.1f}s difference "
+                                f"[bond UTXO: {bond_utxo_key[:20]}...]. Likely clock skew."
+                            )
+                        elif time_diff > 0:
+                            # Newer offer, likely legitimate maker restart
+                            bond_replacements += 1
+                            logger.info(
+                                f"Bond deduplication: Replacing offer from {old_offer.counterparty} "
+                                f"(oid={old_offer.oid}) with {offer.counterparty} (oid={offer.oid}) "
+                                f"[same bond UTXO: {bond_utxo_key[:20]}..., "
+                                f"age_diff={time_diff:.1f}s]"
+                            )
+                            # Reset directory_nodes for the new maker's offer
+                            new_directory_nodes = (
+                                [offer.directory_node] if offer.directory_node else []
+                            )
+                            bond_to_best_offer[bond_utxo_key] = (
+                                offer,
+                                timestamp,
+                                new_directory_nodes,
+                            )
+                        # else: older offer from different maker, ignore
             else:
-                # Offer without bond - check if it's in the active peerlist
+                # Offer without bond
                 offers_without_bonds += 1
                 logger.debug(
                     f"Offer without bond from {offer.counterparty} (oid={offer.oid}, "
@@ -769,38 +793,75 @@ class OrderbookAggregator:
                 )
                 offers_without_bond.append(offer)
 
-        logger.info(
-            f"Bond deduplication: Processed {total_offers_processed} offers "
-            f"({offers_with_bonds} with bonds, {offers_without_bonds} without bonds). "
-            f"Replaced {bond_replacements} stale offers. "
-            f"Result: {len(bond_to_best_offer)} unique bond offers + "
-            f"{len(offers_without_bond)} non-bond offers"
-        )
+        # Only log summary if there's something interesting (replacements or at debug level)
+        if bond_replacements > 0:
+            logger.info(
+                f"Bond deduplication: Replaced {bond_replacements} offers from makers who "
+                f"restarted with same bond. Result: {len(bond_to_best_offer)} unique bond offers + "
+                f"{len(offers_without_bond)} non-bond offers"
+            )
+        else:
+            logger.debug(
+                f"Bond deduplication: Processed {total_offers_processed} offers "
+                f"({offers_with_bonds} with bonds, {offers_without_bonds} without bonds). "
+                f"Result: {len(bond_to_best_offer)} unique bond offers + "
+                f"{len(offers_without_bond)} non-bond offers"
+            )
 
-        # Build final offers list
-        deduplicated_offers = [offer for offer, _ts in bond_to_best_offer.values()]
+        # Build final offers list - set directory_nodes from the accumulated list during bond dedup
+        deduplicated_offers: list[Offer] = []
+        for offer, _ts, directory_nodes in bond_to_best_offer.values():
+            offer.directory_nodes = directory_nodes
+            deduplicated_offers.append(offer)
         deduplicated_offers.extend(offers_without_bond)
 
         # Group offers by (counterparty, oid) to merge across directories
+        # Track all directory_nodes that announced each offer for statistics
+        # NOTE: Bond offers already have directory_nodes populated from bond deduplication
         offer_key_to_offer: dict[tuple[str, int], Offer] = {}
         for offer in deduplicated_offers:
             key = (offer.counterparty, offer.oid)
             if key not in offer_key_to_offer:
+                # First time seeing this offer
+                # Preserve existing directory_nodes (from bond deduplication) or initialize
+                if not offer.directory_nodes and offer.directory_node:
+                    offer.directory_nodes = [offer.directory_node]
                 offer_key_to_offer[key] = offer
-            # else: duplicate from multiple directories, keep first
+            else:
+                # Duplicate from another directory - merge directory_nodes
+                existing_offer = offer_key_to_offer[key]
+                if (
+                    offer.directory_node
+                    and offer.directory_node not in existing_offer.directory_nodes
+                ):
+                    existing_offer.directory_nodes.append(offer.directory_node)
+                # Merge features from multiple directories
+                for feature, value in offer.features.items():
+                    if value and not existing_offer.features.get(feature):
+                        existing_offer.features[feature] = value
 
         # Add deduplicated offers to orderbook
         for offer in offer_key_to_offer.values():
             orderbook.offers.append(offer)
-            if offer.directory_node and offer.directory_node not in orderbook.directory_nodes:
-                orderbook.directory_nodes.append(offer.directory_node)
+            # Track all unique directory nodes in the orderbook
+            for node in offer.directory_nodes:
+                if node not in orderbook.directory_nodes:
+                    orderbook.directory_nodes.append(node)
 
-        # Deduplicate bonds by UTXO key
+        # Deduplicate bonds by UTXO key while tracking all directories that announced them
         unique_bonds: dict[str, FidelityBond] = {}
         for bond in orderbook.fidelity_bonds:
             cache_key = f"{bond.utxo_txid}:{bond.utxo_vout}"
             if cache_key not in unique_bonds:
+                # First time seeing this bond - initialize directory_nodes
+                if bond.directory_node:
+                    bond.directory_nodes = [bond.directory_node]
                 unique_bonds[cache_key] = bond
+            else:
+                # Same bond from different directory - merge directory_nodes
+                existing_bond = unique_bonds[cache_key]
+                if bond.directory_node and bond.directory_node not in existing_bond.directory_nodes:
+                    existing_bond.directory_nodes.append(bond.directory_node)
         orderbook.fidelity_bonds = list(unique_bonds.values())
 
         if calculate_bonds:
@@ -863,6 +924,41 @@ class OrderbookAggregator:
                             f"Linked standalone bond from {bond.counterparty} "
                             f"(txid={bond.utxo_txid[:16]}...) to offer oid={offer.oid}"
                         )
+
+        # Populate bond directory_nodes from linked offers
+        # Bonds are counted in all directories where:
+        # 1. They were directly announced (already in directory_nodes from deduplication)
+        # 2. Their associated offers appeared (merged here)
+        for bond in orderbook.fidelity_bonds:
+            # Find all offers from this counterparty and collect their directory_nodes
+            maker_offers = [o for o in orderbook.offers if o.counterparty == bond.counterparty]
+            if maker_offers:
+                # Merge offer directory_nodes with bond's existing directory_nodes
+                all_directories: set[str] = set(bond.directory_nodes)  # Start with bond's own
+                for offer in maker_offers:
+                    all_directories.update(offer.directory_nodes)
+                bond.directory_nodes = sorted(all_directories)
+            # else: No offers, keep bond's directory_nodes from deduplication (if any)
+
+        # Populate direct reachability and features from health check cache
+        # This provides valuable information about whether makers are reachable beyond
+        # what the directory server reports, and extracts features from handshake
+        for offer in orderbook.offers:
+            # Try to find the maker's location from any directory client
+            location = None
+            for client in self.clients.values():
+                location = client._active_peers.get(offer.counterparty)
+                if location and location != "NOT-SERVING-ONION":
+                    break
+
+            if location and location != "NOT-SERVING-ONION":
+                # Check if we have health status for this location
+                health_status = self.health_checker.health_status.get(location)
+                if health_status:
+                    offer.directly_reachable = health_status.reachable
+                    # Update features from handshake if available and not already set
+                    if health_status.features and not offer.features:
+                        offer.features = health_status.features.to_dict()
 
         return orderbook
 

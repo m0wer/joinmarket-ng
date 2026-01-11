@@ -21,6 +21,7 @@ from jmcore.deduplication import MessageDeduplicator
 from jmcore.directory_client import DirectoryClient, DirectoryClientError
 from jmcore.models import Offer
 from jmcore.network import HiddenServiceListener, TCPConnection
+from jmcore.notifications import get_notifier
 from jmcore.protocol import COMMAND_PREFIX, JM_VERSION
 from jmcore.rate_limiter import RateLimiter
 from jmcore.tor_control import (
@@ -416,31 +417,17 @@ class MakerBot:
 
     async def _regenerate_nick(self) -> None:
         """
-        Regenerate nick identity for privacy.
+        Regenerate nick identity for privacy (currently disabled).
 
-        This should be called:
-        1. After a successful CoinJoin (to prevent linking multiple CJs)
-        2. When offers are updated due to wallet changes (new funds, etc.)
+        Nick regeneration is disabled because:
+        1. Reference implementation doesn't regenerate nicks after CoinJoin
+        2. Fidelity bond makers need stable identity for reputation
+        3. Causes timing issues with !push (taker waits ~60s to collect signatures)
+        4. Privacy is maintained through Tor hidden services
 
-        Benefits:
-        - Prevents takers from tracking maker activity across multiple CoinJoins
-        - Makes it harder to correlate orderbook changes with specific makers
-        - Improves overall privacy without affecting functionality
-
-        Note: Offers will need to be recreated with the new nick.
+        Future consideration: Could be re-enabled as opt-in feature with grace period.
         """
-        old_nick = self.nick
-
-        # Generate new identity
-        self.nick_identity = NickIdentity(JM_VERSION)
-        self.nick = self.nick_identity.nick
-
-        # Update offer manager's nick (don't recreate to preserve mocks in tests)
-        self.offer_manager.maker_nick = self.nick
-
-        logger.info(f"Regenerated nick for privacy: {old_nick} -> {self.nick}")
-
-        # Note: Offers are recreated by the caller (usually _update_offers)
+        pass
 
     async def start(self) -> None:
         """
@@ -503,7 +490,43 @@ class MakerBot:
                     )
 
             logger.info("Syncing wallet and fidelity bonds...")
-            await self.wallet.sync_all(fidelity_bond_addresses)
+
+            # Setup descriptor wallet if needed (one-time operation)
+            from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
+
+            if isinstance(self.backend, DescriptorWalletBackend):
+                # Check if base wallet is set up (without counting bonds)
+                base_wallet_ready = await self.wallet.is_descriptor_wallet_ready(
+                    fidelity_bond_count=0
+                )
+                # Check if wallet with bonds is set up
+                full_wallet_ready = await self.wallet.is_descriptor_wallet_ready(
+                    fidelity_bond_count=len(fidelity_bond_addresses)
+                )
+
+                if not base_wallet_ready:
+                    # First time setup - import everything including bonds
+                    logger.info("Descriptor wallet not set up. Importing descriptors...")
+                    await self.wallet.setup_descriptor_wallet(
+                        rescan=True,
+                        fidelity_bond_addresses=fidelity_bond_addresses,
+                    )
+                    logger.info("Descriptor wallet setup complete")
+                elif not full_wallet_ready and fidelity_bond_addresses:
+                    # Base wallet exists but bonds are missing - import just the bonds
+                    logger.info(
+                        "Descriptor wallet exists but fidelity bond addresses not imported. "
+                        "Importing bond addresses..."
+                    )
+                    await self.wallet.import_fidelity_bond_addresses(
+                        fidelity_bond_addresses, rescan=True
+                    )
+
+                # Use fast descriptor wallet sync
+                await self.wallet.sync_with_descriptor_wallet(fidelity_bond_addresses)
+            else:
+                # Use standard sync (scantxoutset for full_node, BIP157/158 for neutrino)
+                await self.wallet.sync_all(fidelity_bond_addresses)
 
             # Update bond registry with UTXO info from the scan (only if using registry)
             if self.config.fidelity_bond_index is None and fidelity_bond_addresses:
@@ -589,7 +612,12 @@ class MakerBot:
                 await asyncio.sleep(10)
 
                 # Re-sync wallet to check for new funds
-                await self.wallet.sync_all()
+                from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
+
+                if isinstance(self.backend, DescriptorWalletBackend):
+                    await self.wallet.sync_with_descriptor_wallet()
+                else:
+                    await self.wallet.sync_all()
                 total_balance = await self.wallet.get_total_balance()
                 logger.info(f"Wallet re-synced. Total balance: {total_balance:,} sats")
 
@@ -793,7 +821,13 @@ class MakerBot:
             balance = await self.wallet.get_balance(mixdepth)
             old_max_balance = max(old_max_balance, balance)
 
-        await self.wallet.sync_all()
+        # Sync wallet (use descriptor wallet if available for fast sync)
+        from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
+
+        if isinstance(self.backend, DescriptorWalletBackend):
+            await self.wallet.sync_with_descriptor_wallet()
+        else:
+            await self.wallet.sync_all()
 
         # Update current block height
         self.current_block_height = await self.backend.get_block_height()
@@ -1220,6 +1254,16 @@ class MakerBot:
             except DirectoryClientError as e:
                 # Connection lost - exit listener, let reconnection logic handle it
                 logger.warning(f"Connection lost on {node_id}: {e}")
+                # Fire-and-forget notification for directory disconnect
+                connected_count = len(self.directory_clients) - 1  # We're about to be removed
+                total_count = len(self.config.directory_servers)
+                asyncio.create_task(
+                    get_notifier().notify_directory_disconnect(
+                        node_id, connected_count, total_count, reconnecting=False
+                    )
+                )
+                if connected_count == 0:
+                    asyncio.create_task(get_notifier().notify_all_directories_disconnected())
                 break
             except Exception as e:
                 logger.error(f"Error listening on {node_id}: {e}")
@@ -1552,6 +1596,11 @@ class MakerBot:
                 self.active_sessions[taker_nick] = session
                 logger.info(f"Created CoinJoin session with {taker_nick}")
 
+                # Fire-and-forget notification
+                asyncio.create_task(
+                    get_notifier().notify_fill_request(taker_nick, amount, offer_id)
+                )
+
                 await self._send_response(taker_nick, "pubkey", response)
             else:
                 logger.warning(f"Failed to handle fill: {response.get('error')}")
@@ -1667,6 +1716,12 @@ class MakerBot:
                     await self._broadcast_commitment(commitment)
                 else:
                     logger.error(f"Auth failed: {response.get('error')}")
+                    # Fire-and-forget notification for rejection
+                    asyncio.create_task(
+                        get_notifier().notify_rejection(
+                            taker_nick, "PoDLE verification failed", response.get("error", "")
+                        )
+                    )
                     del self.active_sessions[taker_nick]
                     self._cleanup_session_lock(taker_nick)
 
@@ -1751,10 +1806,12 @@ class MakerBot:
                         f"CoinJoin with {taker_nick} COMPLETE (sent {len(signatures)} sigs)"
                     )
 
+                    # Calculate fee for history and notification
+                    fee_received = session.offer.calculate_fee(session.amount)
+                    txfee_contribution = session.offer.txfee
+
                     # Record transaction in history
                     try:
-                        fee_received = session.offer.calculate_fee(session.amount)
-                        txfee_contribution = session.offer.txfee
                         our_utxos = list(session.our_utxos.keys())
 
                         history_entry = create_maker_history_entry(
@@ -1774,19 +1831,31 @@ class MakerBot:
                     except Exception as e:
                         logger.warning(f"Failed to record CoinJoin history: {e}")
 
+                    # Fire-and-forget notification for successful signing
+                    asyncio.create_task(
+                        get_notifier().notify_tx_signed(
+                            taker_nick,
+                            session.amount,
+                            len(signatures),
+                            fee_received,
+                        )
+                    )
+
                     del self.active_sessions[taker_nick]
                     self._cleanup_session_lock(taker_nick)
 
-                    # Regenerate nick for privacy after successful CoinJoin
-                    # This prevents linking this maker across multiple CoinJoins
-                    await self._regenerate_nick()
+                    # Nick regeneration disabled - see _regenerate_nick() docstring for rationale
 
                     # Schedule wallet re-sync in background to avoid blocking !push handling
-                    # The transaction hasn't been broadcast yet, so we should not block here
-                    # After re-sync, offers will be updated with the new nick
                     asyncio.create_task(self._deferred_wallet_resync())
                 else:
                     logger.error(f"TX verification failed: {response.get('error')}")
+                    # Fire-and-forget notification for TX rejection
+                    asyncio.create_task(
+                        get_notifier().notify_rejection(
+                            taker_nick, "TX verification failed", response.get("error", "")
+                        )
+                    )
                     del self.active_sessions[taker_nick]
                     self._cleanup_session_lock(taker_nick)
 

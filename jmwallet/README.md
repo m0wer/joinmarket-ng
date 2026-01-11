@@ -34,9 +34,68 @@ jm-wallet generate --save --prompt-password --output ~/.joinmarket-ng/wallets/wa
 
 ### 2. Choose Your Backend
 
-#### Option A: Neutrino (Recommended for Beginners)
+JoinMarket NG supports three blockchain backends with different trade-offs:
 
-Lightweight SPV backend - no full node needed (~500MB vs ~500GB).
+#### Option A: Descriptor Wallet (Recommended - Fast & Efficient)
+
+**Best for**: Running a maker bot or frequent operations with your own Bitcoin Core node.
+
+Uses Bitcoin Core's descriptor wallet feature to persistently track your addresses. After one-time setup, syncs are nearly instant using `listunspent` instead of scanning the entire UTXO set.
+
+**Performance**: ~1 second per sync (vs ~90 seconds with scantxoutset)
+
+**Requirements**: Bitcoin Core v24+ with your own node
+
+**Security Note**: ⚠️ **Never use with a third-party node!** Your wallet addresses are stored in Bitcoin Core's wallet files. Funds are safe, but your addresses and balances are visible to whoever controls the node.
+
+Create an environment file:
+
+```bash
+cat > ~/.joinmarket-ng/bitcoin.env << EOF
+export BITCOIN_RPC_URL=http://127.0.0.1:8332
+export BITCOIN_RPC_USER=your_rpc_user
+export BITCOIN_RPC_PASSWORD=your_rpc_password
+EOF
+chmod 600 ~/.joinmarket-ng/bitcoin.env
+```
+
+Check wallet balance (first run will import descriptors):
+
+```bash
+source ~/.joinmarket-ng/bitcoin.env
+jm-wallet info \
+  --mnemonic-file ~/.joinmarket-ng/wallets/wallet.mnemonic \
+  --backend descriptor_wallet
+```
+
+The first run imports your wallet descriptors into Bitcoin Core (one-time ~5 second operation). Subsequent syncs are nearly instant.
+
+#### Option B: Bitcoin Core Legacy (Simple but Slow)
+
+**Best for**: One-off operations or scripts where setup time doesn't matter.
+
+Uses `scantxoutset` RPC to scan the entire UTXO set each time. No persistent state, no wallet files created on the node.
+
+**Performance**: ~90 seconds per sync on mainnet
+
+**Requirements**: Bitcoin Core v30+
+
+```bash
+source ~/.joinmarket-ng/bitcoin.env
+jm-wallet info \
+  --mnemonic-file ~/.joinmarket-ng/wallets/wallet.mnemonic \
+  --backend full_node
+```
+
+#### Option C: Neutrino (Lightweight SPV)
+
+**Best for**: Limited storage or fast initial sync.
+
+Lightweight SPV backend using BIP157/158 compact block filters.
+
+**Storage**: ~500 MB (vs ~900 GB for full node)
+
+**Privacy**: High (downloads filters, not addresses)
 
 Start Neutrino server with Docker:
 
@@ -60,29 +119,15 @@ jm-wallet info \
   --backend neutrino
 ```
 
-#### Option B: Bitcoin Core Full Node
+#### Backend Comparison
 
-For maximum security and privacy. Requires a synced Bitcoin Core node (v23+).
-
-Create an environment file to avoid exposing credentials in shell history:
-
-```bash
-cat > ~/.joinmarket-ng/bitcoin.env << EOF
-export BITCOIN_RPC_URL=http://127.0.0.1:8332
-export BITCOIN_RPC_USER=your_rpc_user
-export BITCOIN_RPC_PASSWORD=your_rpc_password
-EOF
-chmod 600 ~/.joinmarket-ng/bitcoin.env
-```
-
-Load environment and check balance:
-
-```bash
-source ~/.joinmarket-ng/bitcoin.env
-jm-wallet info \
-  --mnemonic-file ~/.joinmarket-ng/wallets/wallet.mnemonic \
-  --backend full_node
-```
+| Feature | Descriptor Wallet | Full Node (Legacy) | Neutrino |
+|---------|-------------------|-------------------|----------|
+| **Sync Speed** | ~1s | ~90s | ~5s |
+| **Storage** | ~900 GB | ~900 GB | ~500 MB |
+| **Setup** | One-time import | None | External server |
+| **Privacy** | High (own node) | High (own node) | High (filters) |
+| **Mempool** | ✅ Yes | ✅ Yes | ❌ No |
 
 ### 3. View Your Addresses
 
@@ -216,8 +261,9 @@ For detailed help on any command, see the auto-generated help sections below.
 │                                             interactively                    │
 │ --network                  -n      TEXT     Bitcoin network                  │
 │                                             [default: mainnet]               │
-│ --backend                  -b      TEXT     Backend: full_node | neutrino    │
-│                                             [default: full_node]             │
+│ --backend                  -b      TEXT     Backend: full_node |             │
+│                                             descriptor_wallet | neutrino     │
+│                                             [default: descriptor_wallet]     │
 │ --rpc-url                          TEXT     [env var: BITCOIN_RPC_URL]       │
 │                                             [default: http://127.0.0.1:8332] │
 │ --rpc-user                         TEXT     [env var: BITCOIN_RPC_USER]      │
@@ -257,7 +303,7 @@ For detailed help on any command, see the auto-generated help sections below.
 │                                             [env var: BIP39_PASSPHRASE]      │
 │ --prompt-bip39-passphrase                   Prompt for BIP39 passphrase      │
 │ --network                  -n      TEXT     [default: mainnet]               │
-│ --backend                  -b      TEXT     [default: full_node]             │
+│ --backend                  -b      TEXT     [default: descriptor_wallet]     │
 │ --rpc-url                          TEXT     [env var: BITCOIN_RPC_URL]       │
 │                                             [default: http://127.0.0.1:8332] │
 │ --rpc-user                         TEXT     [env var: BITCOIN_RPC_USER]      │
@@ -328,15 +374,28 @@ For detailed help on any command, see the auto-generated help sections below.
 │                                             [env var: BIP39_PASSPHRASE]      │
 │ --prompt-bip39-passphrase                   Prompt for BIP39 passphrase      │
 │ --mixdepth                 -m      INTEGER  Source mixdepth [default: 0]     │
-│ --fee-rate                         INTEGER  Fee rate in sat/vB [default: 10] │
+│ --fee-rate                         FLOAT    Manual fee rate in sat/vB (e.g.  │
+│                                             1.5). Mutually exclusive with    │
+│                                             --block-target. Defaults to      │
+│                                             3-block estimation.              │
+│ --block-target                     INTEGER  Target blocks for fee estimation │
+│                                             (1-1008). Defaults to 3.         │
 │ --network                  -n      TEXT     [default: mainnet]               │
+│ --backend                  -b      TEXT     Backend: full_node |             │
+│                                             descriptor_wallet | neutrino     │
+│                                             [default: descriptor_wallet]     │
 │ --rpc-url                          TEXT     [env var: BITCOIN_RPC_URL]       │
 │                                             [default: http://127.0.0.1:8332] │
 │ --rpc-user                         TEXT     [env var: BITCOIN_RPC_USER]      │
 │ --rpc-password                     TEXT     [env var: BITCOIN_RPC_PASSWORD]  │
+│ --neutrino-url                     TEXT     [env var: NEUTRINO_URL]          │
+│                                             [default: http://127.0.0.1:8334] │
 │ --broadcast                                 Broadcast the transaction        │
 │                                             [default: True]                  │
 │ --yes                      -y               Skip confirmation prompt         │
+│ --data-dir                         PATH     Data directory (default:         │
+│                                             ~/.joinmarket-ng or              │
+│                                             $JOINMARKET_DATA_DIR)            │
 │ --log-level                -l      TEXT     [default: INFO]                  │
 │ --help                                      Show this message and exit.      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -456,10 +515,15 @@ For detailed help on any command, see the auto-generated help sections below.
 │                                             [env var: BIP39_PASSPHRASE]      │
 │ --prompt-bip39-passphrase                   Prompt for BIP39 passphrase      │
 │ --network                  -n      TEXT     [default: mainnet]               │
+│ --backend                  -b      TEXT     Backend: full_node |             │
+│                                             descriptor_wallet | neutrino     │
+│                                             [default: descriptor_wallet]     │
 │ --rpc-url                          TEXT     [env var: BITCOIN_RPC_URL]       │
 │                                             [default: http://127.0.0.1:8332] │
 │ --rpc-user                         TEXT     [env var: BITCOIN_RPC_USER]      │
 │ --rpc-password                     TEXT     [env var: BITCOIN_RPC_PASSWORD]  │
+│ --neutrino-url                     TEXT     [env var: NEUTRINO_URL]          │
+│                                             [default: http://127.0.0.1:8334] │
 │ --max-index                -i      INTEGER  Max address index per locktime   │
 │                                             to scan (default 1)              │
 │                                             [default: 1]                     │
@@ -490,10 +554,15 @@ For detailed help on any command, see the auto-generated help sections below.
 │                                          [env var: BIP39_PASSPHRASE]         │
 │ --prompt-bip39-passphrase                Prompt for BIP39 passphrase         │
 │ --network                  -n      TEXT  [default: mainnet]                  │
+│ --backend                  -b      TEXT  Backend: full_node |                │
+│                                          descriptor_wallet | neutrino        │
+│                                          [default: descriptor_wallet]        │
 │ --rpc-url                          TEXT  [env var: BITCOIN_RPC_URL]          │
 │                                          [default: http://127.0.0.1:8332]    │
 │ --rpc-user                         TEXT  [env var: BITCOIN_RPC_USER]         │
 │ --rpc-password                     TEXT  [env var: BITCOIN_RPC_PASSWORD]     │
+│ --neutrino-url                     TEXT  [env var: NEUTRINO_URL]             │
+│                                          [default: http://127.0.0.1:8334]    │
 │ --data-dir                         PATH  Data directory (default:            │
 │                                          ~/.joinmarket-ng or                 │
 │                                          $JOINMARKET_DATA_DIR)               │

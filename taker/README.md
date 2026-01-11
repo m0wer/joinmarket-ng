@@ -325,7 +325,7 @@ Note: Takers only need Tor SOCKS proxy (port 9050) - they don't serve a hidden s
 |----------|---------|-------------|
 | `MNEMONIC_FILE` | - | Path to mnemonic file (recommended) |
 | `MNEMONIC` | - | Direct mnemonic phrase (not recommended for production) |
-| `BACKEND_TYPE` | `full_node` | Backend: `full_node` or `neutrino` |
+| `BACKEND_TYPE` | `full_node` | Backend: `full_node`, `descriptor_wallet`, or `neutrino` |
 | `NETWORK` | `mainnet` | Protocol network for handshakes |
 | `BITCOIN_NETWORK` | `$NETWORK` | Bitcoin network for address generation |
 | `BITCOIN_RPC_URL` | `http://localhost:8332` | Bitcoin Core RPC URL |
@@ -366,7 +366,7 @@ jm-taker tumble --help
 | `--destination` | INTERNAL | Address or INTERNAL for next mixdepth |
 | `--mixdepth` | 0 | Source mixdepth (0-4) |
 | `--counterparties` | 3 | Number of makers (more = better privacy) |
-| `--backend` | full_node | Backend: full_node or neutrino |
+| `--backend` | full_node | Backend: full_node, descriptor_wallet, or neutrino |
 | `--max-abs-fee` | 500 | Max absolute fee per maker (sats) |
 | `--max-rel-fee` | 0.001 | Max relative fee (0.1%) |
 | `--bondless-allowance` | 0.125 | Fraction of time to choose makers randomly (0.0-1.0) |
@@ -457,7 +457,7 @@ Use env vars for RPC credentials (see jmwallet README).
 │    --mixdepth          -m                        INTEGER  Source mixdepth    │
 │                                                           [default: 0]       │
 │    --counterparties    -n                        INTEGER  Number of makers   │
-│                                                           [default: 3]       │
+│                                                           [default: 10]      │
 │    --mnemonic                                    TEXT     Wallet mnemonic    │
 │                                                           phrase             │
 │                                                           [env var:          │
@@ -480,9 +480,10 @@ Use env vars for RPC credentials (see jmwallet README).
 │                                                           --network)         │
 │    --backend           -b                        TEXT     Backend type:      │
 │                                                           full_node |        │
-│                                                           neutrino           │
+│                                                           descriptor_wallet  │
+│                                                           | neutrino         │
 │                                                           [default:          │
-│                                                           full_node]         │
+│                                                           descriptor_wallet] │
 │    --rpc-url                                     TEXT     Bitcoin full node  │
 │                                                           RPC URL            │
 │                                                           [env var:          │
@@ -527,6 +528,18 @@ Use env vars for RPC credentials (see jmwallet README).
 │    --max-rel-fee                                 TEXT     Max relative fee   │
 │                                                           (0.001=0.1%)       │
 │                                                           [default: 0.001]   │
+│    --fee-rate                                    FLOAT    Manual fee rate in │
+│                                                           sat/vB (e.g. 1.5). │
+│                                                           Mutually exclusive │
+│                                                           with               │
+│                                                           --block-target.    │
+│    --block-target                                INTEGER  Target blocks for  │
+│                                                           fee estimation     │
+│                                                           (1-1008). Defaults │
+│                                                           to 3 when using    │
+│                                                           full node. Cannot  │
+│                                                           be used with       │
+│                                                           neutrino backend.  │
 │    --bondless-allowa…                            FLOAT    Fraction of time   │
 │                                                           to choose makers   │
 │                                                           randomly (0.0-1.0) │
@@ -579,8 +592,9 @@ Use env vars for RPC credentials (see jmwallet README).
 │ --bip39-passphrase          TEXT     BIP39 passphrase (13th/25th word)       │
 │                                      [env var: BIP39_PASSPHRASE]             │
 │ --network                   TEXT     Bitcoin network [default: mainnet]      │
-│ --backend           -b      TEXT     Backend type: full_node | neutrino      │
-│                                      [default: full_node]                    │
+│ --backend           -b      TEXT     Backend type: full_node |               │
+│                                      descriptor_wallet | neutrino            │
+│                                      [default: descriptor_wallet]            │
 │ --rpc-url                   TEXT     Bitcoin full node RPC URL               │
 │                                      [env var: BITCOIN_RPC_URL]              │
 │                                      [default: http://127.0.0.1:8332]        │

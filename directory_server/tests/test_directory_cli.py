@@ -12,6 +12,8 @@ import pytest
 
 from directory_server.cli import format_status_output, health_command, status_command
 
+pytestmark = pytest.mark.docker
+
 
 class MockHTTPHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:
@@ -67,7 +69,8 @@ class MockHTTPHandler(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def mock_http_server():
-    httpd = HTTPServer(("127.0.0.1", 18082), MockHTTPHandler)
+    # Use port 0 to let the OS choose an available port
+    httpd = HTTPServer(("127.0.0.1", 0), MockHTTPHandler)
     thread = Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     yield httpd
@@ -78,11 +81,17 @@ def mock_http_server():
 def test_status_command_success(mock_http_server):
     args = MagicMock()
     args.host = "127.0.0.1"
-    args.port = 18082
+    args.port = mock_http_server.server_address[1]
     args.json = False
 
-    with patch("sys.stdout", new=StringIO()) as fake_out:
+    with (
+        patch("sys.stdout", new=StringIO()) as fake_out,
+        patch("sys.stderr", new=StringIO()) as fake_err,
+    ):
         result = status_command(args)
+
+        if result != 0:
+            pytest.fail(f"Command failed with code {result}. Stderr: {fake_err.getvalue()}")
 
     assert result == 0
     output = fake_out.getvalue()
@@ -94,11 +103,17 @@ def test_status_command_success(mock_http_server):
 def test_status_command_json_output(mock_http_server):
     args = MagicMock()
     args.host = "127.0.0.1"
-    args.port = 18082
+    args.port = mock_http_server.server_address[1]
     args.json = True
 
-    with patch("sys.stdout", new=StringIO()) as fake_out:
+    with (
+        patch("sys.stdout", new=StringIO()) as fake_out,
+        patch("sys.stderr", new=StringIO()) as fake_err,
+    ):
         result = status_command(args)
+
+        if result != 0:
+            pytest.fail(f"Command failed with code {result}. Stderr: {fake_err.getvalue()}")
 
     assert result == 0
     output = fake_out.getvalue()
@@ -111,6 +126,10 @@ def test_status_command_json_output(mock_http_server):
 def test_status_command_connection_error():
     args = MagicMock()
     args.host = "127.0.0.1"
+    # Use a port that is unlikely to be in use, or just rely on the fact that nothing is listening
+    # Using 0 is not valid for connection.
+    # We can try to bind a socket to a port, close it, and then assume it's free but not listening?
+    # Or just use a random high port.
     args.port = 19999
     args.json = False
 
@@ -125,11 +144,17 @@ def test_status_command_connection_error():
 def test_health_command_healthy(mock_http_server):
     args = MagicMock()
     args.host = "127.0.0.1"
-    args.port = 18082
+    args.port = mock_http_server.server_address[1]
     args.json = False
 
-    with patch("sys.stdout", new=StringIO()) as fake_out:
+    with (
+        patch("sys.stdout", new=StringIO()) as fake_out,
+        patch("sys.stderr", new=StringIO()) as fake_err,
+    ):
         result = health_command(args)
+
+        if result != 0:
+            pytest.fail(f"Command failed with code {result}. Stderr: {fake_err.getvalue()}")
 
     assert result == 0
     output = fake_out.getvalue()
@@ -139,11 +164,17 @@ def test_health_command_healthy(mock_http_server):
 def test_health_command_json_output(mock_http_server):
     args = MagicMock()
     args.host = "127.0.0.1"
-    args.port = 18082
+    args.port = mock_http_server.server_address[1]
     args.json = True
 
-    with patch("sys.stdout", new=StringIO()) as fake_out:
+    with (
+        patch("sys.stdout", new=StringIO()) as fake_out,
+        patch("sys.stderr", new=StringIO()) as fake_err,
+    ):
         result = health_command(args)
+
+        if result != 0:
+            pytest.fail(f"Command failed with code {result}. Stderr: {fake_err.getvalue()}")
 
     assert result == 0
     output = fake_out.getvalue()

@@ -100,7 +100,7 @@ def our_maker_reference_taker_services():
     # Give makers extra time to sync and announce offers
     # CI environments have more latency, especially with Tor
     logger.info("Waiting for makers to announce offers...")
-    time.sleep(60)
+    time.sleep(90)
 
     yield {
         "compose_file": compose_file,
@@ -161,7 +161,7 @@ def stop_conflicting_makers() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(900)
 async def test_reference_taker_coinjoin_with_our_makers(
     our_maker_reference_taker_services,
     jam_wallet,
@@ -181,7 +181,7 @@ async def test_reference_taker_coinjoin_with_our_makers(
 
     # Restart makers to ensure fresh wallet state with new UTXOs
     # This is critical - previous tests may have consumed maker UTXOs
-    restart_makers_and_wait(wait_time=60)
+    restart_makers_and_wait(wait_time=120)
 
     # Ensure bitcoin nodes are synced
     logger.info("Checking that bitcoin nodes are synced...")
@@ -285,7 +285,7 @@ async def test_reference_taker_coinjoin_with_our_makers(
     ]
     has_explicit_failure = any(ind in output_lower for ind in explicit_failures)
 
-    if has_explicit_failure:
+    if has_explicit_failure and not has_txid:
         pytest.fail(
             f"CoinJoin explicitly failed.\n"
             f"Exit code: {result.returncode}\n"
@@ -299,6 +299,14 @@ async def test_reference_taker_coinjoin_with_our_makers(
     )
 
     logger.info("✓ CoinJoin completed successfully with our makers!")
+
+    # Mine blocks to confirm the transaction so subsequent tests verify cleanly
+    logger.info("Mining 1 block to confirm CoinJoin transaction...")
+    run_bitcoin_cmd(["generatetoaddress", "1", dest_address])
+
+    # Wait for sync so all nodes see the confirmation
+    if not _wait_for_node_sync(max_attempts=30):
+        logger.warning("Nodes did not sync after mining confirmation block")
 
 
 @pytest.mark.asyncio

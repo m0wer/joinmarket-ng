@@ -28,6 +28,9 @@ echo "Bitcoin Core is ready"
 # Maker2: "minute faint grape plate stock mercy tent world space opera apple rocket"
 #   Address: bcrt1qfuzpvnf2lgg8z54p3xcjp8xf8x5ydla63tgud2
 #
+# Maker3: "echo rural present blue chapter game keen keen keen keen keen keen"
+#   Address: bcrt1qf5gztst2rddqv4hw2jh4m52ahrrvjrz4zescgw
+#
 # Taker: "burden notable love elephant orbit couch message galaxy elevator exile drop toilet"
 #   Address: bcrt1q84l5vscg3pvjn6se8jp4ruymtyh393ed5v2d9e
 #
@@ -43,6 +46,9 @@ MAKER1_ADDR="bcrt1q6x4xurtda3szpc54knp6qpuh0jxgcjajmnmy89"
 # Maker2 address (derived from: minute faint grape...)
 MAKER2_ADDR="bcrt1qfuzpvnf2lgg8z54p3xcjp8xf8x5ydla63tgud2"
 
+# Maker3 address (derived from: echo rural present...)
+MAKER3_ADDR="bcrt1qe4hmtjq53u7l5vr9uw6sjr9c75ulmklg8jgsj0"
+
 # Taker address (derived from: burden notable love...)
 TAKER_ADDR="bcrt1q84l5vscg3pvjn6se8jp4ruymtyh393ed5v2d9e"
 
@@ -55,6 +61,7 @@ echo "Funding maker and taker wallets..."
 echo "  Maker1: $MAKER1_ADDR"
 echo "  Maker1 Fidelity Bond: $MAKER1_FIDELITY_BOND_ADDR"
 echo "  Maker2: $MAKER2_ADDR"
+echo "  Maker3: $MAKER3_ADDR"
 echo "  Taker:  $TAKER_ADDR"
 
 # Mine blocks to each address to fund them
@@ -64,6 +71,9 @@ echo "Mined $BLOCKS_TO_MINE blocks to Maker1"
 
 $CLI generatetoaddress $BLOCKS_TO_MINE "$MAKER2_ADDR"
 echo "Mined $BLOCKS_TO_MINE blocks to Maker2"
+
+$CLI generatetoaddress $BLOCKS_TO_MINE "$MAKER3_ADDR"
+echo "Mined $BLOCKS_TO_MINE blocks to Maker3"
 
 $CLI generatetoaddress $BLOCKS_TO_MINE "$TAKER_ADDR"
 echo "Mined $BLOCKS_TO_MINE blocks to Taker"

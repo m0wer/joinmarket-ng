@@ -206,6 +206,30 @@ class WalletConfig(BaseModel):
         description="Dust threshold in satoshis for change outputs (default: 27300)",
     )
 
+    # Descriptor wallet scan configuration
+    smart_scan: bool = Field(
+        default=True,
+        description=(
+            "Use smart scan for fast startup (scan from ~1 year ago instead of genesis). "
+            "A full rescan runs in background to catch any older transactions."
+        ),
+    )
+    background_full_rescan: bool = Field(
+        default=True,
+        description=(
+            "Run full blockchain rescan in background after smart scan. "
+            "This ensures no transactions are missed while allowing fast startup."
+        ),
+    )
+    scan_lookback_blocks: int = Field(
+        default=52_560,
+        ge=0,
+        description=(
+            "Number of blocks to look back for smart scan (default: ~1 year = 52560 blocks). "
+            "Set to 0 to always scan from genesis (slow but complete)."
+        ),
+    )
+
     model_config = {"frozen": False}
 
     @model_validator(mode="after")
