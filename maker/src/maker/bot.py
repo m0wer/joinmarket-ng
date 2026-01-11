@@ -21,6 +21,7 @@ from jmcore.deduplication import MessageDeduplicator
 from jmcore.directory_client import DirectoryClient, DirectoryClientError
 from jmcore.models import Offer
 from jmcore.network import HiddenServiceListener, TCPConnection
+from jmcore.notifications import get_notifier
 from jmcore.protocol import COMMAND_PREFIX, JM_VERSION
 from jmcore.rate_limiter import RateLimiter
 from jmcore.tor_control import (
@@ -1233,6 +1234,16 @@ class MakerBot:
             except DirectoryClientError as e:
                 # Connection lost - exit listener, let reconnection logic handle it
                 logger.warning(f"Connection lost on {node_id}: {e}")
+                # Fire-and-forget notification for directory disconnect
+                connected_count = len(self.directory_clients) - 1  # We're about to be removed
+                total_count = len(self.config.directory_servers)
+                asyncio.create_task(
+                    get_notifier().notify_directory_disconnect(
+                        node_id, connected_count, total_count, reconnecting=False
+                    )
+                )
+                if connected_count == 0:
+                    asyncio.create_task(get_notifier().notify_all_directories_disconnected())
                 break
             except Exception as e:
                 logger.error(f"Error listening on {node_id}: {e}")
@@ -1565,6 +1576,11 @@ class MakerBot:
                 self.active_sessions[taker_nick] = session
                 logger.info(f"Created CoinJoin session with {taker_nick}")
 
+                # Fire-and-forget notification
+                asyncio.create_task(
+                    get_notifier().notify_fill_request(taker_nick, amount, offer_id)
+                )
+
                 await self._send_response(taker_nick, "pubkey", response)
             else:
                 logger.warning(f"Failed to handle fill: {response.get('error')}")
@@ -1680,6 +1696,12 @@ class MakerBot:
                     await self._broadcast_commitment(commitment)
                 else:
                     logger.error(f"Auth failed: {response.get('error')}")
+                    # Fire-and-forget notification for rejection
+                    asyncio.create_task(
+                        get_notifier().notify_rejection(
+                            taker_nick, "PoDLE verification failed", response.get("error", "")
+                        )
+                    )
                     del self.active_sessions[taker_nick]
                     self._cleanup_session_lock(taker_nick)
 
@@ -1764,10 +1786,12 @@ class MakerBot:
                         f"CoinJoin with {taker_nick} COMPLETE (sent {len(signatures)} sigs)"
                     )
 
+                    # Calculate fee for history and notification
+                    fee_received = session.offer.calculate_fee(session.amount)
+                    txfee_contribution = session.offer.txfee
+
                     # Record transaction in history
                     try:
-                        fee_received = session.offer.calculate_fee(session.amount)
-                        txfee_contribution = session.offer.txfee
                         our_utxos = list(session.our_utxos.keys())
 
                         history_entry = create_maker_history_entry(
@@ -1787,6 +1811,16 @@ class MakerBot:
                     except Exception as e:
                         logger.warning(f"Failed to record CoinJoin history: {e}")
 
+                    # Fire-and-forget notification for successful signing
+                    asyncio.create_task(
+                        get_notifier().notify_tx_signed(
+                            taker_nick,
+                            session.amount,
+                            len(signatures),
+                            fee_received,
+                        )
+                    )
+
                     del self.active_sessions[taker_nick]
                     self._cleanup_session_lock(taker_nick)
 
@@ -1796,6 +1830,12 @@ class MakerBot:
                     asyncio.create_task(self._deferred_wallet_resync())
                 else:
                     logger.error(f"TX verification failed: {response.get('error')}")
+                    # Fire-and-forget notification for TX rejection
+                    asyncio.create_task(
+                        get_notifier().notify_rejection(
+                            taker_nick, "TX verification failed", response.get("error", "")
+                        )
+                    )
                     del self.active_sessions[taker_nick]
                     self._cleanup_session_lock(taker_nick)
 

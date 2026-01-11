@@ -18,10 +18,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY jmcore/requirements.txt /build/jmcore/requirements.txt
 RUN pip install --no-cache-dir --user -r /build/jmcore/requirements.txt
 
-# Copy jmcore source and install
+# Copy jmcore source and install (with notifications support)
 COPY jmcore/src /build/jmcore/src
 COPY jmcore/pyproject.toml /build/jmcore/
-RUN pip install --no-cache-dir --user /build/jmcore
+RUN pip install --no-cache-dir --user "/build/jmcore[notifications]"
 
 # Install jmwallet dependencies
 COPY jmwallet/requirements.txt /build/jmwallet/requirements.txt

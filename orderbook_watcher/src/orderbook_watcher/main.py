@@ -6,6 +6,7 @@ import asyncio
 import signal
 import sys
 
+from jmcore.notifications import get_notifier
 from loguru import logger
 
 from orderbook_watcher.aggregator import OrderbookAggregator
@@ -68,6 +69,12 @@ async def run_watcher() -> None:
         loop.add_signal_handler(sig, shutdown_handler)
 
     try:
+        # Send startup notification immediately
+        notifier = get_notifier()
+        await notifier.notify_startup(
+            component="Orderbook Watcher",
+            network=settings.network,
+        )
         await server.start()
         await shutdown_event.wait()
     except asyncio.CancelledError:

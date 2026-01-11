@@ -12,6 +12,7 @@ from typing import Annotated
 import typer
 from jmcore.config import TorControlConfig, create_tor_control_config_from_env
 from jmcore.models import NetworkType, OfferType, get_default_directory_nodes
+from jmcore.notifications import get_notifier
 from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
 from jmwallet.backends.neutrino import NeutrinoBackend
 from jmwallet.wallet.service import WalletService
@@ -455,6 +456,12 @@ def start(
 
     async def run_bot() -> None:
         try:
+            # Send startup notification immediately
+            notifier = get_notifier()
+            await notifier.notify_startup(
+                component="Maker",
+                network=network.value,
+            )
             await bot.start()
             while True:
                 await asyncio.sleep(1)

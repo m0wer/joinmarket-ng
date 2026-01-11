@@ -33,6 +33,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+notifications = [
+    "apprise>=1.8.0",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",

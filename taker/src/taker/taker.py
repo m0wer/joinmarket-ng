@@ -26,6 +26,7 @@ from jmcore.deduplication import ResponseDeduplicator
 from jmcore.directory_client import DirectoryClient
 from jmcore.encryption import CryptoSession
 from jmcore.models import Offer
+from jmcore.notifications import get_notifier
 from jmcore.protocol import JM_VERSION, parse_utxo_list
 from jmwallet.backends.base import BlockchainBackend
 from jmwallet.history import (
@@ -521,7 +522,21 @@ class Taker:
 
         # Sync wallet
         logger.info("Syncing wallet...")
-        await self.wallet.sync_all()
+
+        # Setup descriptor wallet if needed (one-time operation)
+        from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
+
+        if isinstance(self.backend, DescriptorWalletBackend):
+            if not await self.wallet.is_descriptor_wallet_ready():
+                logger.info("Descriptor wallet not set up. Importing descriptors...")
+                await self.wallet.setup_descriptor_wallet(rescan=True)
+                logger.info("Descriptor wallet setup complete")
+
+            # Use fast descriptor wallet sync
+            await self.wallet.sync_with_descriptor_wallet()
+        else:
+            # Use standard sync (scantxoutset for full_node, BIP157/158 for neutrino)
+            await self.wallet.sync_all()
 
         total_balance = await self.wallet.get_total_balance()
         logger.info(f"Wallet synced. Total balance: {total_balance:,} sats")
@@ -753,7 +768,15 @@ class Taker:
                     break
 
                 logger.info("Periodic wallet rescan starting...")
-                await self.wallet.sync_all()
+
+                # Use fast descriptor wallet sync if available
+                from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
+
+                if isinstance(self.backend, DescriptorWalletBackend):
+                    await self.wallet.sync_with_descriptor_wallet()
+                else:
+                    await self.wallet.sync_all()
+
                 total_balance = await self.wallet.get_total_balance()
                 logger.info(f"Wallet re-synced. Total balance: {total_balance:,} sats")
 
@@ -1009,6 +1032,7 @@ class Taker:
                         cj_amount=self.cj_amount,
                         total_fee=total_fee,
                         destination=destination,
+                        mining_fee=estimated_tx_fee,
                     )
                     if not confirmed:
                         logger.info("CoinJoin cancelled by user")
@@ -1044,6 +1068,13 @@ class Taker:
             # Phase 1: Fill orders
             self.state = TakerState.FILLING
             logger.info("Phase 1: Sending !fill to makers...")
+
+            # Fire-and-forget notification for CoinJoin start
+            asyncio.create_task(
+                get_notifier().notify_coinjoin_start(
+                    self.cj_amount, len(self.maker_sessions), destination
+                )
+            )
 
             fill_success = await self._phase_fill()
             if not fill_success:
@@ -1199,10 +1230,22 @@ class Taker:
             except Exception as e:
                 logger.warning(f"Failed to record CoinJoin history: {e}")
 
+            # Fire-and-forget notification for successful CoinJoin
+            total_fees = total_maker_fees + mining_fee
+            asyncio.create_task(
+                get_notifier().notify_coinjoin_complete(
+                    self.txid, self.cj_amount, len(self.maker_sessions), total_fees
+                )
+            )
+
             return self.txid
 
         except Exception as e:
             logger.error(f"CoinJoin failed: {e}")
+            # Fire-and-forget notification for failed CoinJoin
+            phase = self.state.value if hasattr(self, "state") else ""
+            amount = self.cj_amount if hasattr(self, "cj_amount") else 0
+            asyncio.create_task(get_notifier().notify_coinjoin_failed(str(e), phase, amount))
             self.state = TakerState.FAILED
             return None
 

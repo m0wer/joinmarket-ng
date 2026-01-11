@@ -12,6 +12,7 @@ from typing import Annotated
 
 import typer
 from jmcore.models import NetworkType, get_default_directory_nodes
+from jmcore.notifications import get_notifier
 from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
 from jmwallet.backends.neutrino import NeutrinoBackend
 from jmwallet.wallet.service import WalletService
@@ -411,6 +412,12 @@ async def _run_coinjoin(
     taker = Taker(wallet, backend, config, confirmation_callback=confirmation_callback)
 
     try:
+        # Send startup notification immediately
+        notifier = get_notifier()
+        await notifier.notify_startup(
+            component="Taker (CoinJoin)",
+            network=config.network.value,
+        )
         await taker.start()
 
         amount_display = "ALL (sweep)" if amount == 0 else f"{amount:,} sats"
@@ -646,6 +653,12 @@ async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
     taker = Taker(wallet, backend, config)
 
     try:
+        # Send startup notification immediately
+        notifier = get_notifier()
+        await notifier.notify_startup(
+            component="Taker (Tumble)",
+            network=config.network.value,
+        )
         await taker.start()
 
         logger.info(f"Starting tumble with {len(schedule.entries)} entries")

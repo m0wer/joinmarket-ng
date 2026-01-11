@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Automatic descriptor import and wallet setup on first use
   - **New default backend** for maker, taker, and wallet commands (changed from `full_node`)
   - Docker compose examples updated to use `descriptor_wallet` by default
+- **Operator Notifications**: Push notification system via Apprise for CoinJoin events.
+  - Supports 100+ notification services (Gotify, Telegram, Discord, Pushover, email, etc.)
+  - Privacy-aware: configurable amount/txid/nick inclusion
+  - Per-event toggles for fine-grained control
+  - Fire-and-forget: notifications never block protocol operations
+  - New optional dependency: `pip install jmcore[notifications]`
+  - Components integrated: Maker, Taker, Directory Server, Orderbook Watcher
+  - Docker images now include `apprise` by default for notification support
 - **DescriptorWalletBackend**: New Bitcoin Core backend using descriptor wallets for efficient UTXO tracking.
   - Uses `importdescriptors` RPC for one-time wallet setup
   - Uses `listunspent` RPC for fast UTXO queries (O(wallet) vs O(UTXO set))
