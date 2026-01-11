@@ -655,6 +655,97 @@ The `F:` prefix identifies the features field and maintains backward compatibili
 
 ---
 
+## Operator Notifications
+
+JoinMarket NG supports push notifications for CoinJoin events via [Apprise](https://github.com/caronc/apprise), enabling alerts through 100+ services including Gotify, Telegram, Discord, Pushover, and email.
+
+### Installation
+
+Notifications are an optional feature. Install with:
+
+```bash
+pip install jmcore[notifications]
+# or
+pip install apprise>=1.8.0
+```
+
+### Configuration
+
+All configuration is via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NOTIFY_URLS` | (none) | Comma-separated Apprise URLs (required to enable) |
+| `NOTIFY_ENABLED` | auto | Set `false` to disable, otherwise enabled if URLs provided |
+| `NOTIFY_TITLE_PREFIX` | `JoinMarket` | Prefix for notification titles |
+
+**Privacy settings:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NOTIFY_INCLUDE_AMOUNTS` | `true` | Include satoshi amounts in notifications |
+| `NOTIFY_INCLUDE_TXIDS` | `false` | Include transaction IDs (privacy risk) |
+| `NOTIFY_INCLUDE_NICK` | `true` | Include peer nicks (truncated) |
+
+**Tor/Proxy settings:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NOTIFY_USE_TOR` | `true` | Route notifications through Tor SOCKS proxy |
+
+When enabled, notifications use `TOR_SOCKS_HOST` and `TOR_SOCKS_PORT` environment variables (defaults: `127.0.0.1:9050`).
+
+**Per-event toggles:**
+
+| Variable | Default | Component | Description |
+|----------|---------|-----------|-------------|
+| `NOTIFY_FILL` | `true` | Maker | Notify on !fill requests |
+| `NOTIFY_REJECTION` | `true` | Maker | Notify on rejections |
+| `NOTIFY_SIGNING` | `true` | Maker | Notify on TX signing |
+| `NOTIFY_MEMPOOL` | `true` | Both | Notify when CJ in mempool |
+| `NOTIFY_CONFIRMED` | `true` | Both | Notify on confirmation |
+| `NOTIFY_NICK_CHANGE` | `true` | Maker | Notify on nick change |
+| `NOTIFY_DISCONNECT` | `true` | Maker | Notify on directory disconnect |
+| `NOTIFY_COINJOIN_START` | `true` | Taker | Notify on CoinJoin start |
+| `NOTIFY_COINJOIN_COMPLETE` | `true` | Taker | Notify on CoinJoin complete |
+| `NOTIFY_COINJOIN_FAILED` | `true` | Taker | Notify on CoinJoin failure |
+| `NOTIFY_PEER_EVENTS` | `false` | Directory | Notify on peer connect/disconnect |
+| `NOTIFY_RATE_LIMIT` | `true` | Directory | Notify on rate limit bans |
+
+### Example URLs
+
+```bash
+# Gotify (self-hosted)
+export NOTIFY_URLS="gotify://your-server.com/AaBbCcDdEeFf"
+
+# Telegram
+export NOTIFY_URLS="tgram://bot_token/chat_id"
+
+# Discord webhook
+export NOTIFY_URLS="discord://webhook_id/webhook_token"
+
+# Multiple services
+export NOTIFY_URLS="gotify://host/token,tgram://bot/chat"
+
+# Email
+export NOTIFY_URLS="mailto://user:pass@smtp.example.com"
+```
+
+See [Apprise documentation](https://github.com/caronc/apprise#supported-notifications) for 100+ supported services.
+
+### Docker Usage
+
+```yaml
+services:
+  maker:
+    image: joinmarket-ng/maker
+    environment:
+      - NOTIFY_URLS=gotify://your-server.com/token
+      - NOTIFY_INCLUDE_TXIDS=false
+```
+
+---
+
 ## CoinJoin Protocol Flow
 
 All protocol commands use JSON-line format: `{"type": <code>, "line": "<payload>"}\r\n`
