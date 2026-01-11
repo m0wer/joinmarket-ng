@@ -266,7 +266,7 @@ JoinMarket NG supports three blockchain backends with different tradeoffs:
 - **Method**: `importdescriptors` + `listunspent` RPC
 - **Requirements**: Bitcoin Core v24+
 - **Validation**: Full validation
-- **Storage**: ~500 GB (full node) + small wallet file
+- **Storage**: ~900 GB (full node) + small wallet file
 - **Privacy**: High (local node)
 - **Sync Speed**: Fast after initial descriptor import
 
@@ -286,7 +286,7 @@ Configuration options in `WalletConfig`:
 - **Method**: `scantxoutset` RPC (no wallet required)
 - **Requirements**: Bitcoin Core v30+
 - **Validation**: Full validation
-- **Storage**: ~500 GB
+- **Storage**: ~900 GB
 - **Privacy**: High (local node)
 - **Sync Speed**: Slow (~90s per scan on mainnet)
 
