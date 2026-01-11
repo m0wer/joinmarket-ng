@@ -520,7 +520,10 @@ async def _show_wallet_info(
         fingerprint = get_mnemonic_fingerprint(mnemonic, bip39_passphrase or "")
         wallet_name = generate_wallet_name(fingerprint, network)
         backend = DescriptorWalletBackend(
-            rpc_url=rpc_url, rpc_user=rpc_user, rpc_password=rpc_password, wallet_name=wallet_name
+            rpc_url=rpc_url,
+            rpc_user=rpc_user,
+            rpc_password=rpc_password,
+            wallet_name=wallet_name,
         )
     elif backend_type == "full_node":
         backend = BitcoinCoreBackend(rpc_url=rpc_url, rpc_user=rpc_user, rpc_password=rpc_password)

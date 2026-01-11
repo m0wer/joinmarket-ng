@@ -82,8 +82,14 @@ def test_status_command_success(mock_http_server):
     args.port = mock_http_server.server_address[1]
     args.json = False
 
-    with patch("sys.stdout", new=StringIO()) as fake_out:
+    with (
+        patch("sys.stdout", new=StringIO()) as fake_out,
+        patch("sys.stderr", new=StringIO()) as fake_err,
+    ):
         result = status_command(args)
+
+        if result != 0:
+            pytest.fail(f"Command failed with code {result}. Stderr: {fake_err.getvalue()}")
 
     assert result == 0
     output = fake_out.getvalue()
@@ -98,8 +104,14 @@ def test_status_command_json_output(mock_http_server):
     args.port = mock_http_server.server_address[1]
     args.json = True
 
-    with patch("sys.stdout", new=StringIO()) as fake_out:
+    with (
+        patch("sys.stdout", new=StringIO()) as fake_out,
+        patch("sys.stderr", new=StringIO()) as fake_err,
+    ):
         result = status_command(args)
+
+        if result != 0:
+            pytest.fail(f"Command failed with code {result}. Stderr: {fake_err.getvalue()}")
 
     assert result == 0
     output = fake_out.getvalue()
@@ -133,8 +145,14 @@ def test_health_command_healthy(mock_http_server):
     args.port = mock_http_server.server_address[1]
     args.json = False
 
-    with patch("sys.stdout", new=StringIO()) as fake_out:
+    with (
+        patch("sys.stdout", new=StringIO()) as fake_out,
+        patch("sys.stderr", new=StringIO()) as fake_err,
+    ):
         result = health_command(args)
+
+        if result != 0:
+            pytest.fail(f"Command failed with code {result}. Stderr: {fake_err.getvalue()}")
 
     assert result == 0
     output = fake_out.getvalue()
@@ -147,8 +165,14 @@ def test_health_command_json_output(mock_http_server):
     args.port = mock_http_server.server_address[1]
     args.json = True
 
-    with patch("sys.stdout", new=StringIO()) as fake_out:
+    with (
+        patch("sys.stdout", new=StringIO()) as fake_out,
+        patch("sys.stderr", new=StringIO()) as fake_err,
+    ):
         result = health_command(args)
+
+        if result != 0:
+            pytest.fail(f"Command failed with code {result}. Stderr: {fake_err.getvalue()}")
 
     assert result == 0
     output = fake_out.getvalue()

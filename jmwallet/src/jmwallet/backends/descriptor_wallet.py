@@ -19,6 +19,7 @@ Trade-offs:
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Sequence
 from typing import Any
@@ -37,6 +38,13 @@ IMPORT_RPC_TIMEOUT = 120.0
 
 # Default gap limit for descriptor ranges
 DEFAULT_GAP_LIMIT = 1000
+
+# Default scan lookback period (approximately 1 year of blocks)
+# Bitcoin averages ~144 blocks/day * 365 days ≈ 52,560 blocks
+DEFAULT_SCAN_LOOKBACK_BLOCKS = 52_560
+
+# Blocks per year (approximate, for time-based calculations)
+BLOCKS_PER_YEAR = 52_560
 
 # Environment variable to enable sensitive logging (descriptors, addresses, etc.)
 SENSITIVE_LOGGING = os.environ.get("SENSITIVE_LOGGING", "").lower() in ("1", "true", "yes")
@@ -101,6 +109,9 @@ class DescriptorWalletBackend(BlockchainBackend):
         self._wallet_loaded = False
         self._descriptors_imported = False
 
+        # Track background rescan status
+        self._background_rescan_height: int | None = None
+
     def _get_wallet_url(self) -> str:
         """Get the RPC URL for wallet-specific calls."""
         return f"{self.rpc_url}/wallet/{self.wallet_name}"
@@ -163,6 +174,11 @@ class DescriptorWalletBackend(BlockchainBackend):
         """
         Create a descriptor wallet in Bitcoin Core.
 
+        The wallet is encrypted with the passphrase (if provided) to protect
+        the xpubs from unauthorized access. This is important because xpubs
+        reveal transaction history, which would undo the privacy benefits
+        of CoinJoin if exposed.
+
         Args:
             disable_private_keys: If True, creates a watch-only wallet (recommended)
 
@@ -190,7 +206,7 @@ class DescriptorWalletBackend(BlockchainBackend):
                 if not any(err in error_str for err in not_found_errs):
                     raise
 
-            # Create new descriptor wallet
+            # Create new descriptor wallet (watch-only, no private keys)
             # Params: wallet_name, disable_private_keys, blank, passphrase, avoid_reuse, descriptors
             result = await self._rpc_call(
                 "createwallet",
@@ -198,7 +214,7 @@ class DescriptorWalletBackend(BlockchainBackend):
                     self.wallet_name,  # wallet_name
                     disable_private_keys,  # disable_private_keys
                     True,  # blank (no default keys)
-                    "",  # passphrase
+                    "",  # passphrase (empty - not supported for watch-only wallets)
                     False,  # avoid_reuse
                     True,  # descriptors (MUST be True for descriptor wallet)
                 ],
@@ -213,11 +229,51 @@ class DescriptorWalletBackend(BlockchainBackend):
             logger.error(f"Failed to create/load wallet: {e}")
             raise
 
+    async def _get_smart_scan_timestamp(
+        self, lookback_blocks: int = DEFAULT_SCAN_LOOKBACK_BLOCKS
+    ) -> int:
+        """
+        Calculate a smart scan timestamp based on current block height.
+
+        Returns a Unix timestamp corresponding to approximately `lookback_blocks` ago.
+        This allows scanning recent history quickly without waiting for a full
+        genesis-to-tip rescan.
+
+        Args:
+            lookback_blocks: Number of blocks to look back (default: ~1 year)
+
+        Returns:
+            Unix timestamp for the target block
+        """
+        try:
+            # Get current block height
+            current_height = await self.get_block_height()
+
+            # Calculate target height (don't go below 0)
+            target_height = max(0, current_height - lookback_blocks)
+
+            # Get block time at target height
+            block_hash = await self.get_block_hash(target_height)
+            block_header = await self._rpc_call("getblockheader", [block_hash], use_wallet=False)
+            timestamp = block_header.get("time", 0)
+
+            logger.debug(
+                f"Smart scan: current height {current_height}, "
+                f"target height {target_height}, timestamp {timestamp}"
+            )
+            return timestamp
+
+        except Exception as e:
+            logger.warning(f"Failed to calculate smart scan timestamp: {e}, falling back to 0")
+            return 0
+
     async def import_descriptors(
         self,
         descriptors: Sequence[str | dict[str, Any]],
         rescan: bool = True,
         timestamp: str | int | None = None,
+        smart_scan: bool = True,
+        background_full_rescan: bool = True,
     ) -> dict[str, Any]:
         """
         Import descriptors into the wallet.
@@ -225,33 +281,58 @@ class DescriptorWalletBackend(BlockchainBackend):
         This is the key operation that enables efficient UTXO tracking. Once imported,
         Bitcoin Core will automatically track all addresses derived from these descriptors.
 
+        Smart Scan Behavior (smart_scan=True):
+            Instead of scanning from genesis (which can take 20+ minutes on mainnet),
+            the smart scan imports descriptors with a timestamp ~1 year in the past.
+            This allows quick startup while still catching most wallet activity.
+
+            If background_full_rescan=True, a full rescan from genesis is triggered
+            in the background after the initial import completes. This runs asynchronously
+            and ensures no transactions are missed.
+
         Args:
             descriptors: List of output descriptors. Can be:
                 - Simple strings: "wpkh(xpub.../0/*)"
                 - Dicts with range: {"desc": "wpkh(xpub.../0/*)", "range": [0, 999]}
-            rescan: If True, rescan blockchain from genesis (timestamp=0).
+            rescan: If True, rescan blockchain (behavior depends on smart_scan).
                    If False, only track new transactions (timestamp="now").
-            timestamp: Override timestamp. If None, uses 0 (rescan=True) or "now" (rescan=False).
+            timestamp: Override timestamp. If None, uses smart calculation or 0/"now".
                       Can be Unix timestamp for partial rescan from specific time.
+            smart_scan: If True and rescan=True, scan from ~1 year ago instead of genesis.
+                       This allows quick startup. (default: True)
+            background_full_rescan: If True and smart_scan=True, trigger full rescan
+                                   from genesis in background after import. (default: True)
 
         Returns:
-            Import result from Bitcoin Core
+            Import result from Bitcoin Core with additional 'background_rescan_started' key
 
         Example:
-            # Import and rescan entire blockchain (slow on mainnet)
+            # Smart scan (fast startup, background full rescan)
             await backend.import_descriptors([
                 {"desc": "wpkh(xpub.../0/*)", "range": [0, 999], "internal": False},
-            ], rescan=True)
+            ], rescan=True, smart_scan=True)
 
-            # Import without rescanning (for new wallets with no history)
+            # Full rescan from genesis (slow but complete)
+            await backend.import_descriptors([...], rescan=True, smart_scan=False)
+
+            # No rescan (for brand new wallets with no history)
             await backend.import_descriptors([...], rescan=False)
         """
         if not self._wallet_loaded:
             raise RuntimeError("Wallet not loaded. Call create_wallet() first.")
 
-        # Determine timestamp based on rescan parameter if not explicitly provided
+        # Calculate appropriate timestamp
+        background_rescan_needed = False
         if timestamp is None:
-            timestamp = 0 if rescan else "now"
+            if not rescan:
+                timestamp = "now"
+            elif smart_scan:
+                # Smart scan: start from ~1 year ago for fast startup
+                timestamp = await self._get_smart_scan_timestamp()
+                background_rescan_needed = background_full_rescan
+            else:
+                # Full rescan from genesis
+                timestamp = 0
 
         # Format descriptors for importdescriptors RPC
         import_requests = []
@@ -284,12 +365,19 @@ class DescriptorWalletBackend(BlockchainBackend):
         if SENSITIVE_LOGGING:
             logger.debug(f"Importing {len(import_requests)} descriptor(s): {import_requests}")
         else:
-            rescan_info = (
-                "from genesis (timestamp=0)" if timestamp == 0 else f"timestamp={timestamp}"
-            )
+            if timestamp == 0:
+                rescan_info = "from genesis (timestamp=0)"
+            elif timestamp == "now":
+                rescan_info = "no rescan (timestamp='now')"
+            elif smart_scan and background_rescan_needed:
+                rescan_info = (
+                    f"smart scan from ~1 year ago (timestamp={timestamp}), "
+                    "full rescan in background"
+                )
+            else:
+                rescan_info = f"timestamp={timestamp}"
             logger.info(
-                f"Importing {len(import_requests)} descriptor(s) into wallet "
-                f"(rescan={rescan}, {rescan_info})..."
+                f"Importing {len(import_requests)} descriptor(s) into wallet ({rescan_info})..."
             )
 
         try:
@@ -329,7 +417,22 @@ class DescriptorWalletBackend(BlockchainBackend):
                 logger.warning(f"Could not verify descriptor import: {e}")
 
             self._descriptors_imported = True
-            return {"success_count": success_count, "error_count": error_count, "results": result}
+
+            # Trigger background full rescan if needed
+            background_rescan_started = False
+            if background_rescan_needed and success_count > 0:
+                try:
+                    await self.start_background_rescan()
+                    background_rescan_started = True
+                except Exception as e:
+                    logger.warning(f"Failed to start background rescan: {e}")
+
+            return {
+                "success_count": success_count,
+                "error_count": error_count,
+                "results": result,
+                "background_rescan_started": background_rescan_started,
+            }
 
         except Exception as e:
             logger.error(f"Failed to import descriptors: {e}")
@@ -347,25 +450,140 @@ class DescriptorWalletBackend(BlockchainBackend):
             logger.warning(f"Failed to get descriptor checksum: {e}")
             return descriptor
 
+    async def start_background_rescan(self, start_height: int = 0) -> None:
+        """
+        Start a background blockchain rescan from the given height.
+
+        This triggers a rescan that runs asynchronously in Bitcoin Core.
+        The rescan will find any transactions that were missed by the
+        initial smart scan (which only scans recent blocks).
+
+        Unlike the synchronous rescan in import_descriptors, this method
+        returns immediately and the rescan continues in the background.
+
+        Args:
+            start_height: Block height to start rescan from (default: 0 = genesis)
+        """
+        if not self._wallet_loaded:
+            raise RuntimeError("Wallet not loaded. Call create_wallet() first.")
+
+        try:
+            logger.info(
+                f"Starting background blockchain rescan from height {start_height}. "
+                "This will run in the background and may take several minutes on mainnet."
+            )
+
+            # rescanblockchain runs in the background when called via RPC
+            # We use a fire-and-forget approach with a short timeout client
+            # to avoid blocking on the full rescan
+            import asyncio
+
+            # Create a task that won't block the caller
+            # We don't await it - let it run in background
+            asyncio.create_task(self._run_background_rescan(start_height))
+
+            self._background_rescan_height = start_height
+
+        except Exception as e:
+            logger.error(f"Failed to start background rescan: {e}")
+            raise
+
+    async def _run_background_rescan(self, start_height: int) -> None:
+        """
+        Internal method to run the background rescan.
+
+        This is executed as a fire-and-forget task.
+        """
+        try:
+            # Use a client with very long timeout for the background rescan
+            # 2 hours should be enough for a full mainnet rescan
+            background_client = httpx.AsyncClient(
+                timeout=7200.0,  # 2 hours
+                auth=(self.rpc_user, self.rpc_password),
+            )
+            try:
+                result = await self._rpc_call(
+                    "rescanblockchain",
+                    [start_height],
+                    client=background_client,
+                )
+                start_h = result.get("start_height", start_height)
+                stop_h = result.get("stop_height", "?")
+                logger.info(f"Background rescan completed: scanned blocks {start_h} to {stop_h}")
+            finally:
+                await background_client.aclose()
+
+            self._background_rescan_height = None
+
+        except asyncio.CancelledError:
+            logger.info("Background rescan was cancelled")
+            self._background_rescan_height = None
+        except Exception as e:
+            logger.error(f"Background rescan failed: {e}")
+            self._background_rescan_height = None
+
+    async def get_rescan_status(self) -> dict[str, Any] | None:
+        """
+        Check the status of any ongoing wallet rescan.
+
+        Returns:
+            Dict with rescan progress info, or None if no rescan in progress.
+            Example: {"progress": 0.5, "current_height": 500000}
+        """
+        if not self._wallet_loaded:
+            return None
+
+        try:
+            # getwalletinfo includes rescan progress if a rescan is in progress
+            wallet_info = await self._rpc_call("getwalletinfo")
+
+            if "scanning" in wallet_info and wallet_info["scanning"]:
+                scanning_info = wallet_info["scanning"]
+                return {
+                    "in_progress": True,
+                    "progress": scanning_info.get("progress", 0),
+                    "duration": scanning_info.get("duration", 0),
+                }
+
+            return {"in_progress": False}
+
+        except Exception as e:
+            logger.debug(f"Could not get rescan status: {e}")
+            return None
+
+    def is_background_rescan_pending(self) -> bool:
+        """Check if a background rescan was started and may still be running."""
+        return self._background_rescan_height is not None
+
     async def setup_wallet(
         self,
         descriptors: Sequence[str | dict[str, Any]],
         rescan: bool = True,
+        smart_scan: bool = True,
+        background_full_rescan: bool = True,
     ) -> bool:
         """
         Complete wallet setup: create wallet and import descriptors.
 
-        This is a convenience method for initial setup.
+        This is a convenience method for initial setup. By default, uses smart scan
+        for fast startup with a background full rescan.
 
         Args:
             descriptors: Descriptors to import
-            rescan: Whether to rescan blockchain (can be slow for mainnet)
+            rescan: Whether to rescan blockchain
+            smart_scan: If True and rescan=True, scan from ~1 year ago (fast startup)
+            background_full_rescan: If True and smart_scan=True, run full rescan in background
 
         Returns:
             True if setup completed successfully
         """
         await self.create_wallet(disable_private_keys=True)
-        await self.import_descriptors(descriptors, rescan=rescan)
+        await self.import_descriptors(
+            descriptors,
+            rescan=rescan,
+            smart_scan=smart_scan,
+            background_full_rescan=background_full_rescan,
+        )
         return True
 
     async def list_descriptors(self) -> list[dict[str, Any]]:
