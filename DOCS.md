@@ -276,8 +276,6 @@ Trade-off: Wallet files persist on disk on the node. Funds are not at risk, but 
 
 **Smart Scan for Fast Startup**: By default, descriptor import uses "smart scan" which only scans the blockchain from approximately 1 year ago (52,560 blocks). This allows fast startup on mainnet (seconds instead of 20+ minutes). A full background rescan from genesis is triggered automatically to ensure no old transactions are missed.
 
-**Wallet Encryption**: The descriptor wallet is encrypted using the wallet's master fingerprint as the passphrase. This protects the xpubs stored in Bitcoin Core's wallet file. Since xpubs reveal your complete transaction history, this prevents unauthorized access to your financial privacy even if someone gains access to the node's wallet files.
-
 Configuration options in `WalletConfig`:
 - `smart_scan: bool = True` - Use fast startup with partial scan
 - `background_full_rescan: bool = True` - Trigger full rescan in background

@@ -707,3 +707,210 @@ async def test_descriptor_wallet_service_integration():
         except Exception:
             pass
         await backend.close()
+
+
+# =============================================================================
+# Smart Scan Tests
+# =============================================================================
+
+
+class TestSmartScan:
+    """Tests for smart scan timestamp calculation."""
+
+    @pytest.mark.asyncio
+    async def test_smart_scan_timestamp_calculation(self) -> None:
+        """Test that smart scan calculates timestamp correctly."""
+        backend = DescriptorWalletBackend(wallet_name="test_smart_scan")
+
+        rpc_calls: list[tuple[str, list[Any] | None]] = []
+
+        async def mock_rpc(
+            method: str,
+            params: list[Any] | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            rpc_calls.append((method, params))
+            if method == "getblockchaininfo":
+                return {"blocks": 100_000, "headers": 100_000}
+            elif method == "getblockhash":
+                return "000000000000abcd1234"
+            elif method == "getblockheader":
+                return {"time": 1700000000}
+            return {}
+
+        backend._rpc_call = mock_rpc  # type: ignore[method-assign]
+
+        # Default lookback is 52,560 blocks (~1 year)
+        # Current height: 100,000, lookback: 52,560 -> target: 47,440
+        timestamp = await backend._get_smart_scan_timestamp()
+
+        # Verify the RPC calls
+        method_names = [call[0] for call in rpc_calls]
+        assert "getblockchaininfo" in method_names
+        assert "getblockhash" in method_names
+        assert "getblockheader" in method_names
+        # Check getblockhash was called with correct height
+        getblockhash_calls = [call for call in rpc_calls if call[0] == "getblockhash"]
+        assert getblockhash_calls[0][1] == [47_440]
+        assert timestamp == 1700000000
+
+    @pytest.mark.asyncio
+    async def test_smart_scan_clamps_to_zero(self) -> None:
+        """Test that smart scan clamps to block 0 for short chains."""
+        backend = DescriptorWalletBackend(wallet_name="test_clamp")
+
+        rpc_calls: list[tuple[str, list[Any] | None]] = []
+
+        async def mock_rpc(
+            method: str,
+            params: list[Any] | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            rpc_calls.append((method, params))
+            if method == "getblockchaininfo":
+                return {"blocks": 1000, "headers": 1000}
+            elif method == "getblockhash":
+                return "0000000000genesis"
+            elif method == "getblockheader":
+                return {"time": 1231006505}  # Genesis time
+            return {}
+
+        backend._rpc_call = mock_rpc  # type: ignore[method-assign]
+
+        timestamp = await backend._get_smart_scan_timestamp()
+
+        # 1000 - 52560 = negative, should clamp to 0
+        getblockhash_calls = [call for call in rpc_calls if call[0] == "getblockhash"]
+        assert getblockhash_calls[0][1] == [0]
+        assert timestamp == 1231006505
+
+
+# =============================================================================
+# Background Rescan Tests
+# =============================================================================
+
+
+class TestBackgroundRescan:
+    """Tests for background rescan functionality."""
+
+    @pytest.mark.asyncio
+    async def test_start_background_rescan(self) -> None:
+        """Test that background rescan is started correctly."""
+        backend = DescriptorWalletBackend(wallet_name="test_rescan")
+        backend._wallet_loaded = True
+
+        async def mock_rpc(
+            method: str,
+            params: list[Any] | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            if method == "rescanblockchain":
+                return {"start_height": 0, "stop_height": 100000}
+            return {}
+
+        backend._rpc_call = mock_rpc  # type: ignore[method-assign]
+
+        await backend.start_background_rescan()
+
+        assert backend.is_background_rescan_pending() is True
+
+    @pytest.mark.asyncio
+    async def test_rescan_status_not_scanning(self) -> None:
+        """Test rescan status when not scanning."""
+        backend = DescriptorWalletBackend(wallet_name="test_status")
+        backend._wallet_loaded = True
+
+        async def mock_rpc(
+            method: str,
+            params: list[Any] | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            if method == "getwalletinfo":
+                return {"scanning": False, "walletname": "test_wallet"}
+            return {}
+
+        backend._rpc_call = mock_rpc  # type: ignore[method-assign]
+
+        status = await backend.get_rescan_status()
+
+        assert status is not None
+        assert status["in_progress"] is False
+
+    @pytest.mark.asyncio
+    async def test_rescan_status_while_scanning(self) -> None:
+        """Test rescan status during active scan."""
+        backend = DescriptorWalletBackend(wallet_name="test_scanning")
+        backend._wallet_loaded = True
+
+        async def mock_rpc(
+            method: str,
+            params: list[Any] | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            if method == "getwalletinfo":
+                return {
+                    "scanning": {"duration": 120, "progress": 0.45},
+                    "walletname": "test_wallet",
+                }
+            return {}
+
+        backend._rpc_call = mock_rpc  # type: ignore[method-assign]
+
+        status = await backend.get_rescan_status()
+
+        assert status is not None
+        assert status["in_progress"] is True
+        assert status["progress"] == 0.45
+        assert status["duration"] == 120
+
+    @pytest.mark.asyncio
+    async def test_import_with_smart_scan_and_background_rescan(self) -> None:
+        """Test import_descriptors with smart scan and background rescan enabled."""
+        backend = DescriptorWalletBackend(wallet_name="test_smart_background")
+        backend._wallet_loaded = True
+
+        rpc_calls: list[tuple[str, list[Any] | None]] = []
+
+        async def mock_rpc(
+            method: str,
+            params: list[Any] | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            rpc_calls.append((method, params))
+            if method == "getblockchaininfo":
+                return {"blocks": 100_000, "headers": 100_000}
+            elif method == "getblockhash":
+                return "00000000hash"
+            elif method == "getblock":
+                return {"time": 1700000000}
+            elif method == "importdescriptors":
+                return [{"success": True}]
+            return {}
+
+        backend._rpc_call = mock_rpc  # type: ignore[method-assign]
+
+        await backend.import_descriptors(
+            descriptors=[
+                {
+                    "desc": "wpkh([fingerprint/84'/1'/0'/0/0]xpub...)#checksum",
+                    "active": True,
+                    "range": [0, 999],
+                    "timestamp": "now",
+                }
+            ],
+            smart_scan=True,
+            background_full_rescan=True,
+        )
+
+        # Should have called getblockchaininfo for smart scan
+        method_names = [call[0] for call in rpc_calls]
+        assert "getblockchaininfo" in method_names
+
+        # Background rescan should be pending
+        assert backend.is_background_rescan_pending() is True

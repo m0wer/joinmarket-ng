@@ -724,6 +724,8 @@ class WalletService:
         fidelity_bond_addresses: list[tuple[str, int, int]] | None = None,
         rescan: bool = True,
         check_existing: bool = True,
+        smart_scan: bool = True,
+        background_full_rescan: bool = True,
     ) -> bool:
         """
         Setup descriptor wallet backend for efficient UTXO tracking.
@@ -731,14 +733,20 @@ class WalletService:
         This imports wallet descriptors into Bitcoin Core's descriptor wallet,
         enabling fast UTXO queries via listunspent instead of slow scantxoutset.
 
+        By default, uses smart scan for fast startup (~1 minute instead of 20+ minutes)
+        with a background full rescan to catch any older transactions.
+
         Should be called once on first use or when restoring a wallet.
         Subsequent operations will be much faster.
 
         Args:
             scan_range: Address index range to import (default 1000)
             fidelity_bond_addresses: Optional list of (address, locktime, index) tuples
-            rescan: Whether to rescan blockchain (can be slow for mainnet)
+            rescan: Whether to rescan blockchain
             check_existing: If True, checks if wallet is already set up and skips import
+            smart_scan: If True and rescan=True, scan from ~1 year ago for fast startup.
+                       A full rescan runs in background to catch older transactions.
+            background_full_rescan: If True and smart_scan=True, run full rescan in background
 
         Returns:
             True if setup completed successfully
@@ -747,12 +755,14 @@ class WalletService:
             RuntimeError: If backend is not DescriptorWalletBackend
 
         Example:
-            # First time setup (or wallet recovery)
-            if not await wallet.is_descriptor_wallet_ready():
-                await wallet.setup_descriptor_wallet(rescan=True)
+            # Fast setup with smart scan (default) - starts quickly, full scan in background
+            await wallet.setup_descriptor_wallet(rescan=True)
 
-            # Or just call setup_descriptor_wallet - it checks automatically
-            await wallet.setup_descriptor_wallet()  # Skips if already set up
+            # Full scan from genesis (slow but complete) - use for wallet recovery
+            await wallet.setup_descriptor_wallet(rescan=True, smart_scan=False)
+
+            # No rescan (for brand new wallets with no history)
+            await wallet.setup_descriptor_wallet(rescan=False)
         """
         if not isinstance(self.backend, DescriptorWalletBackend):
             raise RuntimeError(
@@ -791,7 +801,12 @@ class WalletService:
 
         # Setup wallet and import descriptors
         logger.info("Setting up descriptor wallet...")
-        await self.backend.setup_wallet(descriptors, rescan=rescan)
+        await self.backend.setup_wallet(
+            descriptors,
+            rescan=rescan,
+            smart_scan=smart_scan,
+            background_full_rescan=background_full_rescan,
+        )
         logger.info("Descriptor wallet setup complete")
         return True
 

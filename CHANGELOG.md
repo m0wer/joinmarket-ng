@@ -42,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `broadcast_peer_count` configuration parameter to control number of peers for MULTIPLE_PEERS policy.
 - Unified broadcast behavior between full node and Neutrino clients.
 - Comprehensive backend comparison documentation in jmwallet README with performance characteristics and use cases.
+- **Smart Scan for Descriptor Wallet**: Fast startup for descriptor wallet import on mainnet.
+  - Initial import only scans ~1 year of blockchain history (52,560 blocks)
+  - Reduces first-time wallet sync from 20+ minutes to seconds on mainnet
+  - Background full rescan runs automatically to ensure no old transactions are missed
+  - Configurable via `smart_scan`, `background_full_rescan`, `scan_lookback_blocks` in WalletConfig
 
 ### Changed
 
