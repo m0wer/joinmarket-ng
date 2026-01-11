@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Descriptor Wallet Backend now exposed via CLI**: Users can now select `--backend descriptor_wallet` for fast UTXO tracking.
+  - Available in all CLIs: `jm-wallet`, `jm-maker`, `jm-taker`
+  - Uses Bitcoin Core's `importdescriptors` for one-time wallet setup
+  - Fast syncs via `listunspent` (~1s vs ~90s for scantxoutset)
+  - Automatic descriptor import and wallet setup on first use
+  - **New default backend** for maker, taker, and wallet commands (changed from `full_node`)
+  - Docker compose examples updated to use `descriptor_wallet` by default
 - **DescriptorWalletBackend**: New Bitcoin Core backend using descriptor wallets for efficient UTXO tracking.
   - Uses `importdescriptors` RPC for one-time wallet setup
   - Uses `listunspent` RPC for fast UTXO queries (O(wallet) vs O(UTXO set))
@@ -26,9 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `BroadcastPolicy.MULTIPLE_PEERS` - new broadcast policy that sends to N random makers (default 3).
 - `broadcast_peer_count` configuration parameter to control number of peers for MULTIPLE_PEERS policy.
 - Unified broadcast behavior between full node and Neutrino clients.
+- Comprehensive backend comparison documentation in jmwallet README with performance characteristics and use cases.
 
 ### Changed
 
+- **Default backend changed from `full_node` to `descriptor_wallet`** for all components (maker, taker, wallet CLI).
+  - Full node (scantxoutset) still available via `--backend full_node`
+  - Provides significant performance improvement for ongoing operations (~1s vs ~90s per sync)
+  - Docker compose examples updated to use descriptor_wallet by default
 - Fee rate handling improvements:
   - Changed default fee rate from 10 sat/vB to 1 sat/vB fallback.
   - Added support for sub-1 sat/vB fee rates (float instead of int).

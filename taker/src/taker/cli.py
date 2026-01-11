@@ -138,8 +138,11 @@ def coinjoin(
         ),
     ] = None,
     backend_type: Annotated[
-        str, typer.Option("--backend", "-b", help="Backend type: full_node | neutrino")
-    ] = "full_node",
+        str,
+        typer.Option(
+            "--backend", "-b", help="Backend type: full_node | descriptor_wallet | neutrino"
+        ),
+    ] = "descriptor_wallet",
     rpc_url: Annotated[
         str,
         typer.Option(
@@ -267,7 +270,7 @@ def coinjoin(
             "neutrino_url": neutrino_url,
             "network": actual_bitcoin_network,
         }
-    else:
+    else:  # full_node or descriptor_wallet
         backend_config = {
             "rpc_url": rpc_url,
             "rpc_user": rpc_user,
@@ -312,8 +315,16 @@ async def _run_coinjoin(
     # Use bitcoin_network for address generation
     bitcoin_network = config.bitcoin_network or config.network
 
+    from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
+    from jmwallet.backends.descriptor_wallet import (
+        DescriptorWalletBackend,
+        generate_wallet_name,
+        get_mnemonic_fingerprint,
+    )
+    from jmwallet.backends.neutrino import NeutrinoBackend
+
     # Create backend based on config
-    backend: NeutrinoBackend | BitcoinCoreBackend
+    backend: NeutrinoBackend | BitcoinCoreBackend | DescriptorWalletBackend
     if config.backend_type == "neutrino":
         backend = NeutrinoBackend(
             neutrino_url=config.backend_config.get("neutrino_url", "http://127.0.0.1:8334"),
@@ -330,7 +341,24 @@ async def _run_coinjoin(
         except Exception as e:
             logger.error(f"Failed to connect to Neutrino backend: {e}")
             raise typer.Exit(1)
-    else:
+    elif config.backend_type == "descriptor_wallet":
+        fingerprint = get_mnemonic_fingerprint(config.mnemonic, config.passphrase or "")
+        wallet_name = generate_wallet_name(fingerprint, bitcoin_network.value)
+        backend = DescriptorWalletBackend(
+            rpc_url=config.backend_config["rpc_url"],
+            rpc_user=config.backend_config["rpc_user"],
+            rpc_password=config.backend_config["rpc_password"],
+            wallet_name=wallet_name,
+        )
+        # Verify RPC connection early
+        logger.info("Verifying Bitcoin Core RPC connection...")
+        try:
+            await backend.get_block_height()
+            logger.info("Bitcoin Core RPC connection verified")
+        except Exception as e:
+            logger.error(f"Failed to connect to Bitcoin Core RPC: {e}")
+            raise typer.Exit(1)
+    else:  # full_node
         backend = BitcoinCoreBackend(
             rpc_url=config.backend_config["rpc_url"],
             rpc_user=config.backend_config["rpc_user"],
@@ -360,6 +388,7 @@ async def _run_coinjoin(
         cj_amount: int,
         total_fee: int,
         destination: str,
+        mining_fee: int | None = None,
     ) -> bool:
         """Callback for user confirmation after maker selection."""
         from jmcore.confirmation import confirm_transaction, format_maker_summary
@@ -373,6 +402,7 @@ async def _run_coinjoin(
             amount=cj_amount,
             destination=destination,
             fee=total_fee,
+            mining_fee=mining_fee,
             additional_info=additional_info,
             skip_confirmation=skip_confirmation,
         )
@@ -424,8 +454,11 @@ def tumble(
     ] = None,
     network: Annotated[str, typer.Option("--network", help="Bitcoin network")] = "mainnet",
     backend_type: Annotated[
-        str, typer.Option("--backend", "-b", help="Backend type: full_node | neutrino")
-    ] = "full_node",
+        str,
+        typer.Option(
+            "--backend", "-b", help="Backend type: full_node | descriptor_wallet | neutrino"
+        ),
+    ] = "descriptor_wallet",
     rpc_url: Annotated[
         str,
         typer.Option(
@@ -542,8 +575,16 @@ async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
     # Use bitcoin_network for address generation
     bitcoin_network = config.bitcoin_network or config.network
 
+    from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
+    from jmwallet.backends.descriptor_wallet import (
+        DescriptorWalletBackend,
+        generate_wallet_name,
+        get_mnemonic_fingerprint,
+    )
+    from jmwallet.backends.neutrino import NeutrinoBackend
+
     # Create backend based on config
-    backend: NeutrinoBackend | BitcoinCoreBackend
+    backend: NeutrinoBackend | BitcoinCoreBackend | DescriptorWalletBackend
     if config.backend_type == "neutrino":
         backend = NeutrinoBackend(
             neutrino_url=config.backend_config.get("neutrino_url", "http://127.0.0.1:8334"),
@@ -560,7 +601,24 @@ async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
         except Exception as e:
             logger.error(f"Failed to connect to Neutrino backend: {e}")
             raise typer.Exit(1)
-    else:
+    elif config.backend_type == "descriptor_wallet":
+        fingerprint = get_mnemonic_fingerprint(config.mnemonic, config.passphrase or "")
+        wallet_name = generate_wallet_name(fingerprint, bitcoin_network.value)
+        backend = DescriptorWalletBackend(
+            rpc_url=config.backend_config["rpc_url"],
+            rpc_user=config.backend_config["rpc_user"],
+            rpc_password=config.backend_config["rpc_password"],
+            wallet_name=wallet_name,
+        )
+        # Verify RPC connection early
+        logger.info("Verifying Bitcoin Core RPC connection...")
+        try:
+            await backend.get_block_height()
+            logger.info("Bitcoin Core RPC connection verified")
+        except Exception as e:
+            logger.error(f"Failed to connect to Bitcoin Core RPC: {e}")
+            raise typer.Exit(1)
+    else:  # full_node
         backend = BitcoinCoreBackend(
             rpc_url=config.backend_config["rpc_url"],
             rpc_user=config.backend_config["rpc_user"],

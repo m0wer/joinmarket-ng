@@ -34,9 +34,68 @@ jm-wallet generate --save --prompt-password --output ~/.joinmarket-ng/wallets/wa
 
 ### 2. Choose Your Backend
 
-#### Option A: Neutrino (Recommended for Beginners)
+JoinMarket NG supports three blockchain backends with different trade-offs:
 
-Lightweight SPV backend - no full node needed (~500MB vs ~500GB).
+#### Option A: Descriptor Wallet (Recommended - Fast & Efficient)
+
+**Best for**: Running a maker bot or frequent operations with your own Bitcoin Core node.
+
+Uses Bitcoin Core's descriptor wallet feature to persistently track your addresses. After one-time setup, syncs are nearly instant using `listunspent` instead of scanning the entire UTXO set.
+
+**Performance**: ~1 second per sync (vs ~90 seconds with scantxoutset)
+
+**Requirements**: Bitcoin Core v24+ with your own node
+
+**Security Note**: ⚠️ **Never use with a third-party node!** Your wallet addresses are stored in Bitcoin Core's wallet files. Funds are safe, but your addresses and balances are visible to whoever controls the node.
+
+Create an environment file:
+
+```bash
+cat > ~/.joinmarket-ng/bitcoin.env << EOF
+export BITCOIN_RPC_URL=http://127.0.0.1:8332
+export BITCOIN_RPC_USER=your_rpc_user
+export BITCOIN_RPC_PASSWORD=your_rpc_password
+EOF
+chmod 600 ~/.joinmarket-ng/bitcoin.env
+```
+
+Check wallet balance (first run will import descriptors):
+
+```bash
+source ~/.joinmarket-ng/bitcoin.env
+jm-wallet info \
+  --mnemonic-file ~/.joinmarket-ng/wallets/wallet.mnemonic \
+  --backend descriptor_wallet
+```
+
+The first run imports your wallet descriptors into Bitcoin Core (one-time ~5 second operation). Subsequent syncs are nearly instant.
+
+#### Option B: Bitcoin Core Legacy (Simple but Slow)
+
+**Best for**: One-off operations or scripts where setup time doesn't matter.
+
+Uses `scantxoutset` RPC to scan the entire UTXO set each time. No persistent state, no wallet files created on the node.
+
+**Performance**: ~90 seconds per sync on mainnet
+
+**Requirements**: Bitcoin Core v30+
+
+```bash
+source ~/.joinmarket-ng/bitcoin.env
+jm-wallet info \
+  --mnemonic-file ~/.joinmarket-ng/wallets/wallet.mnemonic \
+  --backend full_node
+```
+
+#### Option C: Neutrino (Lightweight SPV)
+
+**Best for**: Limited storage or fast initial sync.
+
+Lightweight SPV backend using BIP157/158 compact block filters.
+
+**Storage**: ~500 MB (vs ~900 GB for full node)
+
+**Privacy**: High (downloads filters, not addresses)
 
 Start Neutrino server with Docker:
 
@@ -60,29 +119,15 @@ jm-wallet info \
   --backend neutrino
 ```
 
-#### Option B: Bitcoin Core Full Node
+#### Backend Comparison
 
-For maximum security and privacy. Requires a synced Bitcoin Core node (v23+).
-
-Create an environment file to avoid exposing credentials in shell history:
-
-```bash
-cat > ~/.joinmarket-ng/bitcoin.env << EOF
-export BITCOIN_RPC_URL=http://127.0.0.1:8332
-export BITCOIN_RPC_USER=your_rpc_user
-export BITCOIN_RPC_PASSWORD=your_rpc_password
-EOF
-chmod 600 ~/.joinmarket-ng/bitcoin.env
-```
-
-Load environment and check balance:
-
-```bash
-source ~/.joinmarket-ng/bitcoin.env
-jm-wallet info \
-  --mnemonic-file ~/.joinmarket-ng/wallets/wallet.mnemonic \
-  --backend full_node
-```
+| Feature | Descriptor Wallet | Full Node (Legacy) | Neutrino |
+|---------|-------------------|-------------------|----------|
+| **Sync Speed** | ~1s | ~90s | ~5s |
+| **Storage** | ~900 GB | ~900 GB | ~500 MB |
+| **Setup** | One-time import | None | External server |
+| **Privacy** | High (own node) | High (own node) | High (filters) |
+| **Mempool** | ✅ Yes | ✅ Yes | ❌ No |
 
 ### 3. View Your Addresses
 

@@ -91,8 +91,30 @@ def create_wallet_service(config: MakerConfig) -> WalletService:
     # Use bitcoin_network for address generation (bcrt1 vs tb1 vs bc1)
     bitcoin_network = config.bitcoin_network or config.network
 
-    backend: BitcoinCoreBackend | NeutrinoBackend
-    if backend_type == "full_node":
+    from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
+    from jmwallet.backends.descriptor_wallet import (
+        DescriptorWalletBackend,
+        generate_wallet_name,
+        get_mnemonic_fingerprint,
+    )
+    from jmwallet.backends.neutrino import NeutrinoBackend
+
+    backend: BitcoinCoreBackend | DescriptorWalletBackend | NeutrinoBackend
+    if backend_type == "descriptor_wallet":
+        backend_cfg = config.backend_config
+        fingerprint = get_mnemonic_fingerprint(config.mnemonic, config.passphrase or "")
+        # Convert NetworkType enum to string value
+        network_str = (
+            bitcoin_network.value if hasattr(bitcoin_network, "value") else str(bitcoin_network)
+        )
+        wallet_name = generate_wallet_name(fingerprint, network_str)
+        backend = DescriptorWalletBackend(
+            rpc_url=backend_cfg.get("rpc_url", "http://127.0.0.1:8332"),
+            rpc_user=backend_cfg.get("rpc_user", ""),
+            rpc_password=backend_cfg.get("rpc_password", ""),
+            wallet_name=wallet_name,
+        )
+    elif backend_type == "full_node":
         backend_cfg = config.backend_config
         backend = BitcoinCoreBackend(
             rpc_url=backend_cfg.get("rpc_url", "http://127.0.0.1:8332"),
@@ -161,8 +183,8 @@ def start(
         ),
     ] = None,
     backend_type: Annotated[
-        str, typer.Option(help="Backend type: full_node | neutrino")
-    ] = "full_node",
+        str, typer.Option(help="Backend type: full_node | descriptor_wallet | neutrino")
+    ] = "descriptor_wallet",
     rpc_url: Annotated[
         str | None, typer.Option(envvar="BITCOIN_RPC_URL", help="Bitcoin full node RPC URL")
     ] = None,
@@ -355,7 +377,7 @@ def start(
         raise typer.Exit(1)
 
     backend_config: dict[str, str] = {}
-    if backend_type == "full_node":
+    if backend_type in ("full_node", "descriptor_wallet"):
         backend_config = {
             "rpc_url": rpc_url or "http://127.0.0.1:8332",
             "rpc_user": rpc_user or "",
@@ -473,7 +495,7 @@ def generate_address(
             help="Bitcoin network for address generation (defaults to --network)",
         ),
     ] = None,
-    backend_type: Annotated[str, typer.Option()] = "full_node",
+    backend_type: Annotated[str, typer.Option()] = "descriptor_wallet",
 ) -> None:
     """Generate a new receive address."""
     # Load mnemonic
