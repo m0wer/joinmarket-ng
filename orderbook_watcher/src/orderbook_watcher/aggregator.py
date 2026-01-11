@@ -545,7 +545,7 @@ class OrderbookAggregator:
         try:
             await client.connect()
             status.mark_connected()
-            logger.info(f"Successfully connected to directory: {node_id}")
+            logger.info(f"Successfully connected to directory: {node_id} (our nick: {client.nick})")
             return client
 
         except Exception as e:
@@ -707,7 +707,10 @@ class OrderbookAggregator:
         # Deduplicate offers by bond UTXO
         # For offers with the same bond UTXO, keep only the most recent one
         # This handles the case where a maker restarts with a new nick but same bond
-        bond_to_best_offer: dict[str, tuple[Offer, float]] = {}  # bond_utxo -> (offer, timestamp)
+        # We also track all directory_nodes that announced each offer for statistics
+        bond_to_best_offer: dict[
+            str, tuple[Offer, float, list[str]]
+        ] = {}  # bond_utxo -> (offer, timestamp, directory_nodes)
         offers_without_bond: list[Offer] = []
 
         # Track statistics for logging
@@ -721,31 +724,66 @@ class OrderbookAggregator:
                 # Offer has a fidelity bond
                 offers_with_bonds += 1
                 existing = bond_to_best_offer.get(bond_utxo_key)
-                if existing is None or timestamp > existing[1]:
-                    # Keep this offer (either first with this bond or more recent)
-                    if existing is not None:
-                        old_offer = existing[0]
-                        # Only count as "replacement" if it's actually a different maker
-                        # Same nick+oid from different directories is just a duplicate, not stale
-                        is_same_offer = (
-                            old_offer.counterparty == offer.counterparty
-                            and old_offer.oid == offer.oid
+                if existing is None:
+                    # First offer for this bond
+                    directory_nodes = [offer.directory_node] if offer.directory_node else []
+                    logger.debug(
+                        f"Bond deduplication: First offer for bond {bond_utxo_key[:20]}... "
+                        f"from {offer.counterparty} (oid={offer.oid})"
+                    )
+                    bond_to_best_offer[bond_utxo_key] = (offer, timestamp, directory_nodes)
+                else:
+                    old_offer, old_timestamp, directory_nodes = existing
+                    # Check if this is the same maker (regardless of oid)
+                    # Makers can have different oids across directories but same counterparty+bond = same maker
+                    is_same_maker = old_offer.counterparty == offer.counterparty
+
+                    if is_same_maker:
+                        # Same maker from different directory - merge directory_nodes
+                        if offer.directory_node and offer.directory_node not in directory_nodes:
+                            directory_nodes.append(offer.directory_node)
+                        # Keep newer timestamp but preserve accumulated directory_nodes
+                        if timestamp > old_timestamp:
+                            bond_to_best_offer[bond_utxo_key] = (offer, timestamp, directory_nodes)
+                        logger.debug(
+                            f"Bond deduplication: Same maker {offer.counterparty} (oid={offer.oid}) "
+                            f"seen on {len(directory_nodes)} directories for bond {bond_utxo_key[:20]}..."
                         )
-                        if not is_same_offer:
+                    else:
+                        # Different maker using same bond UTXO
+                        # This is the "maker restart with new nick" scenario
+                        # Only replace if timestamp difference suggests legitimate restart (>60s)
+                        # Otherwise it might be clock skew between directories
+                        time_diff = timestamp - old_timestamp
+
+                        if abs(time_diff) < 60:
+                            # Likely clock skew between directories, not a real restart
+                            # Keep the older one (more stable) and log warning
+                            logger.warning(
+                                f"Bond deduplication: Ignoring potential duplicate from {offer.counterparty} "
+                                f"(oid={offer.oid}) - same bond as {old_offer.counterparty} "
+                                f"(oid={old_offer.oid}) with only {abs(time_diff):.1f}s difference "
+                                f"[bond UTXO: {bond_utxo_key[:20]}...]. Likely clock skew."
+                            )
+                        elif time_diff > 0:
+                            # Newer offer, likely legitimate maker restart
                             bond_replacements += 1
                             logger.info(
                                 f"Bond deduplication: Replacing offer from {old_offer.counterparty} "
                                 f"(oid={old_offer.oid}) with {offer.counterparty} (oid={offer.oid}) "
                                 f"[same bond UTXO: {bond_utxo_key[:20]}..., "
-                                f"age_diff={(timestamp - existing[1]):.1f}s]"
+                                f"age_diff={time_diff:.1f}s]"
                             )
-                        # else: same offer from different directory, just keep newer timestamp silently
-                    else:
-                        logger.debug(
-                            f"Bond deduplication: First offer for bond {bond_utxo_key[:20]}... "
-                            f"from {offer.counterparty} (oid={offer.oid})"
-                        )
-                    bond_to_best_offer[bond_utxo_key] = (offer, timestamp)
+                            # Reset directory_nodes for the new maker's offer
+                            new_directory_nodes = (
+                                [offer.directory_node] if offer.directory_node else []
+                            )
+                            bond_to_best_offer[bond_utxo_key] = (
+                                offer,
+                                timestamp,
+                                new_directory_nodes,
+                            )
+                        # else: older offer from different maker, ignore
             else:
                 # Offer without bond
                 offers_without_bonds += 1
@@ -770,30 +808,60 @@ class OrderbookAggregator:
                 f"{len(offers_without_bond)} non-bond offers"
             )
 
-        # Build final offers list
-        deduplicated_offers = [offer for offer, _ts in bond_to_best_offer.values()]
+        # Build final offers list - set directory_nodes from the accumulated list during bond dedup
+        deduplicated_offers: list[Offer] = []
+        for offer, _ts, directory_nodes in bond_to_best_offer.values():
+            offer.directory_nodes = directory_nodes
+            deduplicated_offers.append(offer)
         deduplicated_offers.extend(offers_without_bond)
 
         # Group offers by (counterparty, oid) to merge across directories
+        # Track all directory_nodes that announced each offer for statistics
+        # NOTE: Bond offers already have directory_nodes populated from bond deduplication
         offer_key_to_offer: dict[tuple[str, int], Offer] = {}
         for offer in deduplicated_offers:
             key = (offer.counterparty, offer.oid)
             if key not in offer_key_to_offer:
+                # First time seeing this offer
+                # Preserve existing directory_nodes (from bond deduplication) or initialize
+                if not offer.directory_nodes and offer.directory_node:
+                    offer.directory_nodes = [offer.directory_node]
                 offer_key_to_offer[key] = offer
-            # else: duplicate from multiple directories, keep first
+            else:
+                # Duplicate from another directory - merge directory_nodes
+                existing_offer = offer_key_to_offer[key]
+                if (
+                    offer.directory_node
+                    and offer.directory_node not in existing_offer.directory_nodes
+                ):
+                    existing_offer.directory_nodes.append(offer.directory_node)
+                # Merge features from multiple directories
+                for feature, value in offer.features.items():
+                    if value and not existing_offer.features.get(feature):
+                        existing_offer.features[feature] = value
 
         # Add deduplicated offers to orderbook
         for offer in offer_key_to_offer.values():
             orderbook.offers.append(offer)
-            if offer.directory_node and offer.directory_node not in orderbook.directory_nodes:
-                orderbook.directory_nodes.append(offer.directory_node)
+            # Track all unique directory nodes in the orderbook
+            for node in offer.directory_nodes:
+                if node not in orderbook.directory_nodes:
+                    orderbook.directory_nodes.append(node)
 
-        # Deduplicate bonds by UTXO key
+        # Deduplicate bonds by UTXO key while tracking all directories that announced them
         unique_bonds: dict[str, FidelityBond] = {}
         for bond in orderbook.fidelity_bonds:
             cache_key = f"{bond.utxo_txid}:{bond.utxo_vout}"
             if cache_key not in unique_bonds:
+                # First time seeing this bond - initialize directory_nodes
+                if bond.directory_node:
+                    bond.directory_nodes = [bond.directory_node]
                 unique_bonds[cache_key] = bond
+            else:
+                # Same bond from different directory - merge directory_nodes
+                existing_bond = unique_bonds[cache_key]
+                if bond.directory_node and bond.directory_node not in existing_bond.directory_nodes:
+                    existing_bond.directory_nodes.append(bond.directory_node)
         orderbook.fidelity_bonds = list(unique_bonds.values())
 
         if calculate_bonds:
@@ -856,6 +924,21 @@ class OrderbookAggregator:
                             f"Linked standalone bond from {bond.counterparty} "
                             f"(txid={bond.utxo_txid[:16]}...) to offer oid={offer.oid}"
                         )
+
+        # Populate bond directory_nodes from linked offers
+        # Bonds are counted in all directories where:
+        # 1. They were directly announced (already in directory_nodes from deduplication)
+        # 2. Their associated offers appeared (merged here)
+        for bond in orderbook.fidelity_bonds:
+            # Find all offers from this counterparty and collect their directory_nodes
+            maker_offers = [o for o in orderbook.offers if o.counterparty == bond.counterparty]
+            if maker_offers:
+                # Merge offer directory_nodes with bond's existing directory_nodes
+                all_directories: set[str] = set(bond.directory_nodes)  # Start with bond's own
+                for offer in maker_offers:
+                    all_directories.update(offer.directory_nodes)
+                bond.directory_nodes = sorted(all_directories)
+            # else: No offers, keep bond's directory_nodes from deduplication (if any)
 
         # Populate direct reachability and features from health check cache
         # This provides valuable information about whether makers are reachable beyond

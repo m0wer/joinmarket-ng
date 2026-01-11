@@ -1237,17 +1237,24 @@ class DirectoryClient:
             # Get all offer keys that previously used this bond
             old_offer_keys = self._bond_to_offers.get(bond_utxo_key, set()).copy()
 
-            # Remove old offers (from different nicks using same bond)
+            # Remove old offers from DIFFERENT makers using same bond (maker restart scenario)
+            # Keep multiple offers from SAME maker (same counterparty, different oids)
             for old_key in old_offer_keys:
-                if old_key != offer_key and old_key in self.offers:
-                    logger.info(
+                if (
+                    old_key != offer_key
+                    and old_key in self.offers
+                    and old_key[0] != offer_key[0]  # Different counterparty
+                ):
+                    logger.debug(
                         f"Removing stale offer from {old_key[0]} oid={old_key[1]} - "
                         f"same bond UTXO now used by {offer_key[0]}"
                     )
                     del self.offers[old_key]
 
-            # Clear the old bond -> offers mapping and set up new one
-            self._bond_to_offers[bond_utxo_key] = {offer_key}
+            # Update bond -> offers mapping: add this offer to the set
+            if bond_utxo_key not in self._bond_to_offers:
+                self._bond_to_offers[bond_utxo_key] = set()
+            self._bond_to_offers[bond_utxo_key].add(offer_key)
         else:
             # Remove this offer from any previous bond mapping
             old_offer_data = self.offers.get(offer_key)

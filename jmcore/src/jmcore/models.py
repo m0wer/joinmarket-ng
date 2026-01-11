@@ -217,6 +217,10 @@ class Offer(BaseModel):
     cjfee: str | int
     fidelity_bond_value: int = Field(default=0, ge=0)
     directory_node: str | None = None
+    directory_nodes: list[str] = Field(
+        default_factory=list,
+        description="All directory nodes that announced this offer (for statistics)",
+    )
     fidelity_bond_data: dict[str, Any] | None = None
     neutrino_compat: bool = Field(
         default=False,
@@ -262,6 +266,10 @@ class FidelityBond(BaseModel):
     utxo_confirmation_timestamp: int = Field(default=0, ge=0)
     cert_expiry: int = Field(..., ge=0)
     directory_node: str | None = None
+    directory_nodes: list[str] = Field(
+        default_factory=list,
+        description="All directory nodes that announced this bond (for statistics)",
+    )
     fidelity_bond_data: dict[str, Any] | None = None
 
 
@@ -284,10 +292,22 @@ class OrderBook(BaseModel):
         self.fidelity_bonds.extend(bonds)
 
     def get_offers_by_directory(self) -> dict[str, list[Offer]]:
+        """Get offers grouped by directory node.
+
+        This uses the directory_nodes list (plural) which tracks all directories
+        that announced each offer, so an offer will appear under multiple
+        directories if it was announced by multiple directories.
+        """
         result: dict[str, list[Offer]] = {}
         for offer in self.offers:
-            node = offer.directory_node or "unknown"
-            if node not in result:
-                result[node] = []
-            result[node].append(offer)
+            # Use directory_nodes (plural) if populated, otherwise fallback to directory_node
+            nodes = offer.directory_nodes if offer.directory_nodes else []
+            if not nodes and offer.directory_node:
+                nodes = [offer.directory_node]
+            if not nodes:
+                nodes = ["unknown"]
+            for node in nodes:
+                if node not in result:
+                    result[node] = []
+                result[node].append(offer)
         return result

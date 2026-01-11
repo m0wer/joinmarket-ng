@@ -29,6 +29,7 @@ async def run_watcher() -> None:
     settings = get_settings()
     setup_logging(settings.log_level)
 
+    logger.info("=" * 80)
     logger.info("Starting JoinMarket Orderbook Watcher")
     logger.info(f"Network: {settings.network}")
     logger.info(f"HTTP server: {settings.http_host}:{settings.http_port}")
@@ -44,6 +45,7 @@ async def run_watcher() -> None:
     logger.info(f"Directory nodes: {len(directory_nodes)}")
     for node in directory_nodes:
         logger.info(f"  - {node[0]}:{node[1]}")
+    logger.info("=" * 80)
 
     aggregator = OrderbookAggregator(
         directory_nodes=directory_nodes,
