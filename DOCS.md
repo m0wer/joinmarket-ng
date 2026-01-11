@@ -1153,6 +1153,46 @@ jm-wallet registry-show bc1q...
 - `is_funded`: Whether the bond has a confirmed UTXO
 - `is_expired`: Whether the locktime has passed
 
+### Descriptor Wallet Lifecycle
+
+**Important:** The `descriptor_wallet` backend requires importing bond addresses into Bitcoin Core's wallet before they can be detected on-chain.
+
+#### Bond Creation Flow
+
+When you create a new bond with `generate-bond-address`:
+1. ✅ Bond metadata is saved to `fidelity_bonds.json`
+2. ❌ Address is **NOT** imported to descriptor wallet yet
+
+#### Bond Discovery Flow
+
+When you discover bonds with `recover-bonds`:
+1. ✅ Scans blockchain for bonds at all timelocks
+2. ✅ Saves found bonds to `fidelity_bonds.json`
+3. ✅ **Automatically imports** discovered addresses to descriptor wallet (for descriptor_wallet backend)
+
+#### Bond Syncing Flow
+
+When you sync with `registry-sync`:
+1. ✅ Reads bonds from `fidelity_bonds.json`
+2. ✅ **Automatically imports** bond addresses if using descriptor_wallet backend
+3. ✅ Updates UTXO info (txid, vout, value, confirmations)
+
+#### Maker Bot Startup
+
+When the maker bot starts:
+1. ✅ Loads bonds from `fidelity_bonds.json`
+2. ✅ **Automatically imports** bond addresses during wallet setup
+3. ✅ Detects funded bonds and includes proof in offers
+
+#### Manual Operations (info/send)
+
+When using `jm-wallet info` or `jm-wallet send`:
+1. ✅ Loads bonds from `fidelity_bonds.json`
+2. ✅ **Automatically imports** bond addresses if wallet exists
+3. ✅ Shows bond UTXOs in balance/transaction
+
+**Key Point:** All commands now handle descriptor import automatically. You don't need to manually import bond addresses.
+
 ### Spending Fidelity Bonds
 
 After the locktime expires, bonds can be spent using the `send` command:

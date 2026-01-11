@@ -495,12 +495,32 @@ class MakerBot:
             from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
 
             if isinstance(self.backend, DescriptorWalletBackend):
-                if not await self.wallet.is_descriptor_wallet_ready(
+                # Check if base wallet is set up (without counting bonds)
+                base_wallet_ready = await self.wallet.is_descriptor_wallet_ready(
+                    fidelity_bond_count=0
+                )
+                # Check if wallet with bonds is set up
+                full_wallet_ready = await self.wallet.is_descriptor_wallet_ready(
                     fidelity_bond_count=len(fidelity_bond_addresses)
-                ):
+                )
+
+                if not base_wallet_ready:
+                    # First time setup - import everything including bonds
                     logger.info("Descriptor wallet not set up. Importing descriptors...")
-                    await self.wallet.setup_descriptor_wallet(rescan=True)
+                    await self.wallet.setup_descriptor_wallet(
+                        rescan=True,
+                        fidelity_bond_addresses=fidelity_bond_addresses,
+                    )
                     logger.info("Descriptor wallet setup complete")
+                elif not full_wallet_ready and fidelity_bond_addresses:
+                    # Base wallet exists but bonds are missing - import just the bonds
+                    logger.info(
+                        "Descriptor wallet exists but fidelity bond addresses not imported. "
+                        "Importing bond addresses..."
+                    )
+                    await self.wallet.import_fidelity_bond_addresses(
+                        fidelity_bond_addresses, rescan=True
+                    )
 
                 # Use fast descriptor wallet sync
                 await self.wallet.sync_with_descriptor_wallet(fidelity_bond_addresses)

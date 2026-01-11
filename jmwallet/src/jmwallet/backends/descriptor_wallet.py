@@ -340,21 +340,25 @@ class DescriptorWalletBackend(BlockchainBackend):
             if isinstance(desc, str):
                 # Add checksum if not present
                 desc_with_checksum = await self._add_descriptor_checksum(desc)
+                # Single address descriptors (addr(...)) cannot be active - they're not ranged
+                is_ranged = "*" in desc or "range" in desc if isinstance(desc, str) else False
                 import_requests.append(
                     {
                         "desc": desc_with_checksum,
                         "timestamp": timestamp,
-                        "active": True,  # Track this descriptor actively
+                        "active": is_ranged,  # Only ranged descriptors can be active
                         "internal": False,
                     }
                 )
             elif isinstance(desc, dict):
                 desc_str = desc.get("desc", "")
                 desc_with_checksum = await self._add_descriptor_checksum(desc_str)
+                # Determine if descriptor is ranged (has * wildcard or explicit range)
+                is_ranged = "*" in desc_str or "range" in desc
                 request = {
                     "desc": desc_with_checksum,
                     "timestamp": timestamp,
-                    "active": True,
+                    "active": is_ranged,  # Only ranged descriptors can be active
                 }
                 if "range" in desc:
                     request["range"] = desc["range"]

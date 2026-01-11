@@ -419,6 +419,9 @@ class WalletService:
         locktimes they used. It generates addresses for all valid timenumbers
         (0-959, representing Jan 2020 through Dec 2099) and scans for UTXOs.
 
+        For descriptor_wallet backend, this method will import addresses into
+        the wallet as it scans in batches, then clean up addresses that had no UTXOs.
+
         The scan is optimized by:
         1. Using index=0 only (most users only use one address per locktime)
         2. Batching address generation and UTXO queries
@@ -434,6 +437,8 @@ class WalletService:
         """
         from jmcore.timenumber import TIMENUMBER_COUNT, timenumber_to_timestamp
 
+        from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
+
         logger.info(
             f"Starting fidelity bond discovery scan "
             f"({TIMENUMBER_COUNT} timelocks × {max_index} index(es))"
@@ -441,6 +446,7 @@ class WalletService:
 
         discovered_utxos: list[UTXOInfo] = []
         batch_size = 100  # Process timenumbers in batches
+        is_descriptor_wallet = isinstance(self.backend, DescriptorWalletBackend)
 
         # Initialize locktime cache if needed
         if not hasattr(self, "fidelity_bond_locktime_cache"):
@@ -458,6 +464,20 @@ class WalletService:
                     address = self.get_fidelity_bond_address(idx, locktime)
                     addresses.append(address)
                     address_to_locktime[address] = (locktime, idx)
+
+            # For descriptor wallet, import addresses before scanning
+            if is_descriptor_wallet:
+                fidelity_bond_addresses = [
+                    (addr, locktime, idx) for addr, (locktime, idx) in address_to_locktime.items()
+                ]
+                try:
+                    await self.import_fidelity_bond_addresses(
+                        fidelity_bond_addresses=fidelity_bond_addresses,
+                        rescan=True,
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to import batch {batch_start}-{batch_end}: {e}")
+                    continue
 
             # Fetch UTXOs for all addresses in batch
             try:
@@ -836,6 +856,55 @@ class WalletService:
             expected_count += fidelity_bond_count
 
         return await self.backend.is_wallet_setup(expected_descriptor_count=expected_count)
+
+    async def import_fidelity_bond_addresses(
+        self,
+        fidelity_bond_addresses: list[tuple[str, int, int]],
+        rescan: bool = True,
+    ) -> bool:
+        """
+        Import fidelity bond addresses into the descriptor wallet.
+
+        This is used to add fidelity bond addresses that weren't included
+        in the initial wallet setup. Fidelity bonds use P2WSH addresses
+        (timelocked scripts) that are not part of the standard BIP84 derivation,
+        so they must be explicitly imported.
+
+        Args:
+            fidelity_bond_addresses: List of (address, locktime, index) tuples
+            rescan: Whether to rescan the blockchain for these addresses
+
+        Returns:
+            True if import succeeded
+
+        Raises:
+            RuntimeError: If backend is not DescriptorWalletBackend
+        """
+        if not isinstance(self.backend, DescriptorWalletBackend):
+            raise RuntimeError("import_fidelity_bond_addresses() requires DescriptorWalletBackend")
+
+        if not fidelity_bond_addresses:
+            return True
+
+        # Build descriptors for the bond addresses
+        descriptors = []
+        for address, locktime, index in fidelity_bond_addresses:
+            descriptors.append(
+                {
+                    "desc": f"addr({address})",
+                    "internal": False,
+                }
+            )
+            # Cache the address info
+            if not hasattr(self, "fidelity_bond_locktime_cache"):
+                self.fidelity_bond_locktime_cache = {}
+            self.address_cache[address] = (0, FIDELITY_BOND_BRANCH, index)
+            self.fidelity_bond_locktime_cache[address] = locktime
+
+        logger.info(f"Importing {len(descriptors)} fidelity bond address(es)...")
+        await self.backend.import_descriptors(descriptors, rescan=rescan)
+        logger.info("Fidelity bond addresses imported")
+        return True
 
     def _generate_import_descriptors(
         self, scan_range: int = DEFAULT_SCAN_RANGE

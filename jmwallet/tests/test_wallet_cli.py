@@ -61,6 +61,7 @@ def test_bip39_import_with_passphrase_zpub_and_address():
         # Mock the BitcoinCoreBackend class (imported inside _show_wallet_info)
         with patch("jmwallet.backends.bitcoin_core.BitcoinCoreBackend", return_value=mock_backend):
             # Run 'info --extended' command to see zpub and first address
+            # Note: explicitly use full_node backend since descriptor_wallet is default
             result = runner.invoke(
                 app,
                 [
@@ -71,6 +72,8 @@ def test_bip39_import_with_passphrase_zpub_and_address():
                     passphrase,
                     "--network",
                     "mainnet",
+                    "--backend",
+                    "full_node",  # Use full_node to match the mocked backend
                     "--extended",
                     "--gap",
                     "1",  # Only show first address
@@ -236,6 +239,7 @@ def test_bip39_prompt_passphrase():
             patch.object(typer, "prompt", return_value=passphrase) as mock_prompt,
         ):
             # Run 'info --extended --prompt-bip39-passphrase' command
+            # Note: explicitly use full_node backend since descriptor_wallet is default
             result = runner.invoke(
                 app,
                 [
@@ -245,6 +249,8 @@ def test_bip39_prompt_passphrase():
                     "--prompt-bip39-passphrase",
                     "--network",
                     "mainnet",
+                    "--backend",
+                    "full_node",  # Use full_node to match the mocked backend
                     "--extended",
                     "--gap",
                     "1",  # Only show first address

@@ -367,7 +367,7 @@ docker-compose logs -f maker
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BACKEND_TYPE` | `full_node` | Backend type: `full_node` or `neutrino` |
+| `BACKEND_TYPE` | `full_node` | Backend type: `full_node`, `descriptor_wallet`, or `neutrino` |
 | `BITCOIN_RPC_URL` | `http://localhost:8332` | Bitcoin Core RPC URL (full_node only) |
 | `BITCOIN_RPC_USER` | - | Bitcoin Core RPC username (full_node only) |
 | `BITCOIN_RPC_PASSWORD` | - | Bitcoin Core RPC password (full_node only) |
@@ -421,7 +421,7 @@ jm-maker start --help
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--mnemonic-file` | - | Path to encrypted wallet file |
-| `--backend-type` | full_node | Backend: full_node or neutrino |
+| `--backend-type` | full_node | Backend: full_node, descriptor_wallet, or neutrino |
 | `--cj-fee-relative` | 0.001 | Relative fee (0.001 = 0.1%) - auto-selects sw0reloffer |
 | `--cj-fee-absolute` | - | Absolute fee in sats - auto-selects sw0absoffer |
 | `--min-size` | 100000 | Minimum CoinJoin size in sats |
@@ -524,8 +524,11 @@ Thresholds are configurable via environment variables if needed (see config.py).
 │                                                        (defaults to          │
 │                                                        --network)            │
 │ --backend-type                  TEXT                   Backend type:         │
-│                                                        full_node | neutrino  │
-│                                                        [default: full_node]  │
+│                                                        full_node |           │
+│                                                        descriptor_wallet |   │
+│                                                        neutrino              │
+│                                                        [default:             │
+│                                                        descriptor_wallet]    │
 │ --rpc-url                       TEXT                   Bitcoin full node RPC │
 │                                                        URL                   │
 │                                                        [env var:             │
@@ -669,7 +672,8 @@ Thresholds are configurable via environment variables if needed (see config.py).
 │ --bitcoin-network           [mainnet|testnet|signe  Bitcoin network for      │
 │                             t|regtest]              address generation       │
 │                                                     (defaults to --network)  │
-│ --backend-type              TEXT                    [default: full_node]     │
+│ --backend-type              TEXT                    [default:                │
+│                                                     descriptor_wallet]       │
 │ --help                                              Show this message and    │
 │                                                     exit.                    │
 ╰──────────────────────────────────────────────────────────────────────────────╯

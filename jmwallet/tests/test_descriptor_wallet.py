@@ -930,3 +930,187 @@ class TestBackgroundRescan:
 
         # Background rescan should be pending
         assert backend.is_background_rescan_pending() is True
+
+
+# =============================================================================
+# Fidelity Bond Sync Tests
+# =============================================================================
+
+
+class TestFidelityBondSync:
+    """Tests for syncing fidelity bonds with descriptor wallet backend."""
+
+    @pytest.mark.asyncio
+    async def test_sync_with_fidelity_bonds(self) -> None:
+        """Test that sync_with_descriptor_wallet correctly handles fidelity bond addresses."""
+        from jmwallet.backends.base import UTXO
+        from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
+        from jmwallet.wallet.service import WalletService
+
+        # Create backend with mock
+        backend = DescriptorWalletBackend(wallet_name="test_fb_sync")
+        backend._wallet_loaded = True
+        backend._descriptors_imported = True
+
+        # Mock the bond address and UTXO
+        bond_address = "bc1qxl3vzaf0cxwl9c0jsyyphwdekc6j0xh48qlfv8ja39qzqn92u7ws5arznw"
+        bond_locktime = 1736899200  # 2025-01-15 00:00:00 UTC
+        bond_index = 0
+        bond_value = 29890
+
+        # Mock get_all_utxos to return both regular and bond UTXOs
+        async def mock_get_all_utxos() -> list[UTXO]:
+            return [
+                # Regular wallet UTXO
+                UTXO(
+                    txid="abc123" * 10 + "ab",
+                    vout=0,
+                    value=100000,
+                    address="bc1qregularaddress123",
+                    confirmations=100,
+                    scriptpubkey="0014regular",
+                ),
+                # Fidelity bond UTXO (P2WSH)
+                UTXO(
+                    txid="def456" * 10 + "de",
+                    vout=1,
+                    value=bond_value,
+                    address=bond_address,
+                    confirmations=50,
+                    scriptpubkey="0020" + "a" * 64,  # P2WSH scriptPubKey
+                ),
+            ]
+
+        backend.get_all_utxos = mock_get_all_utxos  # type: ignore[method-assign]
+
+        # Create wallet service with test mnemonic
+        test_mnemonic = (
+            "abandon abandon abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon about"
+        )
+        wallet = WalletService(
+            mnemonic=test_mnemonic,
+            backend=backend,
+            network="mainnet",
+            mixdepth_count=5,
+        )
+
+        # Sync with fidelity bond addresses
+        fidelity_bond_addresses = [(bond_address, bond_locktime, bond_index)]
+        result = await wallet.sync_with_descriptor_wallet(fidelity_bond_addresses)
+
+        # Verify that the bond UTXO was found in mixdepth 0
+        mixdepth_0_utxos = result.get(0, [])
+
+        # Find the bond UTXO in the results
+        bond_utxos = [u for u in mixdepth_0_utxos if u.address == bond_address]
+        assert len(bond_utxos) == 1, f"Expected 1 bond UTXO, found {len(bond_utxos)}"
+
+        bond_utxo = bond_utxos[0]
+        assert bond_utxo.value == bond_value
+        assert bond_utxo.locktime == bond_locktime
+        assert bond_utxo.is_timelocked is True
+
+    @pytest.mark.asyncio
+    async def test_sync_without_fidelity_bonds(self) -> None:
+        """Test that sync_with_descriptor_wallet works without fidelity bonds."""
+        from jmwallet.backends.base import UTXO
+        from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
+        from jmwallet.wallet.service import WalletService
+
+        backend = DescriptorWalletBackend(wallet_name="test_no_fb")
+        backend._wallet_loaded = True
+        backend._descriptors_imported = True
+
+        # Mock get_all_utxos to return regular UTXOs only
+        async def mock_get_all_utxos() -> list[UTXO]:
+            return [
+                UTXO(
+                    txid="abc123" * 10 + "ab",
+                    vout=0,
+                    value=100000,
+                    address="bc1qregularaddress123",
+                    confirmations=100,
+                    scriptpubkey="0014regular",
+                ),
+            ]
+
+        backend.get_all_utxos = mock_get_all_utxos  # type: ignore[method-assign]
+
+        test_mnemonic = (
+            "abandon abandon abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon about"
+        )
+        wallet = WalletService(
+            mnemonic=test_mnemonic,
+            backend=backend,
+            network="mainnet",
+            mixdepth_count=5,
+        )
+
+        # Sync without fidelity bonds
+        result = await wallet.sync_with_descriptor_wallet()
+
+        # Should complete without error
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_setup_descriptor_wallet_with_fidelity_bonds(self) -> None:
+        """Test that setup_descriptor_wallet imports fidelity bond addresses."""
+        from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
+        from jmwallet.wallet.service import WalletService
+
+        backend = DescriptorWalletBackend(wallet_name="test_setup_fb")
+
+        imported_descriptors: list[dict[str, Any]] = []
+
+        async def mock_rpc(
+            method: str,
+            params: list[Any] | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            if method == "listwallets":
+                return ["test_setup_fb"]
+            elif method == "listdescriptors":
+                return {"descriptors": []}  # No descriptors yet
+            elif method == "importdescriptors":
+                if params:
+                    imported_descriptors.extend(params[0])
+                return [{"success": True} for _ in params[0]] if params else []
+            elif method == "getblockchaininfo":
+                return {"blocks": 100000}
+            return {}
+
+        backend._rpc_call = mock_rpc  # type: ignore[method-assign]
+        backend._wallet_loaded = True
+
+        test_mnemonic = (
+            "abandon abandon abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon about"
+        )
+        wallet = WalletService(
+            mnemonic=test_mnemonic,
+            backend=backend,
+            network="mainnet",
+            mixdepth_count=5,
+        )
+
+        # Setup with fidelity bond addresses
+        bond_address = "bc1qxl3vzaf0cxwl9c0jsyyphwdekc6j0xh48qlfv8ja39qzqn92u7ws5arznw"
+        bond_locktime = 1736899200
+        bond_index = 0
+        fidelity_bond_addresses = [(bond_address, bond_locktime, bond_index)]
+
+        await wallet.setup_descriptor_wallet(
+            rescan=False,
+            fidelity_bond_addresses=fidelity_bond_addresses,
+            check_existing=False,
+        )
+
+        # Verify that bond address was imported
+        imported_descs_strs = [str(d.get("desc", "")) for d in imported_descriptors]
+        bond_desc_imported = any(bond_address in desc for desc in imported_descs_strs)
+        assert bond_desc_imported, (
+            f"Bond address {bond_address} not found in imported descriptors: {imported_descs_strs}"
+        )
