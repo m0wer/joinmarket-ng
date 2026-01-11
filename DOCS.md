@@ -272,7 +272,7 @@ JoinMarket NG supports three blockchain backends with different tradeoffs:
 
 Uses Bitcoin Core's descriptor wallet feature to persistently track addresses. After one-time descriptor import, subsequent syncs use `listunspent` which is O(wallet UTXOs) instead of scanning the entire UTXO set. Provides mempool awareness and real-time balance updates.
 
-Trade-off: Wallet files persist on disk (privacy consideration for shared systems).
+Trade-off: Wallet files persist on disk on the node. Funds are not at risk, but all your addresses are stored in the node's wallet. So never use this with a third-party node.
 
 ### Bitcoin Core Backend (Legacy)
 

@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Backend `estimate_fee()` now returns `float` for precision with sub-sat rates.
 - Added `can_estimate_fee()` method to backends for capability detection.
 - Increased default counterparty count from 3 to 10 makers.
-- Reduced logging verbosity: parsed offers now logged at DEBUG level instead of INFO.
+- Reduced logging verbosity: parsed offers, fidelity bond creation, and Neutrino operations now logged at DEBUG level.
 - Improved sweep coinjoin logging: initial "Starting CoinJoin" message now shows "ALL (sweep)" instead of "0 sats".
 - **Default broadcast policy changed from RANDOM_PEER to MULTIPLE_PEERS** (sends to 3 random makers).
 - **Unified broadcast behavior**: All policies (SELF, RANDOM_PEER, MULTIPLE_PEERS, NOT_SELF) work
@@ -49,9 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - RANDOM_PEER and MULTIPLE_PEERS now allow self-fallback if all makers fail (both full node and Neutrino).
 - Neutrino pending transaction timeout reduced from 48h to 10h before warning.
 - Neutrino pending transaction monitoring uses block-based UTXO verification (cannot access mempool).
+- Neutrino backend UTXO detection improved with incremental rescans and retries for better robustness.
 
 ### Fixed
 
+- **Taker failing when Maker uses multiple UTXOs**: Fixed handling of multiple `!sig` messages from makers with multiple inputs.
 - **Orderbook Watcher showing only few offers despite receiving many from directories**.
   - Directory servers send realtime PEERLIST updates (one per peer) when peers connect/disconnect.
   - DirectoryClient was incorrectly treating these partial updates as complete peerlist replacements.
