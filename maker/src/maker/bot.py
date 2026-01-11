@@ -489,7 +489,23 @@ class MakerBot:
                     )
 
             logger.info("Syncing wallet and fidelity bonds...")
-            await self.wallet.sync_all(fidelity_bond_addresses)
+
+            # Setup descriptor wallet if needed (one-time operation)
+            from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
+
+            if isinstance(self.backend, DescriptorWalletBackend):
+                if not await self.wallet.is_descriptor_wallet_ready(
+                    fidelity_bond_count=len(fidelity_bond_addresses)
+                ):
+                    logger.info("Descriptor wallet not set up. Importing descriptors...")
+                    await self.wallet.setup_descriptor_wallet(rescan=True)
+                    logger.info("Descriptor wallet setup complete")
+
+                # Use fast descriptor wallet sync
+                await self.wallet.sync_with_descriptor_wallet(fidelity_bond_addresses)
+            else:
+                # Use standard sync (scantxoutset for full_node, BIP157/158 for neutrino)
+                await self.wallet.sync_all(fidelity_bond_addresses)
 
             # Update bond registry with UTXO info from the scan (only if using registry)
             if self.config.fidelity_bond_index is None and fidelity_bond_addresses:
@@ -575,7 +591,12 @@ class MakerBot:
                 await asyncio.sleep(10)
 
                 # Re-sync wallet to check for new funds
-                await self.wallet.sync_all()
+                from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
+
+                if isinstance(self.backend, DescriptorWalletBackend):
+                    await self.wallet.sync_with_descriptor_wallet()
+                else:
+                    await self.wallet.sync_all()
                 total_balance = await self.wallet.get_total_balance()
                 logger.info(f"Wallet re-synced. Total balance: {total_balance:,} sats")
 
@@ -779,7 +800,13 @@ class MakerBot:
             balance = await self.wallet.get_balance(mixdepth)
             old_max_balance = max(old_max_balance, balance)
 
-        await self.wallet.sync_all()
+        # Sync wallet (use descriptor wallet if available for fast sync)
+        from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
+
+        if isinstance(self.backend, DescriptorWalletBackend):
+            await self.wallet.sync_with_descriptor_wallet()
+        else:
+            await self.wallet.sync_all()
 
         # Update current block height
         self.current_block_height = await self.backend.get_block_height()
