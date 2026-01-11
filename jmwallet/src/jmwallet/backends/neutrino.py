@@ -201,7 +201,7 @@ class NeutrinoBackend(BlockchainBackend):
             raise ValueError(f"Watch list limit ({self._max_watched_addresses}) exceeded")
 
         self._watched_addresses.add(address)
-        logger.debug(f"Watching address: {address}")
+        logger.trace(f"Watching address: {address}")
 
     async def add_watch_outpoint(self, txid: str, vout: int) -> None:
         """
