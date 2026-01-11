@@ -25,6 +25,7 @@ def confirm_transaction(
     amount: int,
     destination: str | None = None,
     fee: int | None = None,
+    mining_fee: int | None = None,
     additional_info: dict[str, Any] | None = None,
     skip_confirmation: bool = False,
 ) -> bool:
@@ -35,7 +36,8 @@ def confirm_transaction(
         operation: Type of operation (e.g., "send", "coinjoin")
         amount: Amount in satoshis (0 for sweep)
         destination: Destination address (optional)
-        fee: Total fee in satoshis (optional)
+        fee: Total fee in satoshis (optional, for CoinJoin this is maker fees)
+        mining_fee: Mining/transaction fee in satoshis (optional)
         additional_info: Additional details to show (e.g., maker fees, counterparties)
         skip_confirmation: If True, skip prompt (from --yes flag)
 
@@ -58,7 +60,10 @@ def confirm_transaction(
 
     # Build transaction summary
     print("\n" + "=" * 80)
-    print(f"TRANSACTION CONFIRMATION - {operation.upper()}")
+    if operation.lower() == "coinjoin":
+        print("EXPECTED CJ TX")
+    else:
+        print(f"TRANSACTION CONFIRMATION - {operation.upper()}")
     print("=" * 80)
 
     # Amount
@@ -81,6 +86,12 @@ def confirm_transaction(
         from jmcore.bitcoin import format_amount
 
         print(f"Fee:          {format_amount(fee)}")
+
+    # Mining fee (transaction fee)
+    if mining_fee is not None:
+        from jmcore.bitcoin import format_amount
+
+        print(f"Mining Fee:   {format_amount(mining_fee)}")
 
     # Additional info
     if additional_info:
