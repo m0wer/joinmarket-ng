@@ -19,10 +19,10 @@
 
 # [tor_control]
 # enabled = true
-# host = "127.0.0.1"
 # port = 9051
 # cookie_path = "/var/run/tor/control.authcookie"  # Auto-detected if not set
 # password = ""  # Use cookie auth by default
+# Note: Control host defaults to same as tor.socks_host
 
 # ============================================================================
 # Bitcoin Backend Settings
@@ -75,6 +75,13 @@
 
 # Blocks to look back during wallet scan (~1 year)
 # scan_lookback_blocks = 52560
+
+# Default fee estimation settings
+# default_fee_block_target = 3  # Block target for wallet transactions
+
+# Mnemonic file settings (optional defaults)
+# mnemonic_file = ""            # Path to mnemonic file
+# mnemonic_password = ""        # Password for encrypted mnemonic
 
 # ============================================================================
 # Logging Settings
@@ -184,7 +191,7 @@
 
 # Transaction broadcast settings
 # Options: "self", "random-peer", "multiple-peers", "not-self"
-# tx_broadcast = "multiple-peers"
+# tx_broadcast = "random-peer"
 # broadcast_peer_count = 3
 
 # Minimum number of makers required
@@ -202,10 +209,13 @@
 # Limits
 # max_peers = 10000
 # max_message_size = 2097152  # 2MB
+# max_line_length = 65536      # 64KB max JSON-line length
+# max_json_nesting_depth = 10
 
 # Rate limiting
-# message_rate_limit = 500    # Messages per second
+# message_rate_limit = 500     # Messages per second
 # message_burst_limit = 1000
+# rate_limit_disconnect_threshold = 0  # 0 = never disconnect
 
 # Broadcast settings
 # broadcast_batch_size = 50
@@ -215,7 +225,7 @@
 # health_check_port = 8080
 
 # Message of the day
-# motd = "JoinMarket Directory Server https://github.com/m0wer/joinmarket-ng/tree/master"
+# motd = "JoinMarket NG Directory Server https://github.com/m0wer/joinmarket-ng/tree/master"
 
 # ============================================================================
 # Orderbook Watcher Settings
@@ -233,5 +243,9 @@
 # mempool_api_url = "http://mempopwcaqoi7z5xj5zplfdwk5bgzyl3hemx725d4a3agado6xtk3kqd.onion/api"
 # mempool_web_url = "https://mempool.sgn.space"
 
+# Connection settings
+# max_message_size = 2097152   # 2MB
+# connection_timeout = 30.0     # Seconds
+
 # Uptime tracking
-# uptime_grace_period = 60    # Seconds
+# uptime_grace_period = 60     # Seconds

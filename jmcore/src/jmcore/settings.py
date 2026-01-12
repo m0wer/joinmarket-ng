@@ -90,10 +90,6 @@ class TorControlSettings(BaseModel):
         default=True,
         description="Enable Tor control port integration for ephemeral hidden services",
     )
-    host: str = Field(
-        default="127.0.0.1",
-        description="Tor control port host",
-    )
     port: int = Field(
         default=9051,
         ge=1,
@@ -183,6 +179,20 @@ class WalletSettings(BaseModel):
         default=52560,
         ge=0,
         description="Blocks to look back for smart scan (~1 year default)",
+    )
+    default_fee_block_target: int = Field(
+        default=3,
+        ge=1,
+        le=1008,
+        description="Default block target for fee estimation in wallet transactions",
+    )
+    mnemonic_file: str | None = Field(
+        default=None,
+        description="Default path to mnemonic file",
+    )
+    mnemonic_password: SecretStr | None = Field(
+        default=None,
+        description="Password for encrypted mnemonic file",
     )
 
 
@@ -357,7 +367,7 @@ class TakerSettings(BaseModel):
         description="Seconds to wait for orderbook",
     )
     tx_broadcast: str = Field(
-        default="multiple-peers",
+        default="random-peer",
         description="Broadcast policy: self, random-peer, multiple-peers, not-self",
     )
     broadcast_peer_count: int = Field(
@@ -386,9 +396,9 @@ class DirectoryServerSettings(BaseModel):
     )
     port: int = Field(
         default=5222,
-        ge=1,
+        ge=0,
         le=65535,
-        description="Port to listen on",
+        description="Port to listen on (0 = let OS assign)",
     )
     max_peers: int = Field(
         default=10000,
@@ -400,6 +410,16 @@ class DirectoryServerSettings(BaseModel):
         ge=1024,
         description="Maximum message size in bytes (2MB default)",
     )
+    max_line_length: int = Field(
+        default=65536,
+        ge=1024,
+        description="Maximum JSON-line message length (64KB default)",
+    )
+    max_json_nesting_depth: int = Field(
+        default=10,
+        ge=1,
+        description="Maximum nesting depth for JSON parsing",
+    )
     message_rate_limit: int = Field(
         default=500,
         ge=1,
@@ -409,6 +429,11 @@ class DirectoryServerSettings(BaseModel):
         default=1000,
         ge=1,
         description="Maximum burst size",
+    )
+    rate_limit_disconnect_threshold: int = Field(
+        default=0,
+        ge=0,
+        description="Disconnect after N rate limit violations (0 = never disconnect)",
     )
     broadcast_batch_size: int = Field(
         default=50,
@@ -421,12 +446,12 @@ class DirectoryServerSettings(BaseModel):
     )
     health_check_port: int = Field(
         default=8080,
-        ge=1,
+        ge=0,
         le=65535,
-        description="Port for health check endpoint",
+        description="Port for health check endpoint (0 = let OS assign)",
     )
     motd: str = Field(
-        default="JoinMarket Directory Server https://github.com/m0wer/joinmarket-ng/tree/master",
+        default="JoinMarket NG Directory Server https://github.com/m0wer/joinmarket-ng/tree/master",
         description="Message of the day sent to clients",
     )
 
@@ -461,6 +486,16 @@ class OrderbookWatcherSettings(BaseModel):
         default=60,
         ge=0,
         description="Grace period before tracking uptime",
+    )
+    max_message_size: int = Field(
+        default=2097152,
+        ge=1024,
+        description="Maximum message size in bytes (2MB default)",
+    )
+    connection_timeout: float = Field(
+        default=30.0,
+        gt=0.0,
+        description="Connection timeout in seconds",
     )
 
 
@@ -693,7 +728,7 @@ def generate_config_template() -> str:
                 lines.append(f"# {field_name} = ")
                 lines.append("")
                 continue
-            elif hasattr(default, "value"):  # Enum
+            elif hasattr(default, "value"):  # Enum - use string value
                 value_str = f'"{default.value}"'
             else:
                 value_str = str(default)

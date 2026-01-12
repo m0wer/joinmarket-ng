@@ -16,9 +16,9 @@ import pytest
 import pytest_asyncio
 from jmcore.models import MessageEnvelope, NetworkType
 from jmcore.protocol import COMMAND_PREFIX, JM_VERSION, MessageType
+from jmcore.settings import DirectoryServerSettings
 from loguru import logger
 
-from directory_server.config import Settings
 from directory_server.server import DirectoryServer
 
 
@@ -174,16 +174,14 @@ class LoadTestScenario:
 
 @pytest_asyncio.fixture
 async def test_server():
-    settings = Settings(
+    settings = DirectoryServerSettings(
         host="127.0.0.1",
         port=0,
-        network="testnet",
         max_peers=1000,
-        log_level="WARNING",
         health_check_port=0,  # Use dynamic port to avoid conflicts
     )
 
-    server = DirectoryServer(settings)
+    server = DirectoryServer(settings, NetworkType.TESTNET)
 
     server_task = asyncio.create_task(server.start())
 

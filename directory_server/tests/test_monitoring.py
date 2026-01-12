@@ -6,21 +6,20 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from jmcore.models import NetworkType, PeerInfo, PeerStatus
+from jmcore.settings import DirectoryServerSettings
 
-from directory_server.config import Settings
 from directory_server.server import DirectoryServer
 
 
 @pytest.fixture
 def server():
-    settings = Settings(
-        network="mainnet",
+    settings = DirectoryServerSettings(
         host="127.0.0.1",
         port=5223,
         health_check_host="127.0.0.1",
         health_check_port=18083,
     )
-    srv = DirectoryServer(settings)
+    srv = DirectoryServer(settings, NetworkType.MAINNET)
     srv.server = MagicMock()
     return srv
 
@@ -161,14 +160,13 @@ def test_log_status(server):
 
 @pytest.mark.asyncio
 async def test_signal_handler_for_status():
-    settings = Settings(
-        network="mainnet",
+    settings = DirectoryServerSettings(
         host="127.0.0.1",
         port=5224,
         health_check_host="127.0.0.1",
         health_check_port=18084,
     )
-    server = DirectoryServer(settings)
+    server = DirectoryServer(settings, NetworkType.MAINNET)
 
     with patch("directory_server.server.logger") as mock_logger:
         server.log_status()

@@ -7,22 +7,22 @@ from http.client import HTTPConnection
 from unittest.mock import MagicMock
 
 import pytest
+from jmcore.models import NetworkType
+from jmcore.settings import DirectoryServerSettings
 
-from directory_server.config import Settings
 from directory_server.health import HealthCheckServer
 from directory_server.server import DirectoryServer
 
 
 @pytest.fixture
 def mock_server():
-    settings = Settings(
-        network="mainnet",
+    settings = DirectoryServerSettings(
         host="127.0.0.1",
         port=5222,
         health_check_host="127.0.0.1",
         health_check_port=18080,
     )
-    server = DirectoryServer(settings)
+    server = DirectoryServer(settings, NetworkType.MAINNET)
     return server
 
 

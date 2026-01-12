@@ -7,24 +7,23 @@ cleaned up from both the connection mapping and the peer registry.
 
 import pytest
 from jmcore.models import NetworkType, PeerInfo, PeerStatus
+from jmcore.settings import DirectoryServerSettings
 
-from directory_server.config import Settings
 from directory_server.server import DirectoryServer
 
 
 @pytest.fixture
 def settings():
-    return Settings(
+    return DirectoryServerSettings(
         host="127.0.0.1",
         port=0,  # Let OS assign port
-        network="mainnet",
         max_peers=100,
     )
 
 
 @pytest.fixture
 def server(settings):
-    return DirectoryServer(settings)
+    return DirectoryServer(settings, NetworkType.MAINNET)
 
 
 @pytest.fixture

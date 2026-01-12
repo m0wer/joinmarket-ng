@@ -140,7 +140,7 @@ class TestSettingsDefaults:
         assert settings.taker.counterparty_count == 10
         assert settings.taker.max_cj_fee_abs == 500
         assert settings.taker.max_cj_fee_rel == "0.001"
-        assert settings.taker.tx_broadcast == "multiple-peers"
+        assert settings.taker.tx_broadcast == "random-peer"
 
 
 class TestSettingsFromEnv:

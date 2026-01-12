@@ -6,19 +6,16 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 from jmcore.models import OrderBook
+from jmcore.settings import OrderbookWatcherSettings
 
 from orderbook_watcher.aggregator import DirectoryNodeStatus, OrderbookAggregator
-from orderbook_watcher.config import Settings
 from orderbook_watcher.server import OrderbookServer
 
 
 def test_server_includes_uptime_in_directory_stats() -> None:
     """Test that uptime stats are included in the orderbook JSON output."""
     # Create mock settings
-    settings = Settings(
-        directory_nodes="node1.onion:5222,node2.onion:5222",
-        network="signet",
-    )
+    settings = OrderbookWatcherSettings()
 
     # Create mock aggregator
     aggregator = MagicMock(spec=OrderbookAggregator)
@@ -71,10 +68,7 @@ def test_server_includes_uptime_in_directory_stats() -> None:
 
 def test_server_handles_nodes_without_status() -> None:
     """Test that nodes without connection status still appear in directory_stats."""
-    settings = Settings(
-        directory_nodes="node1.onion:5222,node2.onion:5222",
-        network="signet",
-    )
+    settings = OrderbookWatcherSettings()
 
     aggregator = MagicMock(spec=OrderbookAggregator)
     aggregator.directory_nodes = [("node1.onion", 5222), ("node2.onion", 5222)]

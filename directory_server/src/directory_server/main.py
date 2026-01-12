@@ -6,9 +6,9 @@ import asyncio
 import signal
 import sys
 
+from jmcore.settings import get_settings
 from loguru import logger
 
-from directory_server.config import get_settings
 from directory_server.server import DirectoryServer
 
 
@@ -25,19 +25,20 @@ def setup_logging(level: str) -> None:
 
 async def run_server() -> None:
     settings = get_settings()
-    setup_logging(settings.log_level)
+    setup_logging(settings.logging.level)
 
-    server_nick = f"directory-{settings.network}"
+    network = settings.network_config.network
+    server_nick = f"directory-{network.value}"
 
     logger.info("=" * 80)
-    logger.info("Starting JoinMarket Directory Server")
-    logger.info(f"Network: {settings.network}")
+    logger.info("Starting JoinMarket NG Directory Server")
+    logger.info(f"Network: {network.value}")
     logger.info(f"Server nick: {server_nick}")
-    logger.info(f"Port: {settings.port}")
-    logger.info(f"Max peers: {settings.max_peers}")
+    logger.info(f"Port: {settings.directory_server.port}")
+    logger.info(f"Max peers: {settings.directory_server.max_peers}")
     logger.info("=" * 80)
 
-    server = DirectoryServer(settings)
+    server = DirectoryServer(settings.directory_server, network)
 
     loop = asyncio.get_running_loop()
 

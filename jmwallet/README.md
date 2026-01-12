@@ -260,16 +260,12 @@ For detailed help on any command, see the auto-generated help sections below.
 │ --prompt-bip39-passphrase                   Prompt for BIP39 passphrase      │
 │                                             interactively                    │
 │ --network                  -n      TEXT     Bitcoin network                  │
-│                                             [default: mainnet]               │
 │ --backend                  -b      TEXT     Backend: full_node |             │
 │                                             descriptor_wallet | neutrino     │
-│                                             [default: descriptor_wallet]     │
 │ --rpc-url                          TEXT     [env var: BITCOIN_RPC_URL]       │
-│                                             [default: http://127.0.0.1:8332] │
 │ --rpc-user                         TEXT     [env var: BITCOIN_RPC_USER]      │
 │ --rpc-password                     TEXT     [env var: BITCOIN_RPC_PASSWORD]  │
 │ --neutrino-url                     TEXT     [env var: NEUTRINO_URL]          │
-│                                             [default: http://127.0.0.1:8334] │
 │ --extended                 -e               Show detailed address view with  │
 │                                             derivations                      │
 │ --gap                      -g      INTEGER  Max address gap to show in       │

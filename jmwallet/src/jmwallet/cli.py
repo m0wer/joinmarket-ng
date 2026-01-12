@@ -318,36 +318,64 @@ def _resolve_mnemonic(
     2. --mnemonic-file argument
     3. MNEMONIC_FILE environment variable (path to mnemonic file)
     4. MNEMONIC environment variable
+    5. Config file wallet.mnemonic_file setting
     """
     if mnemonic:
         return mnemonic
 
     # Check for mnemonic file (from argument or environment)
     actual_mnemonic_file = mnemonic_file
+    actual_password = password
+    mnemonic_source = None  # Track where the mnemonic file path came from
+
     if not actual_mnemonic_file:
         env_mnemonic_file = os.environ.get("MNEMONIC_FILE")
         if env_mnemonic_file:
             actual_mnemonic_file = Path(env_mnemonic_file)
+            mnemonic_source = "MNEMONIC_FILE environment variable"
+
+    # If still no mnemonic file, check config file
+    if not actual_mnemonic_file:
+        try:
+            from jmcore.settings import get_settings
+
+            settings = get_settings()
+            config_mnemonic_file = getattr(settings.wallet, "mnemonic_file", None)
+            if config_mnemonic_file:
+                actual_mnemonic_file = Path(config_mnemonic_file)
+                mnemonic_source = "config file (wallet.mnemonic_file)"
+                # Use config file password if not provided via CLI
+                config_password = getattr(settings.wallet, "mnemonic_password", None)
+                if actual_password is None and config_password:
+                    actual_password = config_password.get_secret_value()
+        except Exception as e:
+            # If settings loading fails, log error but continue without config file mnemonic
+            logger.error(f"Failed to load mnemonic from config: {e}")
+            pass
+    elif mnemonic_file:
+        mnemonic_source = "--mnemonic-file argument"
 
     if actual_mnemonic_file:
         if not actual_mnemonic_file.exists():
-            raise FileNotFoundError(f"Mnemonic file not found: {actual_mnemonic_file}")
+            source_msg = f" (from {mnemonic_source})" if mnemonic_source else ""
+            raise FileNotFoundError(f"Mnemonic file not found: {actual_mnemonic_file}{source_msg}")
 
         # Try loading without password first
         try:
-            return load_mnemonic_file(actual_mnemonic_file, password)
+            return load_mnemonic_file(actual_mnemonic_file, actual_password)
         except ValueError:
             # File is encrypted, need password
-            if prompt_password or password is None:
-                password = typer.prompt("Enter mnemonic file password", hide_input=True)
-            return load_mnemonic_file(actual_mnemonic_file, password)
+            if prompt_password or actual_password is None:
+                actual_password = typer.prompt("Enter mnemonic file password", hide_input=True)
+            return load_mnemonic_file(actual_mnemonic_file, actual_password)
 
     env_mnemonic = os.environ.get("MNEMONIC")
     if env_mnemonic:
         return env_mnemonic
 
     raise ValueError(
-        "Mnemonic required. Use --mnemonic, --mnemonic-file, MNEMONIC_FILE, or MNEMONIC env var"
+        "Mnemonic required. Use --mnemonic, --mnemonic-file, MNEMONIC_FILE, MNEMONIC env var, "
+        "or set wallet.mnemonic_file in config.toml"
     )
 
 
@@ -418,21 +446,19 @@ def info(
             help="Prompt for BIP39 passphrase interactively",
         ),
     ] = False,
-    network: Annotated[str, typer.Option("--network", "-n", help="Bitcoin network")] = "mainnet",
+    network: Annotated[str | None, typer.Option("--network", "-n", help="Bitcoin network")] = None,
     backend_type: Annotated[
-        str,
+        str | None,
         typer.Option("--backend", "-b", help="Backend: full_node | descriptor_wallet | neutrino"),
-    ] = "descriptor_wallet",
-    rpc_url: Annotated[
-        str, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")
-    ] = "http://127.0.0.1:8332",
-    rpc_user: Annotated[str, typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER")] = "",
+    ] = None,
+    rpc_url: Annotated[str | None, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")] = None,
+    rpc_user: Annotated[str | None, typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER")] = None,
     rpc_password: Annotated[
-        str, typer.Option("--rpc-password", envvar="BITCOIN_RPC_PASSWORD")
-    ] = "",
+        str | None, typer.Option("--rpc-password", envvar="BITCOIN_RPC_PASSWORD")
+    ] = None,
     neutrino_url: Annotated[
-        str, typer.Option("--neutrino-url", envvar="NEUTRINO_URL")
-    ] = "http://127.0.0.1:8334",
+        str | None, typer.Option("--neutrino-url", envvar="NEUTRINO_URL")
+    ] = None,
     extended: Annotated[
         bool, typer.Option("--extended", "-e", help="Show detailed address view with derivations")
     ] = False,
@@ -451,6 +477,15 @@ def info(
     """Display wallet information and balances by mixdepth."""
     setup_logging(log_level)
 
+    # Load settings from config file
+    try:
+        from jmcore.settings import get_settings
+
+        settings = get_settings()
+    except Exception as e:
+        logger.warning(f"Failed to load settings from config file: {e}")
+        settings = None
+
     try:
         resolved_mnemonic = _resolve_mnemonic(mnemonic, mnemonic_file, password, True)
     except (FileNotFoundError, ValueError) as e:
@@ -460,15 +495,56 @@ def info(
     # Resolve BIP39 passphrase
     resolved_bip39_passphrase = _resolve_bip39_passphrase(bip39_passphrase, prompt_bip39_passphrase)
 
+    # Resolve settings with CLI overrides taking priority
+    if network is not None:
+        resolved_network = network
+    else:
+        resolved_network = settings.network_config.network.value if settings else "mainnet"
+
+    if backend_type is not None:
+        resolved_backend_type = backend_type
+    else:
+        resolved_backend_type = settings.bitcoin.backend_type if settings else "descriptor_wallet"
+
+    if rpc_url is not None:
+        resolved_rpc_url = rpc_url
+    else:
+        resolved_rpc_url = settings.bitcoin.rpc_url if settings else "http://127.0.0.1:8332"
+
+    if rpc_user is not None:
+        resolved_rpc_user = rpc_user
+    else:
+        resolved_rpc_user = settings.bitcoin.rpc_user if settings else ""
+
+    # Handle SecretStr for password
+    if rpc_password is not None:
+        resolved_rpc_password = rpc_password
+    elif settings and settings.bitcoin.rpc_password:
+        from pydantic import SecretStr
+
+        rpc_pwd = settings.bitcoin.rpc_password
+        resolved_rpc_password = (
+            rpc_pwd.get_secret_value() if isinstance(rpc_pwd, SecretStr) else rpc_pwd
+        )
+    else:
+        resolved_rpc_password = ""
+
+    if neutrino_url is not None:
+        resolved_neutrino_url = neutrino_url
+    else:
+        resolved_neutrino_url = (
+            settings.bitcoin.neutrino_url if settings else "http://127.0.0.1:8334"
+        )
+
     asyncio.run(
         _show_wallet_info(
             resolved_mnemonic,
-            network,
-            backend_type,
-            rpc_url,
-            rpc_user,
-            rpc_password,
-            neutrino_url,
+            resolved_network,
+            resolved_backend_type,
+            resolved_rpc_url,
+            resolved_rpc_user,
+            resolved_rpc_password,
+            resolved_neutrino_url,
             resolved_bip39_passphrase,
             extended=extended,
             gap_limit=gap,

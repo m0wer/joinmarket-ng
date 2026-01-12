@@ -13,9 +13,9 @@ from jmcore.network import ConnectionPool, TCPConnection
 from jmcore.notifications import get_notifier
 from jmcore.protocol import MessageType
 from jmcore.rate_limiter import RateLimitAction, RateLimiter
+from jmcore.settings import DirectoryServerSettings
 from loguru import logger
 
-from directory_server.config import Settings
 from directory_server.handshake_handler import HandshakeError, HandshakeHandler
 from directory_server.health import HealthCheckServer
 from directory_server.message_router import MessageRouter
@@ -23,9 +23,9 @@ from directory_server.peer_registry import PeerRegistry
 
 
 class DirectoryServer:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: DirectoryServerSettings, network: NetworkType):
         self.settings = settings
-        self.network = NetworkType(settings.network)
+        self.network = network
 
         self.peer_registry = PeerRegistry(max_peers=settings.max_peers)
         self.connections = ConnectionPool(max_connections=settings.max_peers)
@@ -37,7 +37,7 @@ class DirectoryServer:
             on_send_failed=self._handle_send_failed,
         )
         self.handshake_handler = HandshakeHandler(
-            network=self.network, server_nick=f"directory-{settings.network}", motd=settings.motd
+            network=self.network, server_nick=f"directory-{network.value}", motd=settings.motd
         )
         # Rate limit by connection ID to prevent nick spoofing attacks.
         # A malicious peer could claim another's nick and spam to get them rate limited.

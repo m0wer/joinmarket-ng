@@ -12,14 +12,14 @@ from typing import Any
 
 from aiohttp import web
 from jmcore.models import OrderBook
+from jmcore.settings import OrderbookWatcherSettings
 from loguru import logger
 
 from orderbook_watcher.aggregator import OrderbookAggregator
-from orderbook_watcher.config import Settings
 
 
 class OrderbookServer:
-    def __init__(self, settings: Settings, aggregator: OrderbookAggregator) -> None:
+    def __init__(self, settings: OrderbookWatcherSettings, aggregator: OrderbookAggregator) -> None:
         self.settings = settings
         self.aggregator = aggregator
         self.app = web.Application()
@@ -143,7 +143,6 @@ class OrderbookServer:
             "feature_stats": feature_stats,
             "mempool_url": self.settings.mempool_web_url
             or self.settings.mempool_api_url.replace("/api", ""),
-            "mempool_onion_url": self.settings.mempool_web_onion_url,
         }
 
     async def _handle_health(self, _request: web.Request) -> web.Response:
