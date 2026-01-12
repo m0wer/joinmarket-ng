@@ -1342,17 +1342,19 @@ class WalletService:
         """
         Get next unused address index for mixdepth/change.
 
-        Checks both the UTXO cache and the CoinJoin history to ensure
-        we never reuse addresses that were shared in previous CoinJoins, even
-        if those transactions weren't confirmed or we don't know their txid.
+        Returns the highest index + 1 among all addresses that have ever been used,
+        ensuring we never reuse addresses. An address is considered "used" if it:
+        - Has current UTXOs
+        - Had UTXOs in the past (tracked in addresses_with_history)
+        - Appears in CoinJoin history (even if never funded)
 
-        Note: We only count addresses that are actually USED (have UTXOs or
-        are in history), not all cached addresses. The sync process caches
-        addresses during lookahead even if they're unused.
+        We always return one past the highest used index, even if lower indices
+        appear unused. Those may have been skipped for a reason (e.g., shared in
+        a failed CoinJoin, or spent in an internal transfer).
         """
         max_index = -1
 
-        # Only count addresses that have UTXOs (actually used)
+        # Check addresses with current UTXOs
         utxos = self.utxo_cache.get(mixdepth, [])
         for utxo in utxos:
             if utxo.address in self.address_cache:
@@ -1360,40 +1362,26 @@ class WalletService:
                 if md == mixdepth and ch == change and idx > max_index:
                     max_index = idx
 
-        # Check history for used addresses to prevent reuse
-        used_addresses: set[str] = set()
-        if self.data_dir:
-            from jmwallet.history import get_used_addresses
-
-            used_addresses = get_used_addresses(self.data_dir)
-
-        # Also check history for max index
-        for address in used_addresses:
+        # Check addresses that ever had blockchain activity (including spent)
+        for address in self.addresses_with_history:
             if address in self.address_cache:
                 md, ch, idx = self.address_cache[address]
                 if md == mixdepth and ch == change and idx > max_index:
                     max_index = idx
 
-        # Find the first index that generates an unused address
-        candidate_index = max_index + 1
-        max_attempts = 100  # Safety limit to prevent infinite loop
+        # Check CoinJoin history for addresses that may have been shared
+        # but never received funds (e.g., failed CoinJoins)
+        if self.data_dir:
+            from jmwallet.history import get_used_addresses
 
-        for attempt in range(max_attempts):
-            test_address = self.get_address(mixdepth, change, candidate_index)
-            if test_address not in used_addresses:
-                return candidate_index
-            # This address was used in history, try next
-            logger.warning(
-                f"Skipping index {candidate_index} for mixdepth {mixdepth}, "
-                f"change {change} - address was used in previous CoinJoin"
-            )
-            candidate_index += 1
+            cj_addresses = get_used_addresses(self.data_dir)
+            for address in cj_addresses:
+                if address in self.address_cache:
+                    md, ch, idx = self.address_cache[address]
+                    if md == mixdepth and ch == change and idx > max_index:
+                        max_index = idx
 
-        # Shouldn't happen unless we have 100 consecutive used addresses
-        raise RuntimeError(
-            f"Could not find unused address after {max_attempts} attempts. "
-            f"This likely indicates a bug in address history tracking."
-        )
+        return max_index + 1
 
     async def sync(self) -> dict[int, list[UTXOInfo]]:
         """Sync wallet (alias for sync_all for backward compatibility)."""

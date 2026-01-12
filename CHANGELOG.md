@@ -50,6 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Fixed
 
+- **Address reuse after internal send**: Fixed address reuse bug where `get_next_address_index` would return an already-used address index after funds were spent.
+  - Now properly considers `addresses_with_history` (addresses that ever had UTXOs, including spent ones).
+  - Always returns the next index after the highest used, never reusing lower indices even if they appear empty.
+  - Prevents privacy leaks from address reuse after internal sends or CoinJoins.
 - **Signature base64 padding error**: Fixed "Incorrect padding" errors when decoding maker signatures.
   - Base64 strings without proper padding are now handled correctly.
 - **PoDLE commitment blacklist retry**: Taker now automatically retries with a new NUMS index when a maker rejects due to blacklisted commitment.
