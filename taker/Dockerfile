@@ -72,48 +72,8 @@ RUN mkdir -p /home/jm/.joinmarket-ng && chmod 700 /home/jm/.joinmarket-ng
 # Declare volume for persistent data
 VOLUME /home/jm/.joinmarket-ng
 
-# Environment variables
-ENV NETWORK=mainnet
-# Bitcoin network for address generation (bcrt1 vs tb1 vs bc1)
-# Defaults to NETWORK if not set
-ENV BITCOIN_NETWORK=
-ENV LOG_LEVEL=INFO
-ENV BACKEND_TYPE=full_node
-
-# CoinJoin settings
-ENV COINJOIN_AMOUNT=1000000
-ENV MIN_MAKERS=4
-ENV MAX_CJ_FEE_REL=0.001
-ENV MAX_CJ_FEE_ABS=5000
-
-# Tor settings (for connecting to directory servers)
-ENV TOR_SOCKS_HOST=127.0.0.1
-ENV TOR_SOCKS_PORT=9050
-
-# Bitcoin Core RPC (when using full_node backend)
-ENV BITCOIN_RPC_URL=http://localhost:8332
-ENV BITCOIN_RPC_USER=
-ENV BITCOIN_RPC_PASSWORD=
-
-# Neutrino settings (when using neutrino backend)
-ENV NEUTRINO_URL=http://localhost:8334
-
-# Directory servers (comma-separated list of host:port)
-# Leave empty to use default mainnet directory nodes
-ENV DIRECTORY_SERVERS=
-
-# Wallet mnemonic - one of MNEMONIC or MNEMONIC_FILE is required
-# MNEMONIC: Direct mnemonic phrase (not recommended for production)
-# MNEMONIC_FILE: Path to mnemonic file (recommended - mount as volume)
-# ENV MNEMONIC=
-# ENV MNEMONIC_FILE=/wallets/taker.mnemonic
-
-# Enable sensitive logging (descriptors, addresses) for debugging
-# WARNING: Do not enable in production - exposes wallet information
-ENV SENSITIVE_LOGGING=
-
 # Data directory for JoinMarket files (commitment blacklist, history)
-# Set to /home/jm/.joinmarket-ng to use the volume mount
+# Users can override this with -e JOINMARKET_DATA_DIR=/custom/path
 ENV JOINMARKET_DATA_DIR=/home/jm/.joinmarket-ng
 
 CMD ["jm-taker", "--help"]
