@@ -867,7 +867,7 @@ async def _list_fidelity_bonds(
             logger.info(f"Scanning for undiscovered bonds with gap_limit={gap_limit}")
             await wallet.sync_fidelity_bonds(locktimes)
 
-        bonds = find_fidelity_bonds(wallet)
+        bonds = await find_fidelity_bonds(wallet)
 
         if not bonds:
             print("\nNo fidelity bonds found in wallet.")

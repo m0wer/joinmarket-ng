@@ -482,6 +482,7 @@ Thresholds are configurable via environment variables if needed (see config.py).
 ╭─ Commands ───────────────────────────────────────────────────────────────────╮
 │ start              Start the maker bot.                                      │
 │ generate-address   Generate a new receive address.                           │
+│ config-init        Initialize the config file with default settings.         │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -496,6 +497,10 @@ Thresholds are configurable via environment variables if needed (see config.py).
 
  Start the maker bot.
 
+ Configuration is loaded from ~/.joinmarket-ng/config.toml (or
+ $JOINMARKET_DATA_DIR/config.toml), environment variables, and CLI arguments.
+ CLI arguments have the highest priority.
+
 ╭─ Options ────────────────────────────────────────────────────────────────────╮
 │ --mnemonic                      TEXT                   BIP39 mnemonic phrase │
 │                                                        [env var: MNEMONIC]   │
@@ -508,17 +513,14 @@ Thresholds are configurable via environment variables if needed (see config.py).
 │                                                        [env var:             │
 │                                                        BIP39_PASSPHRASE]     │
 │ --data-dir              -d      PATH                   Data directory for    │
-│                                                        JoinMarket files      │
-│                                                        (commitment           │
-│                                                        blacklist, history).  │
+│                                                        JoinMarket files.     │
 │                                                        Defaults to           │
-│                                                        ~/.joinmarket-ng or   │
-│                                                        $JOINMARKET_DATA_DIR  │
-│                                                        if set.               │
+│                                                        ~/.joinmarket-ng      │
 │                                                        [env var:             │
 │                                                        JOINMARKET_DATA_DIR]  │
-│ --network                       [mainnet|testnet|sign  [default: mainnet]    │
-│                                 et|regtest]                                  │
+│ --network                       [mainnet|testnet|sign  Protocol network      │
+│                                 et|regtest]            (mainnet, testnet,    │
+│                                                        signet, regtest)      │
 │ --bitcoin-network               [mainnet|testnet|sign  Bitcoin network for   │
 │                                 et|regtest]            address generation    │
 │                                                        (defaults to          │
@@ -527,8 +529,6 @@ Thresholds are configurable via environment variables if needed (see config.py).
 │                                                        full_node |           │
 │                                                        descriptor_wallet |   │
 │                                                        neutrino              │
-│                                                        [default:             │
-│                                                        descriptor_wallet]    │
 │ --rpc-url                       TEXT                   Bitcoin full node RPC │
 │                                                        URL                   │
 │                                                        [env var:             │
@@ -546,12 +546,8 @@ Thresholds are configurable via environment variables if needed (see config.py).
 │                                                        NEUTRINO_URL]         │
 │ --min-size                      INTEGER                Minimum CoinJoin size │
 │                                                        in sats               │
-│                                                        [default: 100000]     │
 │ --cj-fee-relative               TEXT                   Relative coinjoin fee │
-│                                                        (e.g., 0.001 = 0.1%). │
-│                                                        Mutually exclusive    │
-│                                                        with                  │
-│                                                        --cj-fee-absolute.    │
+│                                                        (e.g., 0.001 = 0.1%)  │
 │                                                        [env var:             │
 │                                                        CJ_FEE_RELATIVE]      │
 │ --cj-fee-absolute               INTEGER                Absolute coinjoin fee │
@@ -562,85 +558,56 @@ Thresholds are configurable via environment variables if needed (see config.py).
 │                                                        CJ_FEE_ABSOLUTE]      │
 │ --tx-fee-contribution           INTEGER                Tx fee contribution   │
 │                                                        in sats               │
-│                                                        [default: 0]          │
 │ --directory             -D      TEXT                   Directory servers     │
 │                                                        (comma-separated      │
-│                                                        host:port). Defaults  │
-│                                                        to mainnet directory  │
-│                                                        nodes.                │
+│                                                        host:port)            │
 │                                                        [env var:             │
 │                                                        DIRECTORY_SERVERS]    │
 │ --tor-socks-host                TEXT                   Tor SOCKS proxy host  │
 │                                                        [env var:             │
 │                                                        TOR_SOCKS_HOST]       │
-│                                                        [default: 127.0.0.1]  │
 │ --tor-socks-port                INTEGER                Tor SOCKS proxy port  │
 │                                                        [env var:             │
 │                                                        TOR_SOCKS_PORT]       │
-│                                                        [default: 9050]       │
 │ --tor-control-host              TEXT                   Tor control port host │
-│                                                        (default: auto-detect │
-│                                                        from TOR_SOCKS_HOST)  │
 │                                                        [env var:             │
 │                                                        TOR_CONTROL_HOST]     │
 │ --tor-control-port              INTEGER                Tor control port      │
 │                                                        [env var:             │
 │                                                        TOR_CONTROL_PORT]     │
-│                                                        [default: 9051]       │
 │ --tor-cookie-path               PATH                   Path to Tor cookie    │
-│                                                        auth file (e.g.,      │
-│                                                        /var/lib/tor/control… │
+│                                                        auth file             │
 │                                                        [env var:             │
 │                                                        TOR_COOKIE_PATH]      │
 │ --disable-tor-control                                  Disable Tor control   │
 │                                                        port integration      │
-│                                                        (maker won't create   │
-│                                                        ephemeral onion)      │
 │ --onion-serving-host            TEXT                   Bind address for      │
 │                                                        incoming connections  │
-│                                                        (0.0.0.0 for Docker)  │
 │                                                        [env var:             │
 │                                                        ONION_SERVING_HOST]   │
-│                                                        [default: 127.0.0.1]  │
 │ --onion-serving-port            INTEGER                Port for incoming     │
 │                                                        .onion connections    │
 │                                                        [env var:             │
 │                                                        ONION_SERVING_PORT]   │
-│                                                        [default: 5222]       │
 │ --tor-target-host               TEXT                   Target hostname for   │
 │                                                        Tor hidden service    │
-│                                                        (use service name in  │
-│                                                        Docker Compose)       │
 │                                                        [env var:             │
 │                                                        TOR_TARGET_HOST]      │
-│                                                        [default: 127.0.0.1]  │
 │ --fidelity-bond-lockt…  -L      INTEGER                Fidelity bond         │
 │                                                        locktimes to scan for │
 │ --fidelity-bond-index   -I      INTEGER                Fidelity bond         │
 │                                                        derivation index      │
-│                                                        (bypasses registry,   │
-│                                                        requires              │
-│                                                        --fidelity-bond-lock… │
-│                                                        Useful for            │
-│                                                        Docker/automated      │
-│                                                        setups without a      │
-│                                                        registry file.        │
 │                                                        [env var:             │
 │                                                        FIDELITY_BOND_INDEX]  │
 │ --fidelity-bond         -B      TEXT                   Specific fidelity     │
 │                                                        bond to use (format:  │
-│                                                        txid:vout). If not    │
-│                                                        specified, the        │
-│                                                        largest bond is       │
-│                                                        selected              │
-│                                                        automatically.        │
+│                                                        txid:vout)            │
 │ --merge-algorithm       -M      TEXT                   UTXO selection        │
 │                                                        strategy: default,    │
 │                                                        gradual, greedy,      │
 │                                                        random                │
 │                                                        [env var:             │
 │                                                        MERGE_ALGORITHM]      │
-│                                                        [default: default]    │
 │ --help                                                 Show this message and │
 │                                                        exit.                 │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -667,15 +634,32 @@ Thresholds are configurable via environment variables if needed (see config.py).
 │                                                     (13th/25th word)         │
 │                                                     [env var:                │
 │                                                     BIP39_PASSPHRASE]        │
-│ --network                   [mainnet|testnet|signe  [default: mainnet]       │
+│ --network                   [mainnet|testnet|signe  Protocol network         │
 │                             t|regtest]                                       │
 │ --bitcoin-network           [mainnet|testnet|signe  Bitcoin network for      │
 │                             t|regtest]              address generation       │
 │                                                     (defaults to --network)  │
-│ --backend-type              TEXT                    [default:                │
-│                                                     descriptor_wallet]       │
+│ --backend-type              TEXT                    Backend type             │
 │ --help                                              Show this message and    │
 │                                                     exit.                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-maker config-init --help</code></summary>
+
+```
+
+ Usage: jm-maker config-init [OPTIONS]
+
+ Initialize the config file with default settings.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --data-dir  -d      PATH  Data directory for JoinMarket files                │
+│                           [env var: JOINMARKET_DATA_DIR]                     │
+│ --help                    Show this message and exit.                        │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 

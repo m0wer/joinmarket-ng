@@ -428,8 +428,9 @@ Use env vars for RPC credentials (see jmwallet README).
 │ --help          Show this message and exit.                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ Commands ───────────────────────────────────────────────────────────────────╮
-│ coinjoin   Execute a single CoinJoin transaction.                            │
-│ tumble     Run a tumbler schedule of CoinJoins.                              │
+│ coinjoin      Execute a single CoinJoin transaction.                         │
+│ tumble        Run a tumbler schedule of CoinJoins.                           │
+│ config-init   Initialize the config file with default settings.              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -444,129 +445,118 @@ Use env vars for RPC credentials (see jmwallet README).
 
  Execute a single CoinJoin transaction.
 
+ Configuration is loaded from ~/.joinmarket-ng/config.toml (or
+ $JOINMARKET_DATA_DIR/config.toml), environment variables, and CLI arguments.
+ CLI arguments have the highest priority.
+
 ╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ *  --amount            -a                        INTEGER  Amount in sats (0  │
-│                                                           for sweep)         │
-│                                                           [required]         │
-│    --destination       -d                        TEXT     Destination        │
-│                                                           address (or        │
-│                                                           'INTERNAL' for     │
-│                                                           next mixdepth)     │
-│                                                           [default:          │
-│                                                           INTERNAL]          │
-│    --mixdepth          -m                        INTEGER  Source mixdepth    │
-│                                                           [default: 0]       │
-│    --counterparties    -n                        INTEGER  Number of makers   │
-│                                                           [default: 10]      │
-│    --mnemonic                                    TEXT     Wallet mnemonic    │
-│                                                           phrase             │
-│                                                           [env var:          │
-│                                                           MNEMONIC]          │
-│    --mnemonic-file     -f                        PATH     Path to mnemonic   │
-│                                                           file               │
-│    --password          -p                        TEXT     Password for       │
-│                                                           encrypted mnemonic │
-│                                                           file               │
-│    --bip39-passphrase                            TEXT     BIP39 passphrase   │
-│                                                           (13th/25th word)   │
-│                                                           [env var:          │
-│                                                           BIP39_PASSPHRASE]  │
-│    --network                                     TEXT     Protocol network   │
-│                                                           for handshakes     │
-│                                                           [default: mainnet] │
-│    --bitcoin-network                             TEXT     Bitcoin network    │
-│                                                           for addresses      │
-│                                                           (defaults to       │
-│                                                           --network)         │
-│    --backend           -b                        TEXT     Backend type:      │
-│                                                           full_node |        │
-│                                                           descriptor_wallet  │
-│                                                           | neutrino         │
-│                                                           [default:          │
-│                                                           descriptor_wallet] │
-│    --rpc-url                                     TEXT     Bitcoin full node  │
-│                                                           RPC URL            │
-│                                                           [env var:          │
-│                                                           BITCOIN_RPC_URL]   │
-│                                                           [default:          │
-│                                                           http://127.0.0.1:… │
-│    --rpc-user                                    TEXT     Bitcoin full node  │
-│                                                           RPC user           │
-│                                                           [env var:          │
-│                                                           BITCOIN_RPC_USER]  │
-│    --rpc-password                                TEXT     Bitcoin full node  │
-│                                                           RPC password       │
-│                                                           [env var:          │
-│                                                           BITCOIN_RPC_PASSW… │
-│    --neutrino-url                                TEXT     Neutrino REST API  │
-│                                                           URL                │
-│                                                           [env var:          │
-│                                                           NEUTRINO_URL]      │
-│                                                           [default:          │
-│                                                           http://127.0.0.1:… │
-│    --directory         -D                        TEXT     Directory servers  │
-│                                                           (comma-separated). │
-│                                                           Defaults to        │
-│                                                           mainnet directory  │
-│                                                           nodes.             │
-│                                                           [env var:          │
-│                                                           DIRECTORY_SERVERS] │
-│    --tor-socks-host                              TEXT     Tor SOCKS proxy    │
-│                                                           host               │
-│                                                           [env var:          │
-│                                                           TOR_SOCKS_HOST]    │
-│                                                           [default:          │
-│                                                           127.0.0.1]         │
-│    --tor-socks-port                              INTEGER  Tor SOCKS proxy    │
-│                                                           port               │
-│                                                           [env var:          │
-│                                                           TOR_SOCKS_PORT]    │
-│                                                           [default: 9050]    │
-│    --max-abs-fee                                 INTEGER  Max absolute fee   │
-│                                                           in sats            │
-│                                                           [default: 500]     │
-│    --max-rel-fee                                 TEXT     Max relative fee   │
-│                                                           (0.001=0.1%)       │
-│                                                           [default: 0.001]   │
-│    --fee-rate                                    FLOAT    Manual fee rate in │
-│                                                           sat/vB (e.g. 1.5). │
-│                                                           Mutually exclusive │
-│                                                           with               │
-│                                                           --block-target.    │
-│    --block-target                                INTEGER  Target blocks for  │
-│                                                           fee estimation     │
-│                                                           (1-1008). Defaults │
-│                                                           to 3 when using    │
-│                                                           full node. Cannot  │
-│                                                           be used with       │
-│                                                           neutrino backend.  │
-│    --bondless-allowa…                            FLOAT    Fraction of time   │
-│                                                           to choose makers   │
-│                                                           randomly (0.0-1.0) │
-│                                                           [env var:          │
-│                                                           BONDLESS_MAKERS_A… │
-│                                                           [default: 0.125]   │
-│    --bond-exponent                               FLOAT    Exponent for       │
-│                                                           fidelity bond      │
-│                                                           value calculation  │
-│                                                           (default 1.3)      │
-│                                                           [env var:          │
-│                                                           BOND_VALUE_EXPONE… │
-│                                                           [default: 1.3]     │
-│    --bondless-zero-f…      --no-bondless-zer…             For bondless       │
-│                                                           spots, require     │
-│                                                           zero absolute fee  │
-│                                                           (default: enabled) │
-│                                                           [env var:          │
-│                                                           BONDLESS_REQUIRE_… │
-│                                                           [default:          │
-│                                                           bondless-zero-fee] │
-│    --yes               -y                                 Skip confirmation  │
-│                                                           prompt             │
-│    --log-level         -l                        TEXT     Log level          │
-│                                                           [default: INFO]    │
-│    --help                                                 Show this message  │
-│                                                           and exit.          │
+│ *  --amount         -a                     INTEGER          Amount in sats   │
+│                                                             (0 for sweep)    │
+│                                                             [required]       │
+│    --destination    -d                     TEXT             Destination      │
+│                                                             address (or      │
+│                                                             'INTERNAL' for   │
+│                                                             next mixdepth)   │
+│                                                             [default:        │
+│                                                             INTERNAL]        │
+│    --mixdepth       -m                     INTEGER          Source mixdepth  │
+│                                                             [default: 0]     │
+│    --counterparti…  -n                     INTEGER          Number of makers │
+│    --mnemonic                              TEXT             Wallet mnemonic  │
+│                                                             phrase           │
+│                                                             [env var:        │
+│                                                             MNEMONIC]        │
+│    --mnemonic-file  -f                     PATH             Path to mnemonic │
+│                                                             file             │
+│    --password       -p                     TEXT             Password for     │
+│                                                             encrypted        │
+│                                                             mnemonic file    │
+│    --bip39-passph…                         TEXT             BIP39 passphrase │
+│                                                             (13th/25th word) │
+│                                                             [env var:        │
+│                                                             BIP39_PASSPHRAS… │
+│    --network                               [mainnet|testne  Protocol network │
+│                                            t|signet|regtes  for handshakes   │
+│                                            t]                                │
+│    --bitcoin-netw…                         [mainnet|testne  Bitcoin network  │
+│                                            t|signet|regtes  for addresses    │
+│                                            t]               (defaults to     │
+│                                                             --network)       │
+│    --backend        -b                     TEXT             Backend type:    │
+│                                                             full_node |      │
+│                                                             descriptor_wall… │
+│                                                             | neutrino       │
+│    --rpc-url                               TEXT             Bitcoin full     │
+│                                                             node RPC URL     │
+│                                                             [env var:        │
+│                                                             BITCOIN_RPC_URL] │
+│    --rpc-user                              TEXT             Bitcoin full     │
+│                                                             node RPC user    │
+│                                                             [env var:        │
+│                                                             BITCOIN_RPC_USE… │
+│    --rpc-password                          TEXT             Bitcoin full     │
+│                                                             node RPC         │
+│                                                             password         │
+│                                                             [env var:        │
+│                                                             BITCOIN_RPC_PAS… │
+│    --neutrino-url                          TEXT             Neutrino REST    │
+│                                                             API URL          │
+│                                                             [env var:        │
+│                                                             NEUTRINO_URL]    │
+│    --directory      -D                     TEXT             Directory        │
+│                                                             servers          │
+│                                                             (comma-separate… │
+│                                                             [env var:        │
+│                                                             DIRECTORY_SERVE… │
+│    --tor-socks-ho…                         TEXT             Tor SOCKS proxy  │
+│                                                             host             │
+│                                                             [env var:        │
+│                                                             TOR_SOCKS_HOST]  │
+│    --tor-socks-po…                         INTEGER          Tor SOCKS proxy  │
+│                                                             port             │
+│                                                             [env var:        │
+│                                                             TOR_SOCKS_PORT]  │
+│    --max-abs-fee                           INTEGER          Max absolute fee │
+│                                                             in sats          │
+│    --max-rel-fee                           TEXT             Max relative fee │
+│                                                             (0.001=0.1%)     │
+│    --fee-rate                              FLOAT            Manual fee rate  │
+│                                                             in sat/vB.       │
+│                                                             Mutually         │
+│                                                             exclusive with   │
+│                                                             --block-target.  │
+│    --block-target                          INTEGER          Target blocks    │
+│                                                             for fee          │
+│                                                             estimation       │
+│                                                             (1-1008). Cannot │
+│                                                             be used with     │
+│                                                             neutrino.        │
+│    --bondless-all…                         FLOAT            Fraction of time │
+│                                                             to choose makers │
+│                                                             randomly         │
+│                                                             (0.0-1.0)        │
+│                                                             [env var:        │
+│                                                             BONDLESS_MAKERS… │
+│    --bond-exponent                         FLOAT            Exponent for     │
+│                                                             fidelity bond    │
+│                                                             value            │
+│                                                             calculation      │
+│                                                             [env var:        │
+│                                                             BOND_VALUE_EXPO… │
+│    --bondless-zer…      --no-bondless-…                     For bondless     │
+│                                                             spots, require   │
+│                                                             zero absolute    │
+│                                                             fee              │
+│                                                             [env var:        │
+│                                                             BONDLESS_REQUIR… │
+│    --yes            -y                                      Skip             │
+│                                                             confirmation     │
+│                                                             prompt           │
+│    --log-level      -l                     TEXT             Log level        │
+│                                                             [default: INFO]  │
+│    --help                                                   Show this        │
+│                                                             message and      │
+│                                                             exit.            │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -581,41 +571,73 @@ Use env vars for RPC credentials (see jmwallet README).
 
  Run a tumbler schedule of CoinJoins.
 
+ Configuration is loaded from ~/.joinmarket-ng/config.toml, environment
+ variables, and CLI arguments. CLI arguments have the highest priority.
+
 ╭─ Arguments ──────────────────────────────────────────────────────────────────╮
 │ *    schedule_file      PATH  Path to schedule JSON file [required]          │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ --mnemonic                  TEXT     Wallet mnemonic phrase                  │
-│                                      [env var: MNEMONIC]                     │
-│ --mnemonic-file     -f      PATH     Path to mnemonic file                   │
-│ --password          -p      TEXT     Password for encrypted mnemonic file    │
-│ --bip39-passphrase          TEXT     BIP39 passphrase (13th/25th word)       │
-│                                      [env var: BIP39_PASSPHRASE]             │
-│ --network                   TEXT     Bitcoin network [default: mainnet]      │
-│ --backend           -b      TEXT     Backend type: full_node |               │
-│                                      descriptor_wallet | neutrino            │
-│                                      [default: descriptor_wallet]            │
-│ --rpc-url                   TEXT     Bitcoin full node RPC URL               │
-│                                      [env var: BITCOIN_RPC_URL]              │
-│                                      [default: http://127.0.0.1:8332]        │
-│ --rpc-user                  TEXT     Bitcoin full node RPC user              │
-│                                      [env var: BITCOIN_RPC_USER]             │
-│ --rpc-password              TEXT     Bitcoin full node RPC password          │
-│                                      [env var: BITCOIN_RPC_PASSWORD]         │
-│ --neutrino-url              TEXT     Neutrino REST API URL                   │
-│                                      [env var: NEUTRINO_URL]                 │
-│                                      [default: http://127.0.0.1:8334]        │
-│ --directory         -D      TEXT     Directory servers (comma-separated).    │
-│                                      Defaults to mainnet directory nodes.    │
-│                                      [env var: DIRECTORY_SERVERS]            │
-│ --tor-socks-host            TEXT     Tor SOCKS proxy host                    │
-│                                      [env var: TOR_SOCKS_HOST]               │
-│                                      [default: 127.0.0.1]                    │
-│ --tor-socks-port            INTEGER  Tor SOCKS proxy port                    │
-│                                      [env var: TOR_SOCKS_PORT]               │
-│                                      [default: 9050]                         │
-│ --log-level         -l      TEXT     Log level [default: INFO]               │
-│ --help                               Show this message and exit.             │
+│ --mnemonic                  TEXT                    Wallet mnemonic phrase   │
+│                                                     [env var: MNEMONIC]      │
+│ --mnemonic-file     -f      PATH                    Path to mnemonic file    │
+│ --password          -p      TEXT                    Password for encrypted   │
+│                                                     mnemonic file            │
+│ --bip39-passphrase          TEXT                    BIP39 passphrase         │
+│                                                     (13th/25th word)         │
+│                                                     [env var:                │
+│                                                     BIP39_PASSPHRASE]        │
+│ --network                   [mainnet|testnet|signe  Bitcoin network          │
+│                             t|regtest]                                       │
+│ --backend           -b      TEXT                    Backend type: full_node  │
+│                                                     | descriptor_wallet |    │
+│                                                     neutrino                 │
+│ --rpc-url                   TEXT                    Bitcoin full node RPC    │
+│                                                     URL                      │
+│                                                     [env var:                │
+│                                                     BITCOIN_RPC_URL]         │
+│ --rpc-user                  TEXT                    Bitcoin full node RPC    │
+│                                                     user                     │
+│                                                     [env var:                │
+│                                                     BITCOIN_RPC_USER]        │
+│ --rpc-password              TEXT                    Bitcoin full node RPC    │
+│                                                     password                 │
+│                                                     [env var:                │
+│                                                     BITCOIN_RPC_PASSWORD]    │
+│ --neutrino-url              TEXT                    Neutrino REST API URL    │
+│                                                     [env var: NEUTRINO_URL]  │
+│ --directory         -D      TEXT                    Directory servers        │
+│                                                     (comma-separated)        │
+│                                                     [env var:                │
+│                                                     DIRECTORY_SERVERS]       │
+│ --tor-socks-host            TEXT                    Tor SOCKS proxy host     │
+│                                                     [env var:                │
+│                                                     TOR_SOCKS_HOST]          │
+│ --tor-socks-port            INTEGER                 Tor SOCKS proxy port     │
+│                                                     [env var:                │
+│                                                     TOR_SOCKS_PORT]          │
+│ --log-level         -l      TEXT                    Log level                │
+│                                                     [default: INFO]          │
+│ --help                                              Show this message and    │
+│                                                     exit.                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-taker config-init --help</code></summary>
+
+```
+
+ Usage: jm-taker config-init [OPTIONS]
+
+ Initialize the config file with default settings.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --data-dir  -d      PATH  Data directory for JoinMarket files                │
+│                           [env var: JOINMARKET_DATA_DIR]                     │
+│ --help                    Show this message and exit.                        │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 

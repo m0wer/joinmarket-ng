@@ -64,7 +64,7 @@ def _parse_locktime_from_path(path: str) -> int | None:
         return None
 
 
-def find_fidelity_bonds(
+async def find_fidelity_bonds(
     wallet: WalletService, mixdepth: int = FIDELITY_BOND_MIXDEPTH
 ) -> list[FidelityBondInfo]:
     """
@@ -111,7 +111,13 @@ def find_fidelity_bonds(
         pubkey = key.get_public_key_bytes(compressed=True) if key else None
         private_key = key.private_key if key else None
 
-        confirmation_time = utxo_info.confirmations
+        # Get confirmation_time (Unix timestamp) from block height
+        # For unconfirmed UTXOs (height=None), we can't calculate bond value yet
+        if utxo_info.height is None:
+            logger.warning(f"Skipping unconfirmed bond UTXO {utxo_info.txid}:{utxo_info.vout}")
+            continue
+
+        confirmation_time = await wallet.backend.get_block_time(utxo_info.height)
 
         bond_value = calculate_timelocked_fidelity_bond_value(
             utxo_value=utxo_info.value,
@@ -283,7 +289,7 @@ def create_fidelity_bond_proof(
         return None
 
 
-def get_best_fidelity_bond(
+async def get_best_fidelity_bond(
     wallet: WalletService, mixdepth: int = FIDELITY_BOND_MIXDEPTH
 ) -> FidelityBondInfo | None:
     """
@@ -296,7 +302,7 @@ def get_best_fidelity_bond(
     Returns:
         Best FidelityBondInfo or None if no bonds found
     """
-    bonds = find_fidelity_bonds(wallet, mixdepth)
+    bonds = await find_fidelity_bonds(wallet, mixdepth)
     if not bonds:
         return None
 

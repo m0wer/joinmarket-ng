@@ -1,5 +1,11 @@
 """
 Command-line interface for JoinMarket Taker.
+
+Configuration is loaded with the following priority (highest to lowest):
+1. CLI arguments
+2. Environment variables
+3. Config file (~/.joinmarket-ng/config.toml)
+4. Built-in defaults
 """
 
 from __future__ import annotations
@@ -8,18 +14,22 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
-from jmcore.models import NetworkType, get_default_directory_nodes
+from jmcore.models import NetworkType
 from jmcore.notifications import get_notifier
-from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
-from jmwallet.backends.neutrino import NeutrinoBackend
+from jmcore.settings import (
+    DEFAULT_DIRECTORY_SERVERS,
+    JoinMarketSettings,
+    ensure_config_file,
+    get_settings,
+    reset_settings,
+)
 from jmwallet.wallet.service import WalletService
 from loguru import logger
 
-from taker.config import MaxCjFee, Schedule, ScheduleEntry, TakerConfig
-from taker.taker import Taker
+from taker.config import BroadcastPolicy, MaxCjFee, Schedule, ScheduleEntry, TakerConfig
 
 app = typer.Typer(
     name="jm-taker",
@@ -97,6 +107,203 @@ def load_mnemonic(
     )
 
 
+def build_taker_config(
+    settings: JoinMarketSettings,
+    mnemonic: str,
+    passphrase: str,
+    # CoinJoin specific settings
+    amount: int = 0,
+    destination: str = "",
+    mixdepth: int = 0,
+    counterparties: int | None = None,
+    # CLI overrides (None means use settings value)
+    network: NetworkType | None = None,
+    bitcoin_network: NetworkType | None = None,
+    data_dir: Path | None = None,
+    backend_type: str | None = None,
+    rpc_url: str | None = None,
+    rpc_user: str | None = None,
+    rpc_password: str | None = None,
+    neutrino_url: str | None = None,
+    directory_servers: str | None = None,
+    tor_socks_host: str | None = None,
+    tor_socks_port: int | None = None,
+    max_abs_fee: int | None = None,
+    max_rel_fee: str | None = None,
+    fee_rate: float | None = None,
+    block_target: int | None = None,
+    bondless_makers_allowance: float | None = None,
+    bond_value_exponent: float | None = None,
+    bondless_require_zero_fee: bool | None = None,
+) -> TakerConfig:
+    """
+    Build TakerConfig from unified settings with CLI overrides.
+
+    CLI arguments (when not None) override settings from config file and env vars.
+    """
+    # Resolve network settings
+    effective_network = network if network is not None else settings.network_config.network
+    effective_bitcoin_network = (
+        bitcoin_network
+        if bitcoin_network is not None
+        else settings.network_config.bitcoin_network or effective_network
+    )
+    effective_data_dir = data_dir if data_dir is not None else settings.get_data_dir()
+
+    # Resolve backend settings
+    effective_backend_type = (
+        backend_type if backend_type is not None else settings.bitcoin.backend_type
+    )
+    effective_rpc_url = rpc_url if rpc_url is not None else settings.bitcoin.rpc_url
+    effective_rpc_user = rpc_user if rpc_user is not None else settings.bitcoin.rpc_user
+    effective_rpc_password = (
+        rpc_password
+        if rpc_password is not None
+        else settings.bitcoin.rpc_password.get_secret_value()
+    )
+    effective_neutrino_url = (
+        neutrino_url if neutrino_url is not None else settings.bitcoin.neutrino_url
+    )
+
+    # Build backend config
+    backend_config: dict[str, Any] = {}
+    if effective_backend_type in ("full_node", "descriptor_wallet"):
+        backend_config = {
+            "rpc_url": effective_rpc_url,
+            "rpc_user": effective_rpc_user,
+            "rpc_password": effective_rpc_password,
+        }
+    elif effective_backend_type == "neutrino":
+        backend_config = {
+            "neutrino_url": effective_neutrino_url,
+            "network": (
+                effective_bitcoin_network.value
+                if hasattr(effective_bitcoin_network, "value")
+                else str(effective_bitcoin_network)
+            ),
+        }
+
+    # Resolve directory servers
+    if directory_servers:
+        dir_servers = [s.strip() for s in directory_servers.split(",")]
+    elif settings.network_config.directory_servers:
+        dir_servers = settings.network_config.directory_servers
+    elif network is not None:
+        # Network was overridden via CLI, get defaults for that network
+        dir_servers = DEFAULT_DIRECTORY_SERVERS.get(effective_network.value, [])
+    else:
+        dir_servers = settings.get_directory_servers()
+
+    # Resolve Tor settings
+    effective_socks_host = tor_socks_host if tor_socks_host is not None else settings.tor.socks_host
+    effective_socks_port = tor_socks_port if tor_socks_port is not None else settings.tor.socks_port
+
+    # Resolve taker-specific settings
+    effective_counterparties = (
+        counterparties if counterparties is not None else settings.taker.counterparty_count
+    )
+    effective_max_abs_fee = (
+        max_abs_fee if max_abs_fee is not None else settings.taker.max_cj_fee_abs
+    )
+    effective_max_rel_fee = (
+        max_rel_fee if max_rel_fee is not None else settings.taker.max_cj_fee_rel
+    )
+    effective_block_target = (
+        block_target if block_target is not None else settings.taker.fee_block_target
+    )
+    effective_bondless = (
+        bondless_makers_allowance
+        if bondless_makers_allowance is not None
+        else settings.taker.bondless_makers_allowance
+    )
+    effective_bond_exp = (
+        bond_value_exponent
+        if bond_value_exponent is not None
+        else settings.taker.bond_value_exponent
+    )
+    effective_bondless_zero_fee = (
+        bondless_require_zero_fee
+        if bondless_require_zero_fee is not None
+        else settings.taker.bondless_require_zero_fee
+    )
+
+    # Parse broadcast policy
+    try:
+        broadcast_policy = BroadcastPolicy(settings.taker.tx_broadcast)
+    except ValueError:
+        broadcast_policy = BroadcastPolicy.MULTIPLE_PEERS
+
+    return TakerConfig(
+        mnemonic=mnemonic,
+        passphrase=passphrase,
+        network=effective_network,
+        bitcoin_network=effective_bitcoin_network,
+        data_dir=effective_data_dir,
+        backend_type=effective_backend_type,
+        backend_config=backend_config,
+        directory_servers=dir_servers,
+        socks_host=effective_socks_host,
+        socks_port=effective_socks_port,
+        mixdepth_count=settings.wallet.mixdepth_count,
+        gap_limit=settings.wallet.gap_limit,
+        dust_threshold=settings.wallet.dust_threshold,
+        smart_scan=settings.wallet.smart_scan,
+        background_full_rescan=settings.wallet.background_full_rescan,
+        scan_lookback_blocks=settings.wallet.scan_lookback_blocks,
+        destination_address=destination,
+        amount=amount,
+        mixdepth=mixdepth,
+        counterparty_count=effective_counterparties,
+        max_cj_fee=MaxCjFee(abs_fee=effective_max_abs_fee, rel_fee=effective_max_rel_fee),
+        tx_fee_factor=settings.taker.tx_fee_factor,
+        fee_rate=fee_rate,  # CLI only, no settings equivalent
+        fee_block_target=effective_block_target,
+        bondless_makers_allowance=effective_bondless,
+        bond_value_exponent=effective_bond_exp,
+        bondless_makers_allowance_require_zero_fee=effective_bondless_zero_fee,
+        maker_timeout_sec=settings.taker.maker_timeout_sec,
+        order_wait_time=settings.taker.order_wait_time,
+        tx_broadcast=broadcast_policy,
+        broadcast_peer_count=settings.taker.broadcast_peer_count,
+        minimum_makers=settings.taker.minimum_makers,
+        rescan_interval_sec=settings.taker.rescan_interval_sec,
+    )
+
+
+def create_backend(config: TakerConfig) -> Any:
+    """Create appropriate backend based on config."""
+    bitcoin_network = config.bitcoin_network or config.network
+
+    from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
+    from jmwallet.backends.descriptor_wallet import (
+        DescriptorWalletBackend,
+        generate_wallet_name,
+        get_mnemonic_fingerprint,
+    )
+    from jmwallet.backends.neutrino import NeutrinoBackend
+
+    if config.backend_type == "neutrino":
+        return NeutrinoBackend(
+            neutrino_url=config.backend_config.get("neutrino_url", "http://127.0.0.1:8334"),
+            network=bitcoin_network.value,
+        )
+    elif config.backend_type == "descriptor_wallet":
+        fingerprint = get_mnemonic_fingerprint(config.mnemonic, config.passphrase or "")
+        wallet_name = generate_wallet_name(fingerprint, bitcoin_network.value)
+        return DescriptorWalletBackend(
+            rpc_url=config.backend_config["rpc_url"],
+            rpc_user=config.backend_config["rpc_user"],
+            rpc_password=config.backend_config["rpc_password"],
+            wallet_name=wallet_name,
+        )
+    else:  # full_node
+        return BitcoinCoreBackend(
+            rpc_url=config.backend_config["rpc_url"],
+            rpc_user=config.backend_config["rpc_user"],
+            rpc_password=config.backend_config["rpc_password"],
+        )
+
+
 @app.command()
 def coinjoin(
     amount: Annotated[int, typer.Option("--amount", "-a", help="Amount in sats (0 for sweep)")],
@@ -110,8 +317,8 @@ def coinjoin(
     ] = "INTERNAL",
     mixdepth: Annotated[int, typer.Option("--mixdepth", "-m", help="Source mixdepth")] = 0,
     counterparties: Annotated[
-        int, typer.Option("--counterparties", "-n", help="Number of makers")
-    ] = 10,
+        int | None, typer.Option("--counterparties", "-n", help="Number of makers")
+    ] = None,
     mnemonic: Annotated[
         str | None, typer.Option("--mnemonic", envvar="MNEMONIC", help="Wallet mnemonic phrase")
     ] = None,
@@ -130,112 +337,127 @@ def coinjoin(
         ),
     ] = None,
     network: Annotated[
-        str, typer.Option("--network", help="Protocol network for handshakes")
-    ] = "mainnet",
+        NetworkType | None,
+        typer.Option("--network", case_sensitive=False, help="Protocol network for handshakes"),
+    ] = None,
     bitcoin_network: Annotated[
-        str | None,
+        NetworkType | None,
         typer.Option(
-            "--bitcoin-network", help="Bitcoin network for addresses (defaults to --network)"
+            "--bitcoin-network",
+            case_sensitive=False,
+            help="Bitcoin network for addresses (defaults to --network)",
         ),
     ] = None,
     backend_type: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--backend", "-b", help="Backend type: full_node | descriptor_wallet | neutrino"
         ),
-    ] = "descriptor_wallet",
+    ] = None,
     rpc_url: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--rpc-url",
             envvar="BITCOIN_RPC_URL",
             help="Bitcoin full node RPC URL",
         ),
-    ] = "http://127.0.0.1:8332",
+    ] = None,
     rpc_user: Annotated[
-        str,
+        str | None,
         typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER", help="Bitcoin full node RPC user"),
-    ] = "",
+    ] = None,
     rpc_password: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--rpc-password", envvar="BITCOIN_RPC_PASSWORD", help="Bitcoin full node RPC password"
         ),
-    ] = "",
+    ] = None,
     neutrino_url: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--neutrino-url",
             envvar="NEUTRINO_URL",
             help="Neutrino REST API URL",
         ),
-    ] = "http://127.0.0.1:8334",
+    ] = None,
     directory_servers: Annotated[
         str | None,
         typer.Option(
             "--directory",
             "-D",
             envvar="DIRECTORY_SERVERS",
-            help="Directory servers (comma-separated). Defaults to mainnet directory nodes.",
+            help="Directory servers (comma-separated)",
         ),
     ] = None,
     tor_socks_host: Annotated[
-        str, typer.Option(envvar="TOR_SOCKS_HOST", help="Tor SOCKS proxy host")
-    ] = "127.0.0.1",
+        str | None, typer.Option(envvar="TOR_SOCKS_HOST", help="Tor SOCKS proxy host")
+    ] = None,
     tor_socks_port: Annotated[
-        int, typer.Option(envvar="TOR_SOCKS_PORT", help="Tor SOCKS proxy port")
-    ] = 9050,
+        int | None, typer.Option(envvar="TOR_SOCKS_PORT", help="Tor SOCKS proxy port")
+    ] = None,
     max_abs_fee: Annotated[
-        int, typer.Option("--max-abs-fee", help="Max absolute fee in sats")
-    ] = 500,
+        int | None, typer.Option("--max-abs-fee", help="Max absolute fee in sats")
+    ] = None,
     max_rel_fee: Annotated[
-        str, typer.Option("--max-rel-fee", help="Max relative fee (0.001=0.1%)")
-    ] = "0.001",
+        str | None, typer.Option("--max-rel-fee", help="Max relative fee (0.001=0.1%)")
+    ] = None,
     fee_rate: Annotated[
         float | None,
         typer.Option(
             "--fee-rate",
-            help="Manual fee rate in sat/vB (e.g. 1.5). Mutually exclusive with --block-target.",
+            help="Manual fee rate in sat/vB. Mutually exclusive with --block-target.",
         ),
     ] = None,
     block_target: Annotated[
         int | None,
         typer.Option(
             "--block-target",
-            help="Target blocks for fee estimation (1-1008). "
-            "Defaults to 3 when using full node. "
-            "Cannot be used with neutrino backend.",
+            help="Target blocks for fee estimation (1-1008). Cannot be used with neutrino.",
         ),
     ] = None,
     bondless_makers_allowance: Annotated[
-        float,
+        float | None,
         typer.Option(
             "--bondless-allowance",
             envvar="BONDLESS_MAKERS_ALLOWANCE",
             help="Fraction of time to choose makers randomly (0.0-1.0)",
         ),
-    ] = 0.125,
+    ] = None,
     bond_value_exponent: Annotated[
-        float,
+        float | None,
         typer.Option(
             "--bond-exponent",
             envvar="BOND_VALUE_EXPONENT",
-            help="Exponent for fidelity bond value calculation (default 1.3)",
+            help="Exponent for fidelity bond value calculation",
         ),
-    ] = 1.3,
+    ] = None,
     bondless_require_zero_fee: Annotated[
-        bool,
+        bool | None,
         typer.Option(
             "--bondless-zero-fee/--no-bondless-zero-fee",
             envvar="BONDLESS_REQUIRE_ZERO_FEE",
-            help="For bondless spots, require zero absolute fee (default: enabled)",
+            help="For bondless spots, require zero absolute fee",
         ),
-    ] = True,
+    ] = None,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompt")] = False,
     log_level: Annotated[str, typer.Option("--log-level", "-l", help="Log level")] = "INFO",
 ) -> None:
-    """Execute a single CoinJoin transaction."""
+    """
+    Execute a single CoinJoin transaction.
+
+    Configuration is loaded from ~/.joinmarket-ng/config.toml (or $JOINMARKET_DATA_DIR/config.toml),
+    environment variables, and CLI arguments. CLI arguments have the highest priority.
+    """
     setup_logging(log_level)
+
+    # Reset settings cache
+    reset_settings()
+
+    # Load unified settings
+    settings = get_settings()
+
+    # Ensure config file exists
+    ensure_config_file(settings.get_data_dir())
 
     # Load mnemonic
     try:
@@ -244,64 +466,46 @@ def coinjoin(
         logger.error(str(e))
         raise typer.Exit(1)
 
-    # Parse network
+    # Build config with CLI overrides
     try:
-        network_type = NetworkType(network)
-    except ValueError:
-        logger.error(f"Invalid network: {network}")
+        config = build_taker_config(
+            settings=settings,
+            mnemonic=resolved_mnemonic,
+            passphrase=bip39_passphrase or "",
+            amount=amount,
+            destination=destination,
+            mixdepth=mixdepth,
+            counterparties=counterparties,
+            network=network,
+            bitcoin_network=bitcoin_network,
+            backend_type=backend_type,
+            rpc_url=rpc_url,
+            rpc_user=rpc_user,
+            rpc_password=rpc_password,
+            neutrino_url=neutrino_url,
+            directory_servers=directory_servers,
+            tor_socks_host=tor_socks_host,
+            tor_socks_port=tor_socks_port,
+            max_abs_fee=max_abs_fee,
+            max_rel_fee=max_rel_fee,
+            fee_rate=fee_rate,
+            block_target=block_target,
+            bondless_makers_allowance=bondless_makers_allowance,
+            bond_value_exponent=bond_value_exponent,
+            bondless_require_zero_fee=bondless_require_zero_fee,
+        )
+    except ValueError as e:
+        logger.error(str(e))
         raise typer.Exit(1)
 
-    # Parse bitcoin network (defaults to protocol network)
-    actual_bitcoin_network = bitcoin_network or network
-    try:
-        bitcoin_network_type = NetworkType(actual_bitcoin_network)
-    except ValueError:
-        logger.error(f"Invalid bitcoin network: {actual_bitcoin_network}")
-        raise typer.Exit(1)
+    # Log configuration source
+    logger.info(f"Using network: {config.network.value}")
+    logger.info(f"Using backend: {config.backend_type}")
+    logger.info(f"Tor SOCKS: {config.socks_host}:{config.socks_port}")
 
-    # Parse directory servers: use provided list or default for network
-    if directory_servers:
-        dir_servers = [s.strip() for s in directory_servers.split(",")]
-    else:
-        dir_servers = get_default_directory_nodes(network_type)
-
-    # Build backend config based on type
-    if backend_type == "neutrino":
-        backend_config = {
-            "neutrino_url": neutrino_url,
-            "network": actual_bitcoin_network,
-        }
-    else:  # full_node or descriptor_wallet
-        backend_config = {
-            "rpc_url": rpc_url,
-            "rpc_user": rpc_user,
-            "rpc_password": rpc_password,
-        }
-
-    # Build config
-    config = TakerConfig(
-        mnemonic=resolved_mnemonic,
-        passphrase=bip39_passphrase or "",
-        network=network_type,
-        bitcoin_network=bitcoin_network_type,
-        backend_type=backend_type,
-        backend_config=backend_config,
-        directory_servers=dir_servers,
-        socks_host=tor_socks_host,
-        socks_port=tor_socks_port,
-        destination_address=destination,
-        amount=amount,
-        mixdepth=mixdepth,
-        counterparty_count=counterparties,
-        max_cj_fee=MaxCjFee(abs_fee=max_abs_fee, rel_fee=max_rel_fee),
-        fee_rate=fee_rate,
-        fee_block_target=block_target,
-        bondless_makers_allowance=bondless_makers_allowance,
-        bond_value_exponent=bond_value_exponent,
-        bondless_makers_allowance_require_zero_fee=bondless_require_zero_fee,
+    asyncio.run(
+        _run_coinjoin(config, amount, destination, mixdepth, config.counterparty_count, yes)
     )
-
-    asyncio.run(_run_coinjoin(config, amount, destination, mixdepth, counterparties, yes))
 
 
 async def _run_coinjoin(
@@ -313,25 +517,15 @@ async def _run_coinjoin(
     skip_confirmation: bool,
 ) -> None:
     """Run CoinJoin transaction."""
-    # Use bitcoin_network for address generation
+    from taker.taker import Taker
+
     bitcoin_network = config.bitcoin_network or config.network
 
-    from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
-    from jmwallet.backends.descriptor_wallet import (
-        DescriptorWalletBackend,
-        generate_wallet_name,
-        get_mnemonic_fingerprint,
-    )
-    from jmwallet.backends.neutrino import NeutrinoBackend
+    # Create backend
+    backend = create_backend(config)
 
-    # Create backend based on config
-    backend: NeutrinoBackend | BitcoinCoreBackend | DescriptorWalletBackend
+    # Verify backend connection
     if config.backend_type == "neutrino":
-        backend = NeutrinoBackend(
-            neutrino_url=config.backend_config.get("neutrino_url", "http://127.0.0.1:8334"),
-            network=bitcoin_network.value,
-        )
-        # Verify connection early
         logger.info("Verifying Neutrino connection...")
         try:
             synced = await backend.wait_for_sync(timeout=30.0)
@@ -342,30 +536,7 @@ async def _run_coinjoin(
         except Exception as e:
             logger.error(f"Failed to connect to Neutrino backend: {e}")
             raise typer.Exit(1)
-    elif config.backend_type == "descriptor_wallet":
-        fingerprint = get_mnemonic_fingerprint(config.mnemonic, config.passphrase or "")
-        wallet_name = generate_wallet_name(fingerprint, bitcoin_network.value)
-        backend = DescriptorWalletBackend(
-            rpc_url=config.backend_config["rpc_url"],
-            rpc_user=config.backend_config["rpc_user"],
-            rpc_password=config.backend_config["rpc_password"],
-            wallet_name=wallet_name,
-        )
-        # Verify RPC connection early
-        logger.info("Verifying Bitcoin Core RPC connection...")
-        try:
-            await backend.get_block_height()
-            logger.info("Bitcoin Core RPC connection verified")
-        except Exception as e:
-            logger.error(f"Failed to connect to Bitcoin Core RPC: {e}")
-            raise typer.Exit(1)
-    else:  # full_node
-        backend = BitcoinCoreBackend(
-            rpc_url=config.backend_config["rpc_url"],
-            rpc_user=config.backend_config["rpc_user"],
-            rpc_password=config.backend_config["rpc_password"],
-        )
-        # Verify RPC connection early
+    else:
         logger.info("Verifying Bitcoin Core RPC connection...")
         try:
             await backend.get_block_height()
@@ -374,7 +545,7 @@ async def _run_coinjoin(
             logger.error(f"Failed to connect to Bitcoin Core RPC: {e}")
             raise typer.Exit(1)
 
-    # Create wallet with bitcoin_network for address generation
+    # Create wallet
     wallet = WalletService(
         mnemonic=config.mnemonic,
         passphrase=config.passphrase,
@@ -385,7 +556,7 @@ async def _run_coinjoin(
 
     # Create confirmation callback
     def confirmation_callback(
-        maker_details: list[dict],
+        maker_details: list[dict[str, Any]],
         cj_amount: int,
         total_fee: int,
         destination: str,
@@ -412,7 +583,7 @@ async def _run_coinjoin(
     taker = Taker(wallet, backend, config, confirmation_callback=confirmation_callback)
 
     try:
-        # Send startup notification immediately
+        # Send startup notification
         notifier = get_notifier()
         await notifier.notify_startup(
             component="Taker (CoinJoin)",
@@ -459,58 +630,75 @@ def tumble(
             help="BIP39 passphrase (13th/25th word)",
         ),
     ] = None,
-    network: Annotated[str, typer.Option("--network", help="Bitcoin network")] = "mainnet",
+    network: Annotated[
+        NetworkType | None,
+        typer.Option("--network", case_sensitive=False, help="Bitcoin network"),
+    ] = None,
     backend_type: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--backend", "-b", help="Backend type: full_node | descriptor_wallet | neutrino"
         ),
-    ] = "descriptor_wallet",
+    ] = None,
     rpc_url: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--rpc-url",
             envvar="BITCOIN_RPC_URL",
             help="Bitcoin full node RPC URL",
         ),
-    ] = "http://127.0.0.1:8332",
+    ] = None,
     rpc_user: Annotated[
-        str,
+        str | None,
         typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER", help="Bitcoin full node RPC user"),
-    ] = "",
+    ] = None,
     rpc_password: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--rpc-password", envvar="BITCOIN_RPC_PASSWORD", help="Bitcoin full node RPC password"
         ),
-    ] = "",
+    ] = None,
     neutrino_url: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--neutrino-url",
             envvar="NEUTRINO_URL",
             help="Neutrino REST API URL",
         ),
-    ] = "http://127.0.0.1:8334",
+    ] = None,
     directory_servers: Annotated[
         str | None,
         typer.Option(
             "--directory",
             "-D",
             envvar="DIRECTORY_SERVERS",
-            help="Directory servers (comma-separated). Defaults to mainnet directory nodes.",
+            help="Directory servers (comma-separated)",
         ),
     ] = None,
     tor_socks_host: Annotated[
-        str, typer.Option(envvar="TOR_SOCKS_HOST", help="Tor SOCKS proxy host")
-    ] = "127.0.0.1",
+        str | None, typer.Option(envvar="TOR_SOCKS_HOST", help="Tor SOCKS proxy host")
+    ] = None,
     tor_socks_port: Annotated[
-        int, typer.Option(envvar="TOR_SOCKS_PORT", help="Tor SOCKS proxy port")
-    ] = 9050,
+        int | None, typer.Option(envvar="TOR_SOCKS_PORT", help="Tor SOCKS proxy port")
+    ] = None,
     log_level: Annotated[str, typer.Option("--log-level", "-l", help="Log level")] = "INFO",
 ) -> None:
-    """Run a tumbler schedule of CoinJoins."""
+    """
+    Run a tumbler schedule of CoinJoins.
+
+    Configuration is loaded from ~/.joinmarket-ng/config.toml, environment variables,
+    and CLI arguments. CLI arguments have the highest priority.
+    """
     setup_logging(log_level)
+
+    # Reset settings cache
+    reset_settings()
+
+    # Load unified settings
+    settings = get_settings()
+
+    # Ensure config file exists
+    ensure_config_file(settings.get_data_dir())
 
     # Load mnemonic
     try:
@@ -536,68 +724,44 @@ def tumble(
         logger.error(f"Failed to load schedule: {e}")
         raise typer.Exit(1)
 
-    # Parse network
+    # Build config with CLI overrides
     try:
-        network_type = NetworkType(network)
-    except ValueError:
-        logger.error(f"Invalid network: {network}")
+        config = build_taker_config(
+            settings=settings,
+            mnemonic=resolved_mnemonic,
+            passphrase=bip39_passphrase or "",
+            network=network,
+            backend_type=backend_type,
+            rpc_url=rpc_url,
+            rpc_user=rpc_user,
+            rpc_password=rpc_password,
+            neutrino_url=neutrino_url,
+            directory_servers=directory_servers,
+            tor_socks_host=tor_socks_host,
+            tor_socks_port=tor_socks_port,
+        )
+    except ValueError as e:
+        logger.error(str(e))
         raise typer.Exit(1)
 
-    # Parse directory servers: use provided list or default for network
-    if directory_servers:
-        dir_servers = [s.strip() for s in directory_servers.split(",")]
-    else:
-        dir_servers = get_default_directory_nodes(network_type)
-
-    # Build backend config based on type
-    if backend_type == "neutrino":
-        backend_config = {
-            "neutrino_url": neutrino_url,
-            "network": network,
-        }
-    else:
-        backend_config = {
-            "rpc_url": rpc_url,
-            "rpc_user": rpc_user,
-            "rpc_password": rpc_password,
-        }
-
-    # Build config
-    config = TakerConfig(
-        mnemonic=resolved_mnemonic,
-        passphrase=bip39_passphrase or "",
-        network=network_type,
-        backend_type=backend_type,
-        backend_config=backend_config,
-        directory_servers=dir_servers,
-        socks_host=tor_socks_host,
-        socks_port=tor_socks_port,
-    )
+    # Log configuration
+    logger.info(f"Using network: {config.network.value}")
+    logger.info(f"Using backend: {config.backend_type}")
 
     asyncio.run(_run_tumble(config, schedule))
 
 
 async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
     """Run tumbler schedule."""
-    # Use bitcoin_network for address generation
+    from taker.taker import Taker
+
     bitcoin_network = config.bitcoin_network or config.network
 
-    from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
-    from jmwallet.backends.descriptor_wallet import (
-        DescriptorWalletBackend,
-        generate_wallet_name,
-        get_mnemonic_fingerprint,
-    )
-    from jmwallet.backends.neutrino import NeutrinoBackend
+    # Create backend
+    backend = create_backend(config)
 
-    # Create backend based on config
-    backend: NeutrinoBackend | BitcoinCoreBackend | DescriptorWalletBackend
+    # Verify backend connection
     if config.backend_type == "neutrino":
-        backend = NeutrinoBackend(
-            neutrino_url=config.backend_config.get("neutrino_url", "http://127.0.0.1:8334"),
-            network=bitcoin_network.value,
-        )
-        # Verify connection early
         logger.info("Verifying Neutrino connection...")
         try:
             synced = await backend.wait_for_sync(timeout=30.0)
@@ -608,30 +772,7 @@ async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
         except Exception as e:
             logger.error(f"Failed to connect to Neutrino backend: {e}")
             raise typer.Exit(1)
-    elif config.backend_type == "descriptor_wallet":
-        fingerprint = get_mnemonic_fingerprint(config.mnemonic, config.passphrase or "")
-        wallet_name = generate_wallet_name(fingerprint, bitcoin_network.value)
-        backend = DescriptorWalletBackend(
-            rpc_url=config.backend_config["rpc_url"],
-            rpc_user=config.backend_config["rpc_user"],
-            rpc_password=config.backend_config["rpc_password"],
-            wallet_name=wallet_name,
-        )
-        # Verify RPC connection early
-        logger.info("Verifying Bitcoin Core RPC connection...")
-        try:
-            await backend.get_block_height()
-            logger.info("Bitcoin Core RPC connection verified")
-        except Exception as e:
-            logger.error(f"Failed to connect to Bitcoin Core RPC: {e}")
-            raise typer.Exit(1)
-    else:  # full_node
-        backend = BitcoinCoreBackend(
-            rpc_url=config.backend_config["rpc_url"],
-            rpc_user=config.backend_config["rpc_user"],
-            rpc_password=config.backend_config["rpc_password"],
-        )
-        # Verify RPC connection early
+    else:
         logger.info("Verifying Bitcoin Core RPC connection...")
         try:
             await backend.get_block_height()
@@ -640,7 +781,7 @@ async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
             logger.error(f"Failed to connect to Bitcoin Core RPC: {e}")
             raise typer.Exit(1)
 
-    # Create wallet with bitcoin_network for address generation
+    # Create wallet
     wallet = WalletService(
         mnemonic=config.mnemonic,
         passphrase=config.passphrase,
@@ -653,7 +794,7 @@ async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
     taker = Taker(wallet, backend, config)
 
     try:
-        # Send startup notification immediately
+        # Send startup notification
         notifier = get_notifier()
         await notifier.notify_startup(
             component="Taker (Tumble)",
@@ -672,6 +813,30 @@ async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
 
     finally:
         await taker.stop()
+
+
+@app.command()
+def config_init(
+    data_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-dir",
+            "-d",
+            envvar="JOINMARKET_DATA_DIR",
+            help="Data directory for JoinMarket files",
+        ),
+    ] = None,
+) -> None:
+    """Initialize the config file with default settings."""
+    from jmcore.paths import get_default_data_dir
+
+    if data_dir is None:
+        data_dir = get_default_data_dir()
+
+    config_path = ensure_config_file(data_dir)
+    typer.echo(f"Config file created at: {config_path}")
+    typer.echo("\nAll settings are commented out by default.")
+    typer.echo("Edit the file to customize your configuration.")
 
 
 def main() -> None:

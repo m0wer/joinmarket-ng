@@ -569,7 +569,7 @@ class MakerBot:
             if self.config.selected_fidelity_bond:
                 # User specified a specific bond
                 sel_txid, sel_vout = self.config.selected_fidelity_bond
-                bonds = find_fidelity_bonds(self.wallet)
+                bonds = await find_fidelity_bonds(self.wallet)
                 self.fidelity_bond = next(
                     (b for b in bonds if b.txid == sel_txid and b.vout == sel_vout), None
                 )
@@ -584,10 +584,10 @@ class MakerBot:
                         f"Selected fidelity bond {sel_txid[:16]}...:{sel_vout} not found, "
                         "falling back to best available"
                     )
-                    self.fidelity_bond = get_best_fidelity_bond(self.wallet)
+                    self.fidelity_bond = await get_best_fidelity_bond(self.wallet)
             else:
                 # Auto-select the best (largest bond value) fidelity bond
-                self.fidelity_bond = get_best_fidelity_bond(self.wallet)
+                self.fidelity_bond = await get_best_fidelity_bond(self.wallet)
             if self.fidelity_bond:
                 logger.info(
                     f"Fidelity bond found: {self.fidelity_bond.txid[:16]}..., "

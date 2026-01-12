@@ -393,6 +393,8 @@ For detailed help on any command, see the auto-generated help sections below.
 │ --broadcast                                 Broadcast the transaction        │
 │                                             [default: True]                  │
 │ --yes                      -y               Skip confirmation prompt         │
+│ --select-utxos             -s               Interactively select UTXOs       │
+│                                             (fzf-like TUI)                   │
 │ --data-dir                         PATH     Data directory (default:         │
 │                                             ~/.joinmarket-ng or              │
 │                                             $JOINMARKET_DATA_DIR)            │

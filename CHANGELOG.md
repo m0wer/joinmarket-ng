@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Configuration File Support**: Added TOML configuration file (`~/.joinmarket-ng/config.toml`) for persistent settings.
+  - Configuration priority: CLI args > environment variables > config file > defaults
+  - Auto-generated template with all settings commented out on first run
+  - Users only uncomment settings they want to change, facilitating software updates
+  - Environment variables use double underscore for nesting: `TOR__SOCKS_HOST`, `BITCOIN__RPC_URL`
+  - New `config-init` command for maker and taker to initialize the config file
+  - Unified settings model in `jmcore.settings` using pydantic-settings
+
 - **Interactive UTXO Selection TUI**: New `--select-utxos` / `-s` flag for `jm-wallet send` command.
   - fzf-like curses interface for manually selecting UTXOs
   - Navigate with arrow keys or j/k, toggle selection with Tab/Space

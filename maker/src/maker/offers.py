@@ -81,7 +81,7 @@ class OfferManager:
 
             # Get fidelity bond value if available
             fidelity_bond_value = 0
-            bond = get_best_fidelity_bond(self.wallet)
+            bond = await get_best_fidelity_bond(self.wallet)
             if bond:
                 fidelity_bond_value = bond.bond_value
                 logger.info(

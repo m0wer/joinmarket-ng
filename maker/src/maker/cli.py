@@ -1,5 +1,11 @@
 """
 Maker bot CLI using Typer.
+
+Configuration is loaded with the following priority (highest to lowest):
+1. CLI arguments
+2. Environment variables
+3. Config file (~/.joinmarket-ng/config.toml)
+4. Built-in defaults
 """
 
 from __future__ import annotations
@@ -7,14 +13,18 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
-from jmcore.config import TorControlConfig, create_tor_control_config_from_env
-from jmcore.models import NetworkType, OfferType, get_default_directory_nodes
+from jmcore.config import TorControlConfig
+from jmcore.models import NetworkType, OfferType
 from jmcore.notifications import get_notifier
-from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
-from jmwallet.backends.neutrino import NeutrinoBackend
+from jmcore.settings import (
+    JoinMarketSettings,
+    ensure_config_file,
+    get_settings,
+    reset_settings,
+)
 from jmwallet.wallet.service import WalletService
 from loguru import logger
 
@@ -24,7 +34,7 @@ from maker.config import MakerConfig, MergeAlgorithm
 app = typer.Typer(add_completion=False)
 
 
-def run_async(coro):  # type: ignore[no-untyped-def]
+def run_async(coro: Any) -> Any:
     return asyncio.run(coro)
 
 
@@ -87,6 +97,233 @@ def load_mnemonic(
     )
 
 
+def build_maker_config(
+    settings: JoinMarketSettings,
+    mnemonic: str,
+    passphrase: str,
+    # CLI overrides (None means use settings value)
+    network: NetworkType | None = None,
+    bitcoin_network: NetworkType | None = None,
+    data_dir: Path | None = None,
+    backend_type: str | None = None,
+    rpc_url: str | None = None,
+    rpc_user: str | None = None,
+    rpc_password: str | None = None,
+    neutrino_url: str | None = None,
+    directory_servers: str | None = None,
+    tor_socks_host: str | None = None,
+    tor_socks_port: int | None = None,
+    tor_control_host: str | None = None,
+    tor_control_port: int | None = None,
+    tor_cookie_path: Path | None = None,
+    disable_tor_control: bool = False,
+    onion_serving_host: str | None = None,
+    onion_serving_port: int | None = None,
+    tor_target_host: str | None = None,
+    min_size: int | None = None,
+    cj_fee_relative: str | None = None,
+    cj_fee_absolute: int | None = None,
+    tx_fee_contribution: int | None = None,
+    merge_algorithm: str | None = None,
+    fidelity_bond_locktimes: list[int] | None = None,
+    fidelity_bond_index: int | None = None,
+) -> MakerConfig:
+    """
+    Build MakerConfig from unified settings with CLI overrides.
+
+    CLI arguments (when not None) override settings from config file and env vars.
+    """
+    # Resolve network settings
+    effective_network = network if network is not None else settings.network_config.network
+    effective_bitcoin_network = (
+        bitcoin_network
+        if bitcoin_network is not None
+        else settings.network_config.bitcoin_network or effective_network
+    )
+    effective_data_dir = data_dir if data_dir is not None else settings.get_data_dir()
+
+    # Resolve backend settings
+    effective_backend_type = (
+        backend_type if backend_type is not None else settings.bitcoin.backend_type
+    )
+    effective_rpc_url = rpc_url if rpc_url is not None else settings.bitcoin.rpc_url
+    effective_rpc_user = rpc_user if rpc_user is not None else settings.bitcoin.rpc_user
+    effective_rpc_password = (
+        rpc_password
+        if rpc_password is not None
+        else settings.bitcoin.rpc_password.get_secret_value()
+    )
+    effective_neutrino_url = (
+        neutrino_url if neutrino_url is not None else settings.bitcoin.neutrino_url
+    )
+
+    # Build backend config
+    backend_config: dict[str, Any] = {}
+    if effective_backend_type in ("full_node", "descriptor_wallet"):
+        backend_config = {
+            "rpc_url": effective_rpc_url,
+            "rpc_user": effective_rpc_user,
+            "rpc_password": effective_rpc_password,
+        }
+    elif effective_backend_type == "neutrino":
+        backend_config = {
+            "neutrino_url": effective_neutrino_url,
+            "network": (
+                effective_bitcoin_network.value
+                if hasattr(effective_bitcoin_network, "value")
+                else str(effective_bitcoin_network)
+            ),
+        }
+
+    # Resolve directory servers
+    # If CLI provides directory servers, use those
+    # Otherwise, if network was overridden via CLI, use defaults for that network
+    # Otherwise, use settings (which may have custom servers or default for settings network)
+    if directory_servers:
+        dir_servers = [s.strip() for s in directory_servers.split(",")]
+    elif settings.network_config.directory_servers:
+        dir_servers = settings.network_config.directory_servers
+    elif network is not None:
+        # Network was overridden via CLI, get defaults for that network
+        from jmcore.settings import DEFAULT_DIRECTORY_SERVERS
+
+        dir_servers = DEFAULT_DIRECTORY_SERVERS.get(effective_network.value, [])
+    else:
+        dir_servers = settings.get_directory_servers()
+
+    # Resolve Tor settings
+    effective_socks_host = tor_socks_host if tor_socks_host is not None else settings.tor.socks_host
+    effective_socks_port = tor_socks_port if tor_socks_port is not None else settings.tor.socks_port
+
+    # Resolve Tor control settings
+    if disable_tor_control:
+        tor_control_cfg = TorControlConfig(enabled=False)
+    else:
+        effective_control_host = (
+            tor_control_host if tor_control_host is not None else settings.tor_control.host
+        )
+        effective_control_port = (
+            tor_control_port if tor_control_port is not None else settings.tor_control.port
+        )
+        effective_cookie_path = None
+        if tor_cookie_path is not None:
+            effective_cookie_path = tor_cookie_path
+        elif settings.tor_control.cookie_path:
+            effective_cookie_path = Path(settings.tor_control.cookie_path)
+
+        tor_control_cfg = TorControlConfig(
+            enabled=settings.tor_control.enabled,
+            host=effective_control_host,
+            port=effective_control_port,
+            cookie_path=effective_cookie_path,
+            password=(
+                settings.tor_control.password.get_secret_value()
+                if settings.tor_control.password
+                else None
+            ),
+        )
+
+    # Resolve maker-specific settings
+    effective_onion_host = (
+        onion_serving_host if onion_serving_host is not None else settings.maker.onion_serving_host
+    )
+    effective_onion_port = (
+        onion_serving_port if onion_serving_port is not None else settings.maker.onion_serving_port
+    )
+    effective_target_host = (
+        tor_target_host if tor_target_host is not None else settings.maker.tor_target_host
+    )
+    effective_min_size = min_size if min_size is not None else settings.maker.min_size
+    effective_tx_fee = (
+        tx_fee_contribution
+        if tx_fee_contribution is not None
+        else settings.maker.tx_fee_contribution
+    )
+
+    # Determine offer type and fee values
+    # CLI explicit values take precedence
+    if cj_fee_relative is not None and cj_fee_absolute is not None:
+        raise ValueError(
+            "Cannot specify both --cj-fee-relative and --cj-fee-absolute. "
+            "Use only one to set the fee model."
+        )
+
+    if cj_fee_absolute is not None:
+        # User explicitly set absolute fee via CLI
+        parsed_offer_type = OfferType.SW0_ABSOLUTE
+        actual_cj_fee_relative = settings.maker.cj_fee_relative
+        actual_cj_fee_absolute = cj_fee_absolute
+    elif cj_fee_relative is not None:
+        # User explicitly set relative fee via CLI
+        parsed_offer_type = OfferType.SW0_RELATIVE
+        actual_cj_fee_relative = cj_fee_relative
+        actual_cj_fee_absolute = settings.maker.cj_fee_absolute
+    else:
+        # Use settings values (from config file or defaults)
+        parsed_offer_type = OfferType.SW0_RELATIVE
+        actual_cj_fee_relative = settings.maker.cj_fee_relative
+        actual_cj_fee_absolute = settings.maker.cj_fee_absolute
+
+    # Parse merge algorithm
+    effective_merge_algorithm_str = (
+        merge_algorithm if merge_algorithm is not None else settings.maker.merge_algorithm
+    )
+    try:
+        parsed_merge_algorithm = MergeAlgorithm(effective_merge_algorithm_str.lower())
+    except ValueError:
+        raise ValueError(
+            f"Invalid merge algorithm: {effective_merge_algorithm_str}. "
+            "Must be one of: default, gradual, greedy, random"
+        )
+
+    # Fidelity bond settings
+    effective_locktimes = fidelity_bond_locktimes if fidelity_bond_locktimes else []
+    effective_bond_index = fidelity_bond_index
+
+    # Validate fidelity bond index requires locktimes
+    if effective_bond_index is not None and not effective_locktimes:
+        raise ValueError(
+            "When using --fidelity-bond-index, you must also specify at least one "
+            "--fidelity-bond-locktime"
+        )
+
+    return MakerConfig(
+        mnemonic=mnemonic,
+        passphrase=passphrase,
+        network=effective_network,
+        bitcoin_network=effective_bitcoin_network,
+        data_dir=effective_data_dir,
+        backend_type=effective_backend_type,
+        backend_config=backend_config,
+        directory_servers=dir_servers,
+        socks_host=effective_socks_host,
+        socks_port=effective_socks_port,
+        mixdepth_count=settings.wallet.mixdepth_count,
+        gap_limit=settings.wallet.gap_limit,
+        dust_threshold=settings.wallet.dust_threshold,
+        smart_scan=settings.wallet.smart_scan,
+        background_full_rescan=settings.wallet.background_full_rescan,
+        scan_lookback_blocks=settings.wallet.scan_lookback_blocks,
+        tor_control=tor_control_cfg,
+        onion_serving_host=effective_onion_host,
+        onion_serving_port=effective_onion_port,
+        tor_target_host=effective_target_host,
+        min_size=effective_min_size,
+        offer_type=parsed_offer_type,
+        cj_fee_relative=actual_cj_fee_relative,
+        cj_fee_absolute=actual_cj_fee_absolute,
+        tx_fee_contribution=effective_tx_fee,
+        min_confirmations=settings.maker.min_confirmations,
+        session_timeout_sec=settings.maker.session_timeout_sec,
+        rescan_interval_sec=settings.maker.rescan_interval_sec,
+        message_rate_limit=settings.maker.message_rate_limit,
+        message_burst_limit=settings.maker.message_burst_limit,
+        fidelity_bond_locktimes=list(effective_locktimes),
+        fidelity_bond_index=effective_bond_index,
+        merge_algorithm=parsed_merge_algorithm,
+    )
+
+
 def create_wallet_service(config: MakerConfig) -> WalletService:
     backend_type = config.backend_type.lower()
     # Use bitcoin_network for address generation (bcrt1 vs tb1 vs bc1)
@@ -144,6 +381,11 @@ def create_wallet_service(config: MakerConfig) -> WalletService:
     return wallet
 
 
+# Use a sentinel value for CLI defaults to distinguish "not provided" from explicit values
+# This allows us to know when to use settings vs CLI override
+_NOT_PROVIDED = object()
+
+
 @app.command()
 def start(
     mnemonic: Annotated[
@@ -169,13 +411,16 @@ def start(
             "--data-dir",
             "-d",
             envvar="JOINMARKET_DATA_DIR",
-            help=(
-                "Data directory for JoinMarket files (commitment blacklist, history). "
-                "Defaults to ~/.joinmarket-ng or $JOINMARKET_DATA_DIR if set."
-            ),
+            help="Data directory for JoinMarket files. Defaults to ~/.joinmarket-ng",
         ),
     ] = None,
-    network: Annotated[NetworkType, typer.Option(case_sensitive=False)] = NetworkType.MAINNET,
+    network: Annotated[
+        NetworkType | None,
+        typer.Option(
+            case_sensitive=False,
+            help="Protocol network (mainnet, testnet, signet, regtest)",
+        ),
+    ] = None,
     bitcoin_network: Annotated[
         NetworkType | None,
         typer.Option(
@@ -184,8 +429,9 @@ def start(
         ),
     ] = None,
     backend_type: Annotated[
-        str, typer.Option(help="Backend type: full_node | descriptor_wallet | neutrino")
-    ] = "descriptor_wallet",
+        str | None,
+        typer.Option(help="Backend type: full_node | descriptor_wallet | neutrino"),
+    ] = None,
     rpc_url: Annotated[
         str | None, typer.Option(envvar="BITCOIN_RPC_URL", help="Bitcoin full node RPC URL")
     ] = None,
@@ -199,14 +445,11 @@ def start(
     neutrino_url: Annotated[
         str | None, typer.Option(envvar="NEUTRINO_URL", help="Neutrino REST API URL")
     ] = None,
-    min_size: Annotated[int, typer.Option(help="Minimum CoinJoin size in sats")] = 100_000,
+    min_size: Annotated[int | None, typer.Option(help="Minimum CoinJoin size in sats")] = None,
     cj_fee_relative: Annotated[
         str | None,
         typer.Option(
-            help=(
-                "Relative coinjoin fee (e.g., 0.001 = 0.1%). "
-                "Mutually exclusive with --cj-fee-absolute."
-            ),
+            help="Relative coinjoin fee (e.g., 0.001 = 0.1%)",
             envvar="CJ_FEE_RELATIVE",
         ),
     ] = None,
@@ -217,68 +460,69 @@ def start(
             envvar="CJ_FEE_ABSOLUTE",
         ),
     ] = None,
-    tx_fee_contribution: Annotated[int, typer.Option(help="Tx fee contribution in sats")] = 0,
+    tx_fee_contribution: Annotated[
+        int | None, typer.Option(help="Tx fee contribution in sats")
+    ] = None,
     directory_servers: Annotated[
         str | None,
         typer.Option(
             "--directory",
             "-D",
             envvar="DIRECTORY_SERVERS",
-            help="Directory servers (comma-separated host:port). "
-            "Defaults to mainnet directory nodes.",
+            help="Directory servers (comma-separated host:port)",
         ),
     ] = None,
     tor_socks_host: Annotated[
-        str, typer.Option(envvar="TOR_SOCKS_HOST", help="Tor SOCKS proxy host")
-    ] = "127.0.0.1",
+        str | None, typer.Option(envvar="TOR_SOCKS_HOST", help="Tor SOCKS proxy host")
+    ] = None,
     tor_socks_port: Annotated[
-        int, typer.Option(envvar="TOR_SOCKS_PORT", help="Tor SOCKS proxy port")
-    ] = 9050,
+        int | None, typer.Option(envvar="TOR_SOCKS_PORT", help="Tor SOCKS proxy port")
+    ] = None,
     tor_control_host: Annotated[
         str | None,
         typer.Option(
             envvar="TOR_CONTROL_HOST",
-            help="Tor control port host (default: auto-detect from TOR_SOCKS_HOST)",
+            help="Tor control port host",
         ),
     ] = None,
     tor_control_port: Annotated[
-        int, typer.Option(envvar="TOR_CONTROL_PORT", help="Tor control port")
-    ] = 9051,
+        int | None, typer.Option(envvar="TOR_CONTROL_PORT", help="Tor control port")
+    ] = None,
     tor_cookie_path: Annotated[
         Path | None,
         typer.Option(
             envvar="TOR_COOKIE_PATH",
-            help="Path to Tor cookie auth file (e.g., /var/lib/tor/control_auth_cookie)",
+            help="Path to Tor cookie auth file",
         ),
     ] = None,
     disable_tor_control: Annotated[
         bool,
         typer.Option(
             "--disable-tor-control",
-            help="Disable Tor control port integration (maker won't create ephemeral onion)",
+            help="Disable Tor control port integration",
         ),
     ] = False,
     onion_serving_host: Annotated[
-        str,
+        str | None,
         typer.Option(
             envvar="ONION_SERVING_HOST",
-            help="Bind address for incoming connections (0.0.0.0 for Docker)",
+            help="Bind address for incoming connections",
         ),
-    ] = "127.0.0.1",
+    ] = None,
     onion_serving_port: Annotated[
-        int,
+        int | None,
         typer.Option(
             envvar="ONION_SERVING_PORT",
             help="Port for incoming .onion connections",
         ),
-    ] = 5222,
+    ] = None,
     tor_target_host: Annotated[
-        str,
+        str | None,
         typer.Option(
             envvar="TOR_TARGET_HOST",
-            help="Target hostname for Tor hidden service (use service name in Docker Compose)",
+            help="Target hostname for Tor hidden service",
         ),
-    ] = "127.0.0.1",
+    ] = None,
     fidelity_bond_locktimes: Annotated[
         list[int],
         typer.Option("--fidelity-bond-locktime", "-L", help="Fidelity bond locktimes to scan for"),
@@ -289,9 +533,7 @@ def start(
             "--fidelity-bond-index",
             "-I",
             envvar="FIDELITY_BOND_INDEX",
-            help="Fidelity bond derivation index "
-            "(bypasses registry, requires --fidelity-bond-locktime). "
-            "Useful for Docker/automated setups without a registry file.",
+            help="Fidelity bond derivation index",
         ),
     ] = None,
     fidelity_bond: Annotated[
@@ -299,21 +541,34 @@ def start(
         typer.Option(
             "--fidelity-bond",
             "-B",
-            help="Specific fidelity bond to use (format: txid:vout). "
-            "If not specified, the largest bond is selected automatically.",
+            help="Specific fidelity bond to use (format: txid:vout)",
         ),
     ] = None,
     merge_algorithm: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--merge-algorithm",
             "-M",
             envvar="MERGE_ALGORITHM",
             help="UTXO selection strategy: default, gradual, greedy, random",
         ),
-    ] = "default",
+    ] = None,
 ) -> None:
-    """Start the maker bot."""
+    """
+    Start the maker bot.
+
+    Configuration is loaded from ~/.joinmarket-ng/config.toml (or $JOINMARKET_DATA_DIR/config.toml),
+    environment variables, and CLI arguments. CLI arguments have the highest priority.
+    """
+    # Reset settings cache to ensure we pick up any env var changes
+    reset_settings()
+
+    # Load unified settings (from config file + env vars)
+    settings = get_settings()
+
+    # Ensure config file exists (creates template if not)
+    ensure_config_file(settings.get_data_dir())
+
     # Load mnemonic
     try:
         resolved_mnemonic = load_mnemonic(mnemonic, mnemonic_file, password)
@@ -321,129 +576,53 @@ def start(
         logger.error(str(e))
         raise typer.Exit(1)
 
-    # Use bitcoin_network for address generation, default to network if not specified
-    actual_bitcoin_network = bitcoin_network or network
-
-    # Auto-detect offer type based on which fee argument is provided
-    # Priority: explicit values > env vars > defaults
-    if cj_fee_relative is not None and cj_fee_absolute is not None:
-        logger.error(
-            "Cannot specify both --cj-fee-relative and --cj-fee-absolute. "
-            "Use only one to set the fee model."
-        )
-        raise typer.Exit(1)
-
-    # Determine offer type and fee values
-    if cj_fee_absolute is not None:
-        # User explicitly set absolute fee
-        parsed_offer_type = OfferType.SW0_ABSOLUTE
-        actual_cj_fee_relative = "0.001"  # Default for config, but won't be used
-        actual_cj_fee_absolute = cj_fee_absolute
-        logger.info(f"Using absolute fee: {cj_fee_absolute} sats")
-    elif cj_fee_relative is not None:
-        # User explicitly set relative fee
-        parsed_offer_type = OfferType.SW0_RELATIVE
-        actual_cj_fee_relative = cj_fee_relative
-        actual_cj_fee_absolute = 500  # Default for config, but won't be used
-        logger.info(f"Using relative fee: {cj_fee_relative}")
-    else:
-        # Neither specified - use relative as default
-        parsed_offer_type = OfferType.SW0_RELATIVE
-        actual_cj_fee_relative = "0.001"
-        actual_cj_fee_absolute = 500
-        logger.info("No fee specified, using default relative fee: 0.001 (0.1%)")
-
-    # Resolve directory servers: use provided list or default for network
-    if directory_servers:
-        dir_servers = [s.strip() for s in directory_servers.split(",")]
-    else:
-        dir_servers = get_default_directory_nodes(network)
-
-    # Parse and validate merge algorithm
+    # Build MakerConfig with CLI overrides
     try:
-        parsed_merge_algorithm = MergeAlgorithm(merge_algorithm.lower())
-    except ValueError:
-        logger.error(
-            f"Invalid merge algorithm: {merge_algorithm}. "
-            "Must be one of: default, gradual, greedy, random"
+        config = build_maker_config(
+            settings=settings,
+            mnemonic=resolved_mnemonic,
+            passphrase=bip39_passphrase or "",
+            network=network,
+            bitcoin_network=bitcoin_network,
+            data_dir=data_dir,
+            backend_type=backend_type,
+            rpc_url=rpc_url,
+            rpc_user=rpc_user,
+            rpc_password=rpc_password,
+            neutrino_url=neutrino_url,
+            directory_servers=directory_servers,
+            tor_socks_host=tor_socks_host,
+            tor_socks_port=tor_socks_port,
+            tor_control_host=tor_control_host,
+            tor_control_port=tor_control_port,
+            tor_cookie_path=tor_cookie_path,
+            disable_tor_control=disable_tor_control,
+            onion_serving_host=onion_serving_host,
+            onion_serving_port=onion_serving_port,
+            tor_target_host=tor_target_host,
+            min_size=min_size,
+            cj_fee_relative=cj_fee_relative,
+            cj_fee_absolute=cj_fee_absolute,
+            tx_fee_contribution=tx_fee_contribution,
+            merge_algorithm=merge_algorithm,
+            fidelity_bond_locktimes=fidelity_bond_locktimes if fidelity_bond_locktimes else None,
+            fidelity_bond_index=fidelity_bond_index,
         )
+    except ValueError as e:
+        logger.error(str(e))
         raise typer.Exit(1)
 
-    # Validate fidelity bond index requires locktimes
-    if fidelity_bond_index is not None and not fidelity_bond_locktimes:
-        logger.error(
-            "When using --fidelity-bond-index, you must also specify at least one "
-            "--fidelity-bond-locktime"
-        )
-        raise typer.Exit(1)
-
-    backend_config: dict[str, str] = {}
-    if backend_type in ("full_node", "descriptor_wallet"):
-        backend_config = {
-            "rpc_url": rpc_url or "http://127.0.0.1:8332",
-            "rpc_user": rpc_user or "",
-            "rpc_password": rpc_password or "",
-        }
-    elif backend_type == "neutrino":
-        backend_config = {
-            "neutrino_url": neutrino_url or "http://127.0.0.1:8334",
-            "network": actual_bitcoin_network.value,
-        }
-
-    # Configure Tor control port for ephemeral hidden service creation
-    # By default, enabled with auto-detection from environment
-    tor_control_cfg: TorControlConfig
-    if disable_tor_control:
-        # User explicitly disabled Tor control
-        tor_control_cfg = TorControlConfig(enabled=False)
-        logger.info("Tor control port integration disabled (will advertise NOT-SERVING-ONION)")
-    else:
-        # Auto-configure from environment with smart defaults
-        tor_control_cfg = create_tor_control_config_from_env()
-
-        # Override from CLI if provided
-        if tor_control_host:
-            object.__setattr__(tor_control_cfg, "host", tor_control_host)
-        if tor_cookie_path:
-            object.__setattr__(tor_control_cfg, "cookie_path", tor_cookie_path)
-
-        logger.info(
-            f"Tor control port integration enabled "
-            f"({tor_control_cfg.host}:{tor_control_cfg.port}, "
-            f"cookie_path={tor_control_cfg.cookie_path})"
-        )
-
-    config = MakerConfig(
-        mnemonic=resolved_mnemonic,
-        passphrase=bip39_passphrase or "",
-        network=network,
-        bitcoin_network=actual_bitcoin_network,
-        data_dir=data_dir,
-        backend_type=backend_type,
-        backend_config=backend_config,
-        directory_servers=dir_servers,
-        socks_host=tor_socks_host,
-        socks_port=tor_socks_port,
-        tor_control=tor_control_cfg,
-        onion_serving_host=onion_serving_host,
-        onion_serving_port=onion_serving_port,
-        tor_target_host=tor_target_host,
-        min_size=min_size,
-        offer_type=parsed_offer_type,
-        cj_fee_relative=actual_cj_fee_relative,
-        cj_fee_absolute=actual_cj_fee_absolute,
-        tx_fee_contribution=tx_fee_contribution,
-        fidelity_bond_locktimes=list(fidelity_bond_locktimes),
-        fidelity_bond_index=fidelity_bond_index,
-        merge_algorithm=parsed_merge_algorithm,
-    )
+    # Log configuration source
+    logger.info(f"Using network: {config.network.value}")
+    logger.info(f"Using backend: {config.backend_type}")
+    logger.info(f"Tor SOCKS: {config.socks_host}:{config.socks_port}")
+    logger.info(f"Directory servers: {len(config.directory_servers)} configured")
 
     wallet = create_wallet_service(config)
     bot = MakerBot(wallet, wallet.backend, config)
 
     # Store the specific fidelity bond selection if provided
     if fidelity_bond:
-        # Parse txid:vout format
         try:
             parts = fidelity_bond.split(":")
             if len(parts) != 2:
@@ -460,7 +639,7 @@ def start(
             notifier = get_notifier()
             await notifier.notify_startup(
                 component="Maker",
-                network=network.value,
+                network=config.network.value,
             )
             await bot.start()
             while True:
@@ -494,7 +673,10 @@ def generate_address(
             help="BIP39 passphrase (13th/25th word)",
         ),
     ] = None,
-    network: Annotated[NetworkType, typer.Option(case_sensitive=False)] = NetworkType.MAINNET,
+    network: Annotated[
+        NetworkType | None,
+        typer.Option(case_sensitive=False, help="Protocol network"),
+    ] = None,
     bitcoin_network: Annotated[
         NetworkType | None,
         typer.Option(
@@ -502,9 +684,15 @@ def generate_address(
             help="Bitcoin network for address generation (defaults to --network)",
         ),
     ] = None,
-    backend_type: Annotated[str, typer.Option()] = "descriptor_wallet",
+    backend_type: Annotated[str | None, typer.Option(help="Backend type")] = None,
 ) -> None:
     """Generate a new receive address."""
+    # Reset settings cache
+    reset_settings()
+
+    # Load unified settings
+    settings = get_settings()
+
     # Load mnemonic
     try:
         resolved_mnemonic = load_mnemonic(mnemonic, mnemonic_file, password)
@@ -512,17 +700,56 @@ def generate_address(
         logger.error(str(e))
         raise typer.Exit(1)
 
-    actual_bitcoin_network = bitcoin_network or network
-    config = MakerConfig(
-        mnemonic=resolved_mnemonic,
-        passphrase=bip39_passphrase or "",
-        network=network,
-        bitcoin_network=actual_bitcoin_network,
-        backend_type=backend_type,
-    )
+    # Build config with CLI overrides
+    try:
+        config = build_maker_config(
+            settings=settings,
+            mnemonic=resolved_mnemonic,
+            passphrase=bip39_passphrase or "",
+            network=network,
+            bitcoin_network=bitcoin_network,
+            backend_type=backend_type,
+        )
+    except ValueError as e:
+        logger.error(str(e))
+        raise typer.Exit(1)
+
     wallet = create_wallet_service(config)
     address = wallet.get_receive_address(0, 0)
     typer.echo(address)
+
+
+@app.command()
+def config_init(
+    data_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-dir",
+            "-d",
+            envvar="JOINMARKET_DATA_DIR",
+            help="Data directory for JoinMarket files",
+        ),
+    ] = None,
+) -> None:
+    """Initialize the config file with default settings."""
+    # Reset settings cache
+    reset_settings()
+
+    # Determine data directory
+    from jmcore.paths import get_default_data_dir
+
+    if data_dir is None:
+        data_dir = get_default_data_dir()
+
+    config_path = ensure_config_file(data_dir)
+    typer.echo(f"Config file created at: {config_path}")
+    typer.echo("\nAll settings are commented out by default.")
+    typer.echo("Edit the file to customize your configuration.")
+    typer.echo("\nPriority (highest to lowest):")
+    typer.echo("  1. CLI arguments")
+    typer.echo("  2. Environment variables")
+    typer.echo("  3. Config file")
+    typer.echo("  4. Built-in defaults")
 
 
 def main() -> None:  # pragma: no cover
