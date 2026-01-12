@@ -128,7 +128,7 @@ def format_maker_summary(makers: list[dict[str, Any]]) -> dict[str, Any]:
     Format maker information for confirmation display.
 
     Args:
-        makers: List of selected maker dicts with 'nick', 'fee', 'bond_value', etc.
+        makers: List of selected maker dicts with 'nick', 'fee', 'bond_value', 'location', etc.
 
     Returns:
         Dict with formatted maker info
@@ -140,8 +140,24 @@ def format_maker_summary(makers: list[dict[str, Any]]) -> dict[str, Any]:
         nick = m.get("nick", "unknown")
         fee = m.get("fee", 0)
         bond_value = m.get("bond_value", 0)
+        location = m.get("location")
+
         bond_str = f" [bond: {bond_value:,}]" if bond_value > 0 else " [no bond]"
-        maker_details.append(f"{nick}: {fee:,} sats{bond_str}")
+
+        # Add location info if available
+        if location and location != "NOT-SERVING-ONION":
+            # Truncate onion address for readability (show first 16 chars)
+            if ":" in location:
+                onion, port = location.rsplit(":", 1)
+                if onion.endswith(".onion") and len(onion) > 20:
+                    location_str = f" @ {onion[:16]}...:{port}"
+                else:
+                    location_str = f" @ {location}"
+            else:
+                location_str = f" @ {location[:20]}..."
+            maker_details.append(f"{nick}: {fee:,} sats{bond_str}{location_str}")
+        else:
+            maker_details.append(f"{nick}: {fee:,} sats{bond_str}")
 
     return {
         "Counterparties": len(makers),

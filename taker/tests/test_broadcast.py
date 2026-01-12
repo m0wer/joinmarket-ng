@@ -212,7 +212,9 @@ class TestTakerBroadcast:
         await taker._broadcast_via_maker("J5maker123", tx_b64)
 
         # Verify push was sent (without ! prefix - the prefix is only for message routing)
-        taker.directory_client.send_privmsg.assert_called_once_with("J5maker123", "push", tx_b64)
+        taker.directory_client.send_privmsg.assert_called_once_with(
+            "J5maker123", "push", tx_b64, log_routing=True
+        )
 
     @pytest.mark.asyncio
     async def test_broadcast_via_maker_detects_success(self, taker) -> None:
@@ -609,7 +611,7 @@ class TestNeutrinoBroadcast:
         # Simulate first maker failing, others succeed
         call_count = [0]
 
-        async def flaky_send(*args):
+        async def flaky_send(*args, **kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
                 raise Exception("Network error")

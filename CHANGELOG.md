@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - If a maker has an offer in the directory, they are considered online.
   - Peerlist responses may be delayed or unavailable over Tor, so offers are no longer filtered based on peerlist presence.
   - This prevents incorrectly rejecting valid offers from active makers.
+- **Enhanced CoinJoin routing visibility**: Taker now logs detailed message routing information during CoinJoin.
+  - Shows which directory servers are used to relay messages to makers.
+  - Displays maker onion addresses in the transaction confirmation prompt.
+  - Debug logs show routing details for !fill, !auth, !tx, and !push messages.
+  - Note: All taker messages are currently relayed via directory servers (no direct connections).
 
 ## Fixed
 
