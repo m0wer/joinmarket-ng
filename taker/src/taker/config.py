@@ -136,6 +136,12 @@ class TakerConfig(WalletConfig):
         default=OfferType.SW0_RELATIVE, description="Preferred offer type"
     )
     minimum_makers: int = Field(default=2, ge=1, description="Minimum number of makers required")
+    max_maker_replacement_attempts: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Max attempts to replace non-responsive makers (0 = disabled)",
+    )
 
     # Wallet rescan configuration
     rescan_interval_sec: int = Field(

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Maker Replacement on Non-Response**: Taker now automatically replaces non-responsive makers during CoinJoin.
+  - New config option: `max_maker_replacement_attempts` (default: 3, range: 0-10)
+  - If makers fail to respond during fill or auth phases, taker selects replacements from orderbook
+  - Failed makers are added to an ignored list to prevent re-selection
+  - Replacement makers go through the full handshake (fill + auth phases)
+  - Setting to 0 disables replacement (original behavior: fail immediately)
+  - Improves CoinJoin success rate when some makers are unresponsive or drop out
+
 - **Simplified Installation**: New one-line installation with automatic updates.
   - Install: `curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash`
   - Update: `curl -sSL ... | bash -s -- --update`

@@ -485,6 +485,58 @@ For private messages, the format includes routing information:
 - `command`: Command with `!` prefix
 - `arguments`: Fields separated by **single whitespace** (more than one space not allowed)
 
+### Message Routing: Directory Relay vs Direct Connections
+
+JoinMarket supports two routing modes for private messages:
+
+#### Directory Relay (Current Implementation)
+
+All private messages (`PRIVMSG`) are routed through directory servers:
+
+1. Taker sends `PRIVMSG` to directory: `{taker_nick}!{maker_nick}!fill ...`
+2. Directory forwards to maker (if connected to same directory)
+3. Maker responds via `PRIVMSG` through directory
+
+**Advantages**:
+- Simple, reliable routing
+- Works even if peers cannot directly reach each other
+- No NAT traversal needed
+- Compatible with all network setups
+
+**Tradeoffs**:
+- Directory knows all message recipients (but not encrypted contents)
+- Slightly higher latency
+- Messages duplicated to all directories (taker doesn't know which directory serves each maker)
+
+#### Direct Peer Connections (Reference Implementation)
+
+The reference implementation opportunistically establishes direct Tor connections:
+
+1. Directory sends `!peerlist` with maker onion addresses
+2. When taker wants to message a maker:
+   - Check if direct connection exists
+   - If not, **try to connect directly** to maker's onion address (async)
+   - Fall back to directory relay if direct connection unavailable
+3. Once connected, future messages sent directly peer-to-peer
+
+**Advantages**:
+- Lower latency for subsequent messages
+- Directory doesn't see individual message recipients (only that peers are connected)
+- Reduces directory load
+
+**Tradeoffs**:
+- More complex connection management
+- Requires handling connection failures gracefully
+- Tor circuit establishment adds initial latency
+- May fail if maker's onion service is unreachable
+
+**Implementation Status**:
+- Reference implementation: Uses direct connections opportunistically (lines 801-830 in `onionmc.py`)
+- Our implementation: Currently uses directory relay only
+- Future enhancement: Add direct peer connections as an optimization
+
+**Note**: In both modes, encrypted message contents (`!auth`, `!ioauth`, `!tx`, `!sig`) are end-to-end encrypted with NaCl, so directories and network observers cannot read them.
+
 #### Multi-part Messages
 
 - Unencrypted messages may contain multiple commands
@@ -899,7 +951,49 @@ After collecting offers, the taker selects makers through three phases:
 
 Implementation: `taker/src/taker/orderbook.py` (`filter_offers`, `dedupe_offers_by_maker`, `choose_orders`)
 
+### Maker Replacement on Non-Response
+
+When makers fail to respond during a CoinJoin, the taker can automatically select replacement makers from the orderbook instead of aborting the entire CoinJoin.
+
+**Configuration**: `max_maker_replacement_attempts` (default: 3, range: 0-10)
+- Set to 0 to disable (original behavior: abort on first failure)
+- Set to 1-10 to enable automatic replacement
+
+**Behavior**:
+1. **Fill Phase Failure**: If makers don't respond to `!fill` with `!pubkey`:
+   - Failed makers added to ignored list (excluded from future selection)
+   - Taker selects replacement makers from orderbook
+   - Sends `!fill` to replacement makers
+   - Continues once enough makers have responded
+
+2. **Auth Phase Failure**: If makers don't respond to `!auth` with `!ioauth`:
+   - Failed makers added to ignored list
+   - Taker selects replacement makers from orderbook
+   - New makers go through fill phase (`!fill` → `!pubkey`)
+   - Then all makers (original + replacements) continue to auth phase
+   - Continues once enough makers have sent UTXOs
+
+**Limits**:
+- Maximum `max_maker_replacement_attempts` retries per phase
+- Replacement makers must pass same filters as original selection (fee limits, amount range, etc.)
+- If not enough replacement makers available, CoinJoin aborts
+- Failed makers remain ignored for the entire CoinJoin session
+
+**Example**: With `minimum_makers=2` and `max_maker_replacement_attempts=3`:
+- Select 3 makers: A, B, C
+- Fill phase: A and B respond, C times out
+- Replacement attempt 1: Select D from orderbook, D responds
+- Auth phase: A responds, B and D timeout
+- Replacement attempt 1: Select E and F from orderbook
+- Fill phase (for E, F): Both respond
+- Auth phase (for A, E, F): A and E respond, F times out
+- Replacement attempt 2: Select G from orderbook
+- Eventually succeed with A, E, G
+
+Implementation: `taker/src/taker/taker.py` (`PhaseResult`, `do_coinjoin`)
+
 ### Phase 2: Fill Request
+
 
 Taker sends `!fill <oid> <amount> <taker_nacl_pk> <commitment>`. Maker responds with `!pubkey <maker_nacl_pk> <signing_pk> <sig>`.
 
