@@ -7,12 +7,17 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal
 
 import typer
+from jmcore.cli_common import (
+    ResolvedBackendSettings,
+    resolve_backend_settings,
+    setup_cli,
+    setup_logging,
+)
 from loguru import logger
 
 if TYPE_CHECKING:
@@ -24,16 +29,6 @@ app = typer.Typer(
     help="JoinMarket Wallet Management",
     add_completion=False,
 )
-
-
-def setup_logging(level: str = "INFO") -> None:
-    """Configure loguru logging."""
-    logger.remove()
-    logger.add(
-        sys.stderr,
-        level=level.upper(),
-        format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}",
-    )
 
 
 # ============================================================================
@@ -475,16 +470,7 @@ def info(
     log_level: Annotated[str, typer.Option("--log-level", "-l")] = "INFO",
 ) -> None:
     """Display wallet information and balances by mixdepth."""
-    setup_logging(log_level)
-
-    # Load settings from config file
-    try:
-        from jmcore.settings import get_settings
-
-        settings = get_settings()
-    except Exception as e:
-        logger.warning(f"Failed to load settings from config file: {e}")
-        settings = None
+    settings = setup_cli(log_level)
 
     try:
         resolved_mnemonic = _resolve_mnemonic(mnemonic, mnemonic_file, password, True)
@@ -495,93 +481,51 @@ def info(
     # Resolve BIP39 passphrase
     resolved_bip39_passphrase = _resolve_bip39_passphrase(bip39_passphrase, prompt_bip39_passphrase)
 
-    # Resolve settings with CLI overrides taking priority
-    if network is not None:
-        resolved_network = network
-    else:
-        resolved_network = settings.network_config.network.value if settings else "mainnet"
-
-    if backend_type is not None:
-        resolved_backend_type = backend_type
-    else:
-        resolved_backend_type = settings.bitcoin.backend_type if settings else "descriptor_wallet"
-
-    if rpc_url is not None:
-        resolved_rpc_url = rpc_url
-    else:
-        resolved_rpc_url = settings.bitcoin.rpc_url if settings else "http://127.0.0.1:8332"
-
-    if rpc_user is not None:
-        resolved_rpc_user = rpc_user
-    else:
-        resolved_rpc_user = settings.bitcoin.rpc_user if settings else ""
-
-    # Handle SecretStr for password
-    if rpc_password is not None:
-        resolved_rpc_password = rpc_password
-    elif settings and settings.bitcoin.rpc_password:
-        from pydantic import SecretStr
-
-        rpc_pwd = settings.bitcoin.rpc_password
-        resolved_rpc_password = (
-            rpc_pwd.get_secret_value() if isinstance(rpc_pwd, SecretStr) else rpc_pwd
-        )
-    else:
-        resolved_rpc_password = ""
-
-    if neutrino_url is not None:
-        resolved_neutrino_url = neutrino_url
-    else:
-        resolved_neutrino_url = (
-            settings.bitcoin.neutrino_url if settings else "http://127.0.0.1:8334"
-        )
+    # Resolve backend settings with CLI overrides taking priority
+    backend = resolve_backend_settings(
+        settings,
+        network=network,
+        backend_type=backend_type,
+        rpc_url=rpc_url,
+        rpc_user=rpc_user,
+        rpc_password=rpc_password,
+        neutrino_url=neutrino_url,
+        data_dir=data_dir,
+    )
 
     asyncio.run(
         _show_wallet_info(
             resolved_mnemonic,
-            resolved_network,
-            resolved_backend_type,
-            resolved_rpc_url,
-            resolved_rpc_user,
-            resolved_rpc_password,
-            resolved_neutrino_url,
+            backend,
             resolved_bip39_passphrase,
             extended=extended,
             gap_limit=gap,
-            data_dir=data_dir,
         )
     )
 
 
 async def _show_wallet_info(
     mnemonic: str,
-    network: str,
-    backend_type: str,
-    rpc_url: str,
-    rpc_user: str,
-    rpc_password: str,
-    neutrino_url: str,
+    backend_settings: ResolvedBackendSettings,
     bip39_passphrase: str = "",
     extended: bool = False,
     gap_limit: int = 6,
-    data_dir: Path | None = None,
 ) -> None:
     """Show wallet info implementation."""
-    from jmcore.paths import get_default_data_dir
-
     from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
     from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
     from jmwallet.backends.neutrino import NeutrinoBackend
     from jmwallet.history import get_address_history_types, get_used_addresses
     from jmwallet.wallet.service import WalletService
 
-    # Resolve data directory
-    resolved_data_dir = data_dir if data_dir else get_default_data_dir()
+    network = backend_settings.network
+    backend_type = backend_settings.backend_type
+    data_dir = backend_settings.data_dir
 
     # Load fidelity bond addresses from registry
     from jmwallet.wallet.bond_registry import load_registry
 
-    bond_registry = load_registry(resolved_data_dir)
+    bond_registry = load_registry(data_dir)
     fidelity_bond_addresses: list[tuple[str, int, int]] = [
         (bond.address, bond.locktime, bond.index) for bond in bond_registry.bonds
     ]
@@ -591,7 +535,7 @@ async def _show_wallet_info(
     # Create backend
     backend: BitcoinCoreBackend | DescriptorWalletBackend | NeutrinoBackend
     if backend_type == "neutrino":
-        backend = NeutrinoBackend(neutrino_url=neutrino_url, network=network)
+        backend = NeutrinoBackend(neutrino_url=backend_settings.neutrino_url, network=network)
         logger.info("Waiting for neutrino to sync...")
         synced = await backend.wait_for_sync(timeout=300.0)
         if not synced:
@@ -606,13 +550,17 @@ async def _show_wallet_info(
         fingerprint = get_mnemonic_fingerprint(mnemonic, bip39_passphrase or "")
         wallet_name = generate_wallet_name(fingerprint, network)
         backend = DescriptorWalletBackend(
-            rpc_url=rpc_url,
-            rpc_user=rpc_user,
-            rpc_password=rpc_password,
+            rpc_url=backend_settings.rpc_url,
+            rpc_user=backend_settings.rpc_user,
+            rpc_password=backend_settings.rpc_password,
             wallet_name=wallet_name,
         )
     elif backend_type == "full_node":
-        backend = BitcoinCoreBackend(rpc_url=rpc_url, rpc_user=rpc_user, rpc_password=rpc_password)
+        backend = BitcoinCoreBackend(
+            rpc_url=backend_settings.rpc_url,
+            rpc_user=backend_settings.rpc_user,
+            rpc_password=backend_settings.rpc_password,
+        )
     else:
         raise ValueError(f"Unknown backend type: {backend_type}")
 
@@ -623,7 +571,7 @@ async def _show_wallet_info(
         network=network,
         mixdepth_count=5,
         passphrase=bip39_passphrase,
-        data_dir=resolved_data_dir,
+        data_dir=data_dir,
     )
 
     try:
@@ -673,7 +621,7 @@ async def _show_wallet_info(
         # Show pending transactions if any
         from jmwallet.history import get_pending_transactions
 
-        pending = get_pending_transactions(resolved_data_dir)
+        pending = get_pending_transactions(data_dir)
         if pending:
             print(f"\nPending Transactions: {len(pending)}")
             for entry in pending:
@@ -683,8 +631,8 @@ async def _show_wallet_info(
                     print(f"  [Broadcasting...] - {entry.role}")
 
         # Get history info for address status
-        used_addresses = get_used_addresses(resolved_data_dir)
-        history_addresses = get_address_history_types(resolved_data_dir)
+        used_addresses = get_used_addresses(data_dir)
+        history_addresses = get_address_history_types(data_dir)
 
         if extended:
             # Extended view with detailed address information
@@ -845,22 +793,23 @@ def list_bonds(
     prompt_bip39_passphrase: Annotated[
         bool, typer.Option("--prompt-bip39-passphrase", help="Prompt for BIP39 passphrase")
     ] = False,
-    network: Annotated[str, typer.Option("--network", "-n")] = "mainnet",
-    backend_type: Annotated[str, typer.Option("--backend", "-b")] = "descriptor_wallet",
-    rpc_url: Annotated[
-        str, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")
-    ] = "http://127.0.0.1:8332",
-    rpc_user: Annotated[str, typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER")] = "",
+    network: Annotated[str | None, typer.Option("--network", "-n", help="Bitcoin network")] = None,
+    backend_type: Annotated[
+        str | None,
+        typer.Option("--backend", "-b", help="Backend: full_node | descriptor_wallet | neutrino"),
+    ] = None,
+    rpc_url: Annotated[str | None, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")] = None,
+    rpc_user: Annotated[str | None, typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER")] = None,
     rpc_password: Annotated[
-        str, typer.Option("--rpc-password", envvar="BITCOIN_RPC_PASSWORD")
-    ] = "",
+        str | None, typer.Option("--rpc-password", envvar="BITCOIN_RPC_PASSWORD")
+    ] = None,
     locktimes: Annotated[
         list[int] | None, typer.Option("--locktime", "-L", help="Locktime(s) to scan for")
     ] = None,
     log_level: Annotated[str, typer.Option("--log-level", "-l")] = "INFO",
 ) -> None:
     """List all fidelity bonds in the wallet."""
-    setup_logging(log_level)
+    settings = setup_cli(log_level)
 
     try:
         resolved_mnemonic = _resolve_mnemonic(mnemonic, mnemonic_file, password, True)
@@ -871,14 +820,20 @@ def list_bonds(
     # Resolve BIP39 passphrase
     resolved_bip39_passphrase = _resolve_bip39_passphrase(bip39_passphrase, prompt_bip39_passphrase)
 
+    # Resolve backend settings with CLI overrides taking priority
+    backend = resolve_backend_settings(
+        settings,
+        network=network,
+        backend_type=backend_type,
+        rpc_url=rpc_url,
+        rpc_user=rpc_user,
+        rpc_password=rpc_password,
+    )
+
     asyncio.run(
         _list_fidelity_bonds(
             resolved_mnemonic,
-            network,
-            backend_type,
-            rpc_url,
-            rpc_user,
-            rpc_password,
+            backend,
             locktimes or [],
             resolved_bip39_passphrase,
         )
@@ -887,17 +842,11 @@ def list_bonds(
 
 async def _list_fidelity_bonds(
     mnemonic: str,
-    network: str,
-    backend_type: str,
-    rpc_url: str,
-    rpc_user: str,
-    rpc_password: str,
+    backend_settings: ResolvedBackendSettings,
     locktimes: list[int],
     bip39_passphrase: str = "",
 ) -> None:
     """List fidelity bonds implementation."""
-    from jmcore.paths import get_default_data_dir
-
     from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
     from jmwallet.wallet.bond_registry import load_registry
     from jmwallet.wallet.service import WalletService
@@ -909,7 +858,14 @@ async def _list_fidelity_bonds(
         logger.error("Failed to import fidelity bond utilities")
         raise typer.Exit(1)
 
-    backend = BitcoinCoreBackend(rpc_url=rpc_url, rpc_user=rpc_user, rpc_password=rpc_password)
+    network = backend_settings.network
+    data_dir = backend_settings.data_dir
+
+    backend = BitcoinCoreBackend(
+        rpc_url=backend_settings.rpc_url,
+        rpc_user=backend_settings.rpc_user,
+        rpc_password=backend_settings.rpc_password,
+    )
 
     # Use large gap limit (1000) for discovery mode when scanning with --locktime
     gap_limit = 1000 if locktimes else 20
@@ -924,7 +880,6 @@ async def _list_fidelity_bonds(
 
     try:
         # Load known bonds from registry for optimized scanning
-        data_dir = get_default_data_dir()
         bond_registry = load_registry(data_dir)
         fidelity_bond_addresses: list[tuple[str, int, int]] = []
         if bond_registry.bonds:
@@ -1179,21 +1134,19 @@ def send(
             help="Target blocks for fee estimation (1-1008). Defaults to 3.",
         ),
     ] = None,
-    network: Annotated[str, typer.Option("--network", "-n")] = "mainnet",
+    network: Annotated[str | None, typer.Option("--network", "-n", help="Bitcoin network")] = None,
     backend_type: Annotated[
-        str,
+        str | None,
         typer.Option("--backend", "-b", help="Backend: full_node | descriptor_wallet | neutrino"),
-    ] = "descriptor_wallet",
-    rpc_url: Annotated[
-        str, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")
-    ] = "http://127.0.0.1:8332",
-    rpc_user: Annotated[str, typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER")] = "",
+    ] = None,
+    rpc_url: Annotated[str | None, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")] = None,
+    rpc_user: Annotated[str | None, typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER")] = None,
     rpc_password: Annotated[
-        str, typer.Option("--rpc-password", envvar="BITCOIN_RPC_PASSWORD")
-    ] = "",
+        str | None, typer.Option("--rpc-password", envvar="BITCOIN_RPC_PASSWORD")
+    ] = None,
     neutrino_url: Annotated[
-        str, typer.Option("--neutrino-url", envvar="NEUTRINO_URL")
-    ] = "http://127.0.0.1:8334",
+        str | None, typer.Option("--neutrino-url", envvar="NEUTRINO_URL")
+    ] = None,
     broadcast: Annotated[
         bool, typer.Option("--broadcast", help="Broadcast the transaction")
     ] = True,
@@ -1216,7 +1169,7 @@ def send(
     log_level: Annotated[str, typer.Option("--log-level", "-l")] = "INFO",
 ) -> None:
     """Send a simple transaction from wallet to an address."""
-    setup_logging(log_level)
+    settings = setup_cli(log_level)
 
     # Validate mutual exclusivity
     if fee_rate is not None and block_target is not None:
@@ -1232,9 +1185,17 @@ def send(
     # Resolve BIP39 passphrase
     resolved_bip39_passphrase = _resolve_bip39_passphrase(bip39_passphrase, prompt_bip39_passphrase)
 
-    from jmcore.paths import get_default_data_dir
-
-    resolved_data_dir = data_dir if data_dir else get_default_data_dir()
+    # Resolve backend settings
+    backend_settings = resolve_backend_settings(
+        settings,
+        network=network,
+        backend_type=backend_type,
+        rpc_url=rpc_url,
+        rpc_user=rpc_user,
+        rpc_password=rpc_password,
+        neutrino_url=neutrino_url,
+        data_dir=data_dir,
+    )
 
     asyncio.run(
         _send_transaction(
@@ -1244,17 +1205,11 @@ def send(
             mixdepth,
             fee_rate,
             block_target,
-            network,
-            backend_type,
-            rpc_url,
-            rpc_user,
-            rpc_password,
-            neutrino_url,
+            backend_settings,
             broadcast,
             yes,
             select_utxos,
             resolved_bip39_passphrase,
-            resolved_data_dir,
         )
     )
 
@@ -1266,22 +1221,14 @@ async def _send_transaction(
     mixdepth: int,
     fee_rate: float | None,
     block_target: int | None,
-    network: str,
-    backend_type: str,
-    rpc_url: str,
-    rpc_user: str,
-    rpc_password: str,
-    neutrino_url: str,
+    backend_settings: ResolvedBackendSettings,
     broadcast: bool,
     skip_confirmation: bool,
     interactive_utxo_selection: bool,
     bip39_passphrase: str = "",
-    data_dir: Path | None = None,
 ) -> None:
     """Send transaction implementation."""
     import math
-
-    from jmcore.paths import get_default_data_dir
 
     from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
     from jmwallet.backends.descriptor_wallet import (
@@ -1301,34 +1248,38 @@ async def _send_transaction(
         sign_p2wsh_input,
     )
 
-    resolved_data_dir = data_dir if data_dir else get_default_data_dir()
-
     # Load fidelity bond addresses from registry
-    bond_registry = load_registry(resolved_data_dir)
+    bond_registry = load_registry(backend_settings.data_dir)
     fidelity_bond_addresses: list[tuple[str, int, int]] = [
         (bond.address, bond.locktime, bond.index) for bond in bond_registry.bonds
     ]
 
     # Create backend based on type
     backend: BitcoinCoreBackend | DescriptorWalletBackend | NeutrinoBackend
-    if backend_type == "neutrino":
-        backend = NeutrinoBackend(neutrino_url=neutrino_url, network=network)
+    if backend_settings.backend_type == "neutrino":
+        backend = NeutrinoBackend(
+            neutrino_url=backend_settings.neutrino_url, network=backend_settings.network
+        )
         logger.info("Waiting for neutrino to sync...")
         synced = await backend.wait_for_sync(timeout=300.0)
         if not synced:
             logger.error("Neutrino sync timeout")
             return
-    elif backend_type == "descriptor_wallet":
+    elif backend_settings.backend_type == "descriptor_wallet":
         fingerprint = get_mnemonic_fingerprint(mnemonic, bip39_passphrase)
-        wallet_name = generate_wallet_name(fingerprint, network)
+        wallet_name = generate_wallet_name(fingerprint, backend_settings.network)
         backend = DescriptorWalletBackend(
-            rpc_url=rpc_url,
-            rpc_user=rpc_user,
-            rpc_password=rpc_password,
+            rpc_url=backend_settings.rpc_url,
+            rpc_user=backend_settings.rpc_user,
+            rpc_password=backend_settings.rpc_password,
             wallet_name=wallet_name,
         )
     else:
-        backend = BitcoinCoreBackend(rpc_url=rpc_url, rpc_user=rpc_user, rpc_password=rpc_password)
+        backend = BitcoinCoreBackend(
+            rpc_url=backend_settings.rpc_url,
+            rpc_user=backend_settings.rpc_user,
+            rpc_password=backend_settings.rpc_password,
+        )
 
     # Resolve fee rate
     if fee_rate is not None:
@@ -1343,15 +1294,17 @@ async def _send_transaction(
     wallet = WalletService(
         mnemonic=mnemonic,
         backend=backend,
-        network=network,
+        network=backend_settings.network,
         mixdepth_count=5,
         passphrase=bip39_passphrase,
-        data_dir=resolved_data_dir,
+        data_dir=backend_settings.data_dir,
     )
 
     try:
         # Use descriptor wallet sync if available
-        if backend_type == "descriptor_wallet" and isinstance(backend, DescriptorWalletBackend):
+        if backend_settings.backend_type == "descriptor_wallet" and isinstance(
+            backend, DescriptorWalletBackend
+        ):
             bond_count = len(fidelity_bond_addresses)
             base_wallet_ready = await wallet.is_descriptor_wallet_ready(fidelity_bond_count=0)
             full_wallet_ready = await wallet.is_descriptor_wallet_ready(
@@ -1979,21 +1932,19 @@ def recover_bonds(
     prompt_bip39_passphrase: Annotated[
         bool, typer.Option("--prompt-bip39-passphrase", help="Prompt for BIP39 passphrase")
     ] = False,
-    network: Annotated[str, typer.Option("--network", "-n")] = "mainnet",
+    network: Annotated[str | None, typer.Option("--network", "-n", help="Bitcoin network")] = None,
     backend_type: Annotated[
-        str,
+        str | None,
         typer.Option("--backend", "-b", help="Backend: full_node | descriptor_wallet | neutrino"),
-    ] = "descriptor_wallet",
-    rpc_url: Annotated[
-        str, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")
-    ] = "http://127.0.0.1:8332",
-    rpc_user: Annotated[str, typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER")] = "",
+    ] = None,
+    rpc_url: Annotated[str | None, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")] = None,
+    rpc_user: Annotated[str | None, typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER")] = None,
     rpc_password: Annotated[
-        str, typer.Option("--rpc-password", envvar="BITCOIN_RPC_PASSWORD")
-    ] = "",
+        str | None, typer.Option("--rpc-password", envvar="BITCOIN_RPC_PASSWORD")
+    ] = None,
     neutrino_url: Annotated[
-        str, typer.Option("--neutrino-url", envvar="NEUTRINO_URL")
-    ] = "http://127.0.0.1:8334",
+        str | None, typer.Option("--neutrino-url", envvar="NEUTRINO_URL")
+    ] = None,
     max_index: Annotated[
         int,
         typer.Option(
@@ -2020,7 +1971,7 @@ def recover_bonds(
     The scan checks address index 0 by default (most wallets only use index 0).
     Use --max-index to scan more addresses per locktime if needed.
     """
-    setup_logging(log_level)
+    settings = setup_cli(log_level)
 
     try:
         resolved_mnemonic = _resolve_mnemonic(mnemonic, mnemonic_file, password, True)
@@ -2031,21 +1982,23 @@ def recover_bonds(
     # Resolve BIP39 passphrase
     resolved_bip39_passphrase = _resolve_bip39_passphrase(bip39_passphrase, prompt_bip39_passphrase)
 
-    from jmcore.paths import get_default_data_dir
-
-    resolved_data_dir = data_dir if data_dir else get_default_data_dir()
+    # Resolve backend settings
+    backend_settings = resolve_backend_settings(
+        settings,
+        network=network,
+        backend_type=backend_type,
+        rpc_url=rpc_url,
+        rpc_user=rpc_user,
+        rpc_password=rpc_password,
+        neutrino_url=neutrino_url,
+        data_dir=data_dir,
+    )
 
     asyncio.run(
         _recover_bonds_async(
             resolved_mnemonic,
-            network,
-            backend_type,
-            rpc_url,
-            rpc_user,
-            rpc_password,
-            neutrino_url,
+            backend_settings,
             max_index,
-            resolved_data_dir,
             resolved_bip39_passphrase,
         )
     )
@@ -2053,14 +2006,8 @@ def recover_bonds(
 
 async def _recover_bonds_async(
     mnemonic: str,
-    network: str,
-    backend_type: str,
-    rpc_url: str,
-    rpc_user: str,
-    rpc_password: str,
-    neutrino_url: str,
+    backend_settings: ResolvedBackendSettings,
     max_index: int,
-    data_dir: Path,
     bip39_passphrase: str = "",
 ) -> None:
     """Async implementation of fidelity bond recovery."""
@@ -2082,32 +2029,38 @@ async def _recover_bonds_async(
 
     # Create backend based on type
     backend: BitcoinCoreBackend | DescriptorWalletBackend | NeutrinoBackend
-    if backend_type == "neutrino":
-        backend = NeutrinoBackend(neutrino_url=neutrino_url, network=network)
+    if backend_settings.backend_type == "neutrino":
+        backend = NeutrinoBackend(
+            neutrino_url=backend_settings.neutrino_url, network=backend_settings.network
+        )
         logger.info("Waiting for neutrino to sync...")
         synced = await backend.wait_for_sync(timeout=300.0)
         if not synced:
             logger.error("Neutrino sync timeout")
             return
-    elif backend_type == "descriptor_wallet":
+    elif backend_settings.backend_type == "descriptor_wallet":
         fingerprint = get_mnemonic_fingerprint(mnemonic, bip39_passphrase)
-        wallet_name = generate_wallet_name(fingerprint, network)
+        wallet_name = generate_wallet_name(fingerprint, backend_settings.network)
         backend = DescriptorWalletBackend(
-            rpc_url=rpc_url,
-            rpc_user=rpc_user,
-            rpc_password=rpc_password,
+            rpc_url=backend_settings.rpc_url,
+            rpc_user=backend_settings.rpc_user,
+            rpc_password=backend_settings.rpc_password,
             wallet_name=wallet_name,
         )
     else:
-        backend = BitcoinCoreBackend(rpc_url=rpc_url, rpc_user=rpc_user, rpc_password=rpc_password)
+        backend = BitcoinCoreBackend(
+            rpc_url=backend_settings.rpc_url,
+            rpc_user=backend_settings.rpc_user,
+            rpc_password=backend_settings.rpc_password,
+        )
 
     wallet = WalletService(
         mnemonic=mnemonic,
         backend=backend,
-        network=network,
+        network=backend_settings.network,
         mixdepth_count=5,
         passphrase=bip39_passphrase,
-        data_dir=data_dir,
+        data_dir=backend_settings.data_dir,
     )
 
     print("\nScanning for fidelity bonds...")
@@ -2140,13 +2093,13 @@ async def _recover_bonds_async(
         print()
 
         # Load registry and add discovered bonds
-        registry = load_registry(data_dir)
+        registry = load_registry(backend_settings.data_dir)
         new_bonds = 0
 
         from jmcore.bitcoin import format_amount
         from jmcore.timenumber import format_locktime_date
 
-        coin_type = 0 if network == "mainnet" else 1
+        coin_type = 0 if backend_settings.network == "mainnet" else 1
 
         for utxo in discovered_utxos:
             # Extract index and locktime from path
@@ -2198,7 +2151,7 @@ async def _recover_bonds_async(
                     path=path,
                     pubkey_hex=pubkey_hex,
                     witness_script=witness_script,
-                    network=network,
+                    network=backend_settings.network,
                 )
                 # Set UTXO info
                 bond_info.txid = utxo.txid
@@ -2210,12 +2163,12 @@ async def _recover_bonds_async(
                 new_bonds += 1
 
         # Save registry
-        save_registry(registry, data_dir)
+        save_registry(registry, backend_settings.data_dir)
 
         print("-" * 60)
         print(f"Added {new_bonds} new bond(s) to registry")
         print(f"Updated {len(discovered_utxos) - new_bonds} existing bond(s)")
-        print(f"Registry saved to: {data_dir / 'fidelity_bonds.json'}")
+        print(f"Registry saved to: {backend_settings.data_dir / 'fidelity_bonds.json'}")
 
     finally:
         await wallet.close()
@@ -2237,21 +2190,19 @@ def registry_sync(
     prompt_bip39_passphrase: Annotated[
         bool, typer.Option("--prompt-bip39-passphrase", help="Prompt for BIP39 passphrase")
     ] = False,
-    network: Annotated[str, typer.Option("--network", "-n")] = "mainnet",
+    network: Annotated[str | None, typer.Option("--network", "-n")] = None,
     backend_type: Annotated[
-        str,
+        str | None,
         typer.Option("--backend", "-b", help="Backend: full_node | descriptor_wallet | neutrino"),
-    ] = "descriptor_wallet",
-    rpc_url: Annotated[
-        str, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")
-    ] = "http://127.0.0.1:8332",
-    rpc_user: Annotated[str, typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER")] = "",
+    ] = None,
+    rpc_url: Annotated[str | None, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")] = None,
+    rpc_user: Annotated[str | None, typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER")] = None,
     rpc_password: Annotated[
-        str, typer.Option("--rpc-password", envvar="BITCOIN_RPC_PASSWORD")
-    ] = "",
+        str | None, typer.Option("--rpc-password", envvar="BITCOIN_RPC_PASSWORD")
+    ] = None,
     neutrino_url: Annotated[
-        str, typer.Option("--neutrino-url", envvar="NEUTRINO_URL")
-    ] = "http://127.0.0.1:8334",
+        str | None, typer.Option("--neutrino-url", envvar="NEUTRINO_URL")
+    ] = None,
     data_dir: Annotated[
         Path | None,
         typer.Option(
@@ -2262,7 +2213,7 @@ def registry_sync(
     log_level: Annotated[str, typer.Option("--log-level", "-l")] = "INFO",
 ) -> None:
     """Sync fidelity bond funding status from the blockchain."""
-    setup_logging(log_level)
+    settings = setup_cli(log_level)
 
     try:
         resolved_mnemonic = _resolve_mnemonic(mnemonic, mnemonic_file, password, True)
@@ -2273,12 +2224,21 @@ def registry_sync(
     # Resolve BIP39 passphrase
     resolved_bip39_passphrase = _resolve_bip39_passphrase(bip39_passphrase, prompt_bip39_passphrase)
 
-    from jmcore.paths import get_default_data_dir
+    # Resolve backend settings
+    backend_settings = resolve_backend_settings(
+        settings,
+        network=network,
+        backend_type=backend_type,
+        rpc_url=rpc_url,
+        rpc_user=rpc_user,
+        rpc_password=rpc_password,
+        neutrino_url=neutrino_url,
+        data_dir=data_dir,
+    )
 
     from jmwallet.wallet.bond_registry import load_registry
 
-    resolved_data_dir = data_dir if data_dir else get_default_data_dir()
-    registry = load_registry(resolved_data_dir)
+    registry = load_registry(backend_settings.data_dir)
 
     if not registry.bonds:
         print("\nNo bonds in registry to sync.")
@@ -2289,13 +2249,7 @@ def registry_sync(
         _sync_bonds_async(
             registry,
             resolved_mnemonic,
-            network,
-            backend_type,
-            rpc_url,
-            rpc_user,
-            rpc_password,
-            neutrino_url,
-            resolved_data_dir,
+            backend_settings,
             resolved_bip39_passphrase,
         )
     )
@@ -2304,13 +2258,7 @@ def registry_sync(
 async def _sync_bonds_async(
     registry: BondRegistry,
     mnemonic: str,
-    network: str,
-    backend_type: str,
-    rpc_url: str,
-    rpc_user: str,
-    rpc_password: str,
-    neutrino_url: str,
-    data_dir: Path,
+    backend_settings: ResolvedBackendSettings,
     bip39_passphrase: str = "",
 ) -> None:
     """Async implementation of bond syncing."""
@@ -2326,38 +2274,40 @@ async def _sync_bonds_async(
 
     # Create backend based on type
     backend: BitcoinCoreBackend | DescriptorWalletBackend | NeutrinoBackend
-    if backend_type == "neutrino":
-        backend = NeutrinoBackend(neutrino_url=neutrino_url, network=network)
+    if backend_settings.backend_type == "neutrino":
+        backend = NeutrinoBackend(
+            neutrino_url=backend_settings.neutrino_url, network=backend_settings.network
+        )
         logger.info("Waiting for neutrino to sync...")
         synced = await backend.wait_for_sync(timeout=300.0)
         if not synced:
             logger.error("Neutrino sync timeout")
             return
-    elif backend_type == "descriptor_wallet":
+    elif backend_settings.backend_type == "descriptor_wallet":
         fingerprint = get_mnemonic_fingerprint(mnemonic, bip39_passphrase)
-        wallet_name = generate_wallet_name(fingerprint, network)
+        wallet_name = generate_wallet_name(fingerprint, backend_settings.network)
         backend = DescriptorWalletBackend(
-            rpc_url=rpc_url,
-            rpc_user=rpc_user,
-            rpc_password=rpc_password,
+            rpc_url=backend_settings.rpc_url,
+            rpc_user=backend_settings.rpc_user,
+            rpc_password=backend_settings.rpc_password,
             wallet_name=wallet_name,
         )
     else:
         backend = BitcoinCoreBackend(
-            rpc_url=rpc_url,
-            rpc_user=rpc_user,
-            rpc_password=rpc_password,
+            rpc_url=backend_settings.rpc_url,
+            rpc_user=backend_settings.rpc_user,
+            rpc_password=backend_settings.rpc_password,
         )
 
     # For descriptor wallet, ensure bond addresses are imported
-    if backend_type == "descriptor_wallet" and registry.bonds:
+    if backend_settings.backend_type == "descriptor_wallet" and registry.bonds:
         wallet = WalletService(
             mnemonic=mnemonic,
             backend=backend,
-            network=network,
+            network=backend_settings.network,
             mixdepth_count=5,
             passphrase=bip39_passphrase,
-            data_dir=data_dir,
+            data_dir=backend_settings.data_dir,
         )
 
         # Check if wallet is set up (base wallet without bonds)
@@ -2438,7 +2388,7 @@ async def _sync_bonds_async(
     print("-" * 60)
 
     if updated > 0:
-        save_registry(registry, data_dir)
+        save_registry(registry, backend_settings.data_dir)
         print(f"\nUpdated {updated} bond(s). Registry saved.")
     else:
         print("\nNo updates needed.")

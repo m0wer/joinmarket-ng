@@ -11,20 +11,17 @@ Configuration is loaded with the following priority (highest to lowest):
 from __future__ import annotations
 
 import asyncio
-import os
-import sys
 from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+from jmcore.cli_common import resolve_mnemonic, setup_cli
 from jmcore.models import NetworkType
 from jmcore.notifications import get_notifier
 from jmcore.settings import (
     DEFAULT_DIRECTORY_SERVERS,
     JoinMarketSettings,
     ensure_config_file,
-    get_settings,
-    reset_settings,
 )
 from jmwallet.wallet.service import WalletService
 from loguru import logger
@@ -36,103 +33,6 @@ app = typer.Typer(
     help="JoinMarket Taker - Execute CoinJoin transactions",
     add_completion=False,
 )
-
-
-def setup_logging(level: str) -> None:
-    """Configure loguru logging."""
-    logger.remove()
-    logger.add(
-        sys.stderr,
-        level=level.upper(),
-        format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}",
-    )
-
-
-def load_mnemonic(
-    mnemonic: str | None,
-    mnemonic_file: Path | None,
-    password: str | None,
-) -> str:
-    """
-    Load mnemonic from argument, file, or environment variable.
-
-    Priority:
-    1. --mnemonic argument
-    2. --mnemonic-file argument
-    3. MNEMONIC_FILE environment variable (path to mnemonic file)
-    4. MNEMONIC environment variable
-    5. Config file wallet.mnemonic_file setting
-
-    Args:
-        mnemonic: Direct mnemonic string
-        mnemonic_file: Path to mnemonic file
-        password: Password for encrypted file
-
-    Returns:
-        The mnemonic phrase
-
-    Raises:
-        ValueError: If no mnemonic source is available
-    """
-    if mnemonic:
-        return mnemonic
-
-    # Check for mnemonic file (from argument or environment)
-    actual_mnemonic_file = mnemonic_file
-    actual_password = password
-    mnemonic_source = None  # Track where the mnemonic file path came from
-
-    if not actual_mnemonic_file:
-        env_mnemonic_file = os.environ.get("MNEMONIC_FILE")
-        if env_mnemonic_file:
-            actual_mnemonic_file = Path(env_mnemonic_file)
-            mnemonic_source = "MNEMONIC_FILE environment variable"
-
-    # If still no mnemonic file, check config file
-    if not actual_mnemonic_file:
-        try:
-            from jmcore.settings import get_settings
-
-            settings = get_settings()
-            config_mnemonic_file = getattr(settings.wallet, "mnemonic_file", None)
-            if config_mnemonic_file:
-                actual_mnemonic_file = Path(config_mnemonic_file)
-                mnemonic_source = "config file (wallet.mnemonic_file)"
-                # Use config file password if not provided via CLI
-                config_password = getattr(settings.wallet, "mnemonic_password", None)
-                if actual_password is None and config_password:
-                    actual_password = config_password.get_secret_value()
-        except Exception as e:
-            # If settings loading fails, log error but continue without config file mnemonic
-            logger.error(f"Failed to load mnemonic from config: {e}")
-            pass
-    elif mnemonic_file:
-        mnemonic_source = "--mnemonic-file argument"
-
-    if actual_mnemonic_file:
-        if not actual_mnemonic_file.exists():
-            source_msg = f" (from {mnemonic_source})" if mnemonic_source else ""
-            raise ValueError(f"Mnemonic file not found: {actual_mnemonic_file}{source_msg}")
-
-        # Import the mnemonic loading utilities from jmwallet
-        from jmwallet.cli import load_mnemonic_file
-
-        try:
-            return load_mnemonic_file(actual_mnemonic_file, actual_password)
-        except ValueError:
-            # File is encrypted, need password
-            if actual_password is None:
-                actual_password = typer.prompt("Enter mnemonic file password", hide_input=True)
-            return load_mnemonic_file(actual_mnemonic_file, actual_password)
-
-    env_mnemonic = os.environ.get("MNEMONIC")
-    if env_mnemonic:
-        return env_mnemonic
-
-    raise ValueError(
-        "Mnemonic required. Use --mnemonic, --mnemonic-file, MNEMONIC_FILE, MNEMONIC env var, "
-        "or set wallet.mnemonic_file in config.toml"
-    )
 
 
 def build_taker_config(
@@ -476,21 +376,23 @@ def coinjoin(
     Configuration is loaded from ~/.joinmarket-ng/config.toml (or $JOINMARKET_DATA_DIR/config.toml),
     environment variables, and CLI arguments. CLI arguments have the highest priority.
     """
-    setup_logging(log_level)
-
-    # Reset settings cache
-    reset_settings()
-
-    # Load unified settings
-    settings = get_settings()
+    # Load settings
+    settings = setup_cli(log_level)
 
     # Ensure config file exists
     ensure_config_file(settings.get_data_dir())
 
-    # Load mnemonic
+    # Load mnemonic using unified resolver
     try:
-        resolved_mnemonic = load_mnemonic(mnemonic, mnemonic_file, password)
-    except ValueError as e:
+        resolved = resolve_mnemonic(
+            settings,
+            mnemonic=mnemonic,
+            mnemonic_file=mnemonic_file,
+            password=password,
+            bip39_passphrase=bip39_passphrase,
+        )
+        resolved_mnemonic = resolved.mnemonic if resolved else ""
+    except (ValueError, FileNotFoundError) as e:
         logger.error(str(e))
         raise typer.Exit(1)
 
@@ -717,21 +619,23 @@ def tumble(
     Configuration is loaded from ~/.joinmarket-ng/config.toml, environment variables,
     and CLI arguments. CLI arguments have the highest priority.
     """
-    setup_logging(log_level)
-
-    # Reset settings cache
-    reset_settings()
-
-    # Load unified settings
-    settings = get_settings()
+    # Load settings
+    settings = setup_cli(log_level)
 
     # Ensure config file exists
     ensure_config_file(settings.get_data_dir())
 
-    # Load mnemonic
+    # Load mnemonic using unified resolver
     try:
-        resolved_mnemonic = load_mnemonic(mnemonic, mnemonic_file, password)
-    except ValueError as e:
+        resolved = resolve_mnemonic(
+            settings,
+            mnemonic=mnemonic,
+            mnemonic_file=mnemonic_file,
+            password=password,
+            bip39_passphrase=bip39_passphrase,
+        )
+        resolved_mnemonic = resolved.mnemonic if resolved else ""
+    except (ValueError, FileNotFoundError) as e:
         logger.error(str(e))
         raise typer.Exit(1)
 
