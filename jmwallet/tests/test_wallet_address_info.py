@@ -110,6 +110,139 @@ class TestAddressStatusDetermination:
         assert status == "flagged"
 
 
+class TestGetNextAddressIndex:
+    """Tests for get_next_address_index method."""
+
+    @pytest.fixture
+    def mock_backend(self):
+        """Create a mock backend."""
+        backend = Mock()
+        backend.get_utxos = AsyncMock(return_value=[])
+        backend.close = AsyncMock()
+        return backend
+
+    @pytest.fixture
+    def wallet(self, mock_backend, test_mnemonic, test_network):
+        """Create a wallet for testing."""
+        wallet = WalletService(
+            mnemonic=test_mnemonic,
+            backend=mock_backend,
+            network=test_network,
+            mixdepth_count=5,
+        )
+        wallet.utxo_cache = {i: [] for i in range(5)}
+        return wallet
+
+    def test_returns_zero_when_no_addresses_used(self, wallet):
+        """Test that index 0 is returned when no addresses are used."""
+        index = wallet.get_next_address_index(mixdepth=0, change=0)
+        assert index == 0
+
+    def test_returns_next_after_utxo(self, wallet):
+        """Test that next index after UTXO address is returned."""
+        addr_2 = wallet.get_receive_address(0, 2)
+        utxo = UTXOInfo(
+            txid="0" * 64,
+            vout=0,
+            value=100000,
+            address=addr_2,
+            confirmations=6,
+            scriptpubkey="0014" + "00" * 20,
+            path=f"{wallet.root_path}/0'/0/2",
+            mixdepth=0,
+        )
+        wallet.utxo_cache[0] = [utxo]
+
+        index = wallet.get_next_address_index(mixdepth=0, change=0)
+        assert index == 3
+
+    def test_uses_addresses_with_history_after_spend(self, wallet):
+        """
+        Test that addresses_with_history is used to prevent reuse after spend.
+
+        This is the key bug scenario: an address receives funds (index 0),
+        then funds are spent (internal send). After the spend, UTXO cache
+        no longer has the address, but addresses_with_history should track it
+        to prevent reuse.
+        """
+        # Simulate: address at index 0 received funds, then was spent
+        addr_0 = wallet.get_receive_address(0, 0)
+        wallet.addresses_with_history.add(addr_0)
+        # No UTXOs remain (all spent)
+        wallet.utxo_cache[0] = []
+
+        index = wallet.get_next_address_index(mixdepth=0, change=0)
+        # Should return 1, not 0, because addr_0 was used
+        assert index == 1
+
+    def test_uses_highest_index_from_addresses_with_history(self, wallet):
+        """Test that the highest index from addresses_with_history is used."""
+        # Addresses 0, 2, and 5 had history (1, 3, 4 were skipped for some reason)
+        wallet.get_receive_address(0, 0)  # Cache address
+        wallet.get_receive_address(0, 2)  # Cache address
+        addr_5 = wallet.get_receive_address(0, 5)  # Cache address
+
+        wallet.addresses_with_history.add(wallet.get_receive_address(0, 0))
+        wallet.addresses_with_history.add(wallet.get_receive_address(0, 2))
+        wallet.addresses_with_history.add(addr_5)
+
+        index = wallet.get_next_address_index(mixdepth=0, change=0)
+        # Should return 6, the next after the highest used (5)
+        assert index == 6
+
+    def test_combines_utxo_cache_and_addresses_with_history(self, wallet):
+        """Test that both UTXO cache and addresses_with_history are considered."""
+        # Address at index 3 is in UTXO cache (current balance)
+        addr_3 = wallet.get_receive_address(0, 3)
+        utxo = UTXOInfo(
+            txid="0" * 64,
+            vout=0,
+            value=100000,
+            address=addr_3,
+            confirmations=6,
+            scriptpubkey="0014" + "00" * 20,
+            path=f"{wallet.root_path}/0'/0/3",
+            mixdepth=0,
+        )
+        wallet.utxo_cache[0] = [utxo]
+
+        # Address at index 7 was spent (in history but no UTXO)
+        addr_7 = wallet.get_receive_address(0, 7)
+        wallet.addresses_with_history.add(addr_7)
+
+        index = wallet.get_next_address_index(mixdepth=0, change=0)
+        # Should return 8, the next after the highest (7 from history)
+        assert index == 8
+
+    def test_respects_mixdepth_separation(self, wallet):
+        """Test that different mixdepths have independent indices."""
+        # Mixdepth 0 has used address at index 5
+        addr_m0 = wallet.get_receive_address(0, 5)
+        wallet.addresses_with_history.add(addr_m0)
+
+        # Mixdepth 1 should still return 0
+        index_m1 = wallet.get_next_address_index(mixdepth=1, change=0)
+        assert index_m1 == 0
+
+        # Mixdepth 0 should return 6
+        index_m0 = wallet.get_next_address_index(mixdepth=0, change=0)
+        assert index_m0 == 6
+
+    def test_respects_change_separation(self, wallet):
+        """Test that external and internal addresses have independent indices."""
+        # External (change=0) has used address at index 3
+        addr_ext = wallet.get_receive_address(0, 3)
+        wallet.addresses_with_history.add(addr_ext)
+
+        # Internal (change=1) should still return 0
+        index_int = wallet.get_next_address_index(mixdepth=0, change=1)
+        assert index_int == 0
+
+        # External should return 4
+        index_ext = wallet.get_next_address_index(mixdepth=0, change=0)
+        assert index_ext == 4
+
+
 class TestNextUnusedUnflaggedAddress:
     """Tests for get_next_unused_unflagged_address method."""
 
