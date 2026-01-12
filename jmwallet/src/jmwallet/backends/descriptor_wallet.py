@@ -152,8 +152,15 @@ class DescriptorWalletBackend(BlockchainBackend):
 
         try:
             response = await use_client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
+
+            # Try to parse JSON response even if status code indicates error
+            # Bitcoin Core may return 500 with valid JSON-RPC error details
+            try:
+                data = response.json()
+            except Exception:
+                # If JSON parsing fails, raise HTTP error
+                response.raise_for_status()
+                raise
 
             if "error" in data and data["error"]:
                 error_info = data["error"]
@@ -161,10 +168,16 @@ class DescriptorWalletBackend(BlockchainBackend):
                 error_msg = error_info.get("message", str(error_info))
                 raise ValueError(f"RPC error {error_code}: {error_msg}")
 
+            # Check HTTP status only after verifying no RPC error in response
+            response.raise_for_status()
+
             return data.get("result")
 
         except httpx.TimeoutException as e:
             logger.error(f"RPC call timed out: {method} - {e}")
+            raise
+        except ValueError:
+            # Re-raise ValueError (RPC errors) as-is
             raise
         except httpx.HTTPError as e:
             logger.error(f"RPC call failed: {method} - {e}")

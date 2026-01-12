@@ -105,6 +105,35 @@ class TestDescriptorWalletBackendUnit:
         assert backend._wallet_loaded is True
 
     @pytest.mark.asyncio
+    async def test_create_wallet_http_500_with_rpc_error(self):
+        """Test create_wallet handles HTTP 500 with JSON-RPC error correctly."""
+        backend = DescriptorWalletBackend(wallet_name="test_wallet")
+
+        call_count = 0
+
+        async def mock_rpc(method, params=None, client=None, use_wallet=True):
+            nonlocal call_count
+            call_count += 1
+            if method == "listwallets":
+                return []
+            elif method == "loadwallet":
+                # Simulate Bitcoin Core returning 500 status but with valid JSON-RPC error
+                # This should be converted to ValueError by the fixed _rpc_call
+                raise ValueError("RPC error -18: Wallet file verification failed")
+            elif method == "createwallet":
+                return {"name": "test_wallet", "warning": ""}
+            raise ValueError(f"Unexpected method: {method}")
+
+        backend._rpc_call = mock_rpc
+
+        result = await backend.create_wallet()
+
+        assert result is True
+        assert backend._wallet_loaded is True
+        # Should have called: listwallets, loadwallet (failed), createwallet
+        assert call_count == 3
+
+    @pytest.mark.asyncio
     async def test_import_descriptors(self):
         """Test importing descriptors into wallet."""
         backend = DescriptorWalletBackend(wallet_name="test_wallet")
