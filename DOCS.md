@@ -163,6 +163,95 @@ Both maker and taker support periodic wallet rescanning to detect balance change
 
 ---
 
+## Configuration File
+
+JoinMarket NG supports a TOML configuration file for centralized settings management across all components.
+
+### Overview
+
+Configuration is loaded with the following priority (highest to lowest):
+1. **CLI arguments** - Command-line options override everything
+2. **Environment variables** - Override config file settings
+3. **Config file** (`~/.joinmarket-ng/config.toml`) - Persistent settings
+4. **Built-in defaults** - Used when no override is specified
+
+This design allows users to set base configuration in the file while easily overriding specific values via environment or CLI for different scenarios.
+
+### Config File Location
+
+- Default: `~/.joinmarket-ng/config.toml`
+- Override with: `$JOINMARKET_DATA_DIR/config.toml` or `$JOINMARKET_CONFIG_FILE`
+
+### Auto-Generation
+
+On first run, the config file is automatically created with all settings commented out. This approach:
+- Shows all available settings with descriptions
+- Documents default values
+- Allows users to selectively uncomment and modify only what they need
+- Facilitates software updates (unchanged defaults are updated automatically)
+
+### Environment Variable Mapping
+
+Environment variables use uppercase with double underscore (`__`) for nested settings:
+
+| Config File | Environment Variable |
+|-------------|---------------------|
+| `[tor]` `socks_host` | `TOR__SOCKS_HOST` |
+| `[bitcoin]` `rpc_url` | `BITCOIN__RPC_URL` |
+| `[maker]` `min_size` | `MAKER__MIN_SIZE` |
+
+### Configuration Sections
+
+| Section | Description |
+|---------|-------------|
+| `[tor]` | Tor SOCKS proxy settings |
+| `[tor_control]` | Tor control port for hidden services |
+| `[bitcoin]` | Bitcoin backend settings (RPC, Neutrino) |
+| `[network]` | Protocol network and directory servers |
+| `[wallet]` | HD wallet structure settings |
+| `[notifications]` | Push notification settings |
+| `[logging]` | Log level and options |
+| `[maker]` | Maker-specific settings |
+| `[taker]` | Taker-specific settings |
+| `[directory_server]` | Directory server settings |
+| `[orderbook_watcher]` | Orderbook watcher settings |
+
+### Example Config
+
+```toml
+# ~/.joinmarket-ng/config.toml
+
+[tor]
+socks_host = "tor"  # Docker service name
+socks_port = 9050
+
+[bitcoin]
+backend_type = "descriptor_wallet"
+rpc_url = "http://bitcoind:8332"
+rpc_user = "jm"
+rpc_password = "secret"
+
+[network]
+network = "signet"
+
+[maker]
+min_size = 50000
+cj_fee_relative = "0.002"
+merge_algorithm = "gradual"
+```
+
+### CLI Commands
+
+```bash
+# Initialize config file with template
+jm-maker config-init
+
+# View current config path
+echo $JOINMARKET_DATA_DIR/config.toml
+```
+
+---
+
 ## Dependency Management
 
 We use pip-tools for pinned dependencies and reproducible builds:

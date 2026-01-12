@@ -5,7 +5,7 @@ Tests for fidelity bond utilities.
 import base64
 import hashlib
 import struct
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -382,14 +382,16 @@ class TestCreateFidelityBondProof:
 class TestFindFidelityBonds:
     """Tests for bond discovery from wallet."""
 
-    def test_no_utxos_returns_empty(self):
+    @pytest.mark.asyncio
+    async def test_no_utxos_returns_empty(self):
         mock_wallet = MagicMock()
         mock_wallet.utxo_cache = {}
 
-        bonds = find_fidelity_bonds(mock_wallet)
+        bonds = await find_fidelity_bonds(mock_wallet)
         assert bonds == []
 
-    def test_wrong_branch_returns_empty(self):
+    @pytest.mark.asyncio
+    async def test_wrong_branch_returns_empty(self):
         """UTXOs on branch 1 (regular change) should not be found."""
         mock_utxo = MagicMock()
         mock_utxo.path = "m/84'/0'/0'/1/0"  # Branch 1 (change), not 2 (fidelity bonds)
@@ -404,10 +406,11 @@ class TestFindFidelityBonds:
             FIDELITY_BOND_MIXDEPTH: [mock_utxo],
         }
 
-        bonds = find_fidelity_bonds(mock_wallet)
+        bonds = await find_fidelity_bonds(mock_wallet)
         assert bonds == []
 
-    def test_no_locktime_in_path_returns_empty(self):
+    @pytest.mark.asyncio
+    async def test_no_locktime_in_path_returns_empty(self):
         """UTXOs without locktime in path should not be found."""
         mock_utxo = MagicMock()
         mock_utxo.path = "m/84'/0'/0'/2/0"  # Branch 2 but no locktime
@@ -422,16 +425,18 @@ class TestFindFidelityBonds:
             FIDELITY_BOND_MIXDEPTH: [mock_utxo],
         }
 
-        bonds = find_fidelity_bonds(mock_wallet)
+        bonds = await find_fidelity_bonds(mock_wallet)
         assert bonds == []
 
-    def test_finds_bond_with_correct_path(self, test_private_key, test_pubkey):
+    @pytest.mark.asyncio
+    async def test_finds_bond_with_correct_path(self, test_private_key, test_pubkey):
         """Fidelity bonds are on branch 2 with locktime in path."""
         mock_utxo = MagicMock()
         # Correct format: mixdepth 0, branch 2, index 0, locktime 1748736000
         mock_utxo.path = "m/84'/0'/0'/2/0:1748736000"
         mock_utxo.value = 100_000_000
         mock_utxo.confirmations = 1000
+        mock_utxo.height = 850000  # Block height
         mock_utxo.address = "bcrt1qtest"
         mock_utxo.txid = "txid123"
         mock_utxo.vout = 0
@@ -440,23 +445,29 @@ class TestFindFidelityBonds:
         mock_key.get_public_key_bytes.return_value = test_pubkey
         mock_key.private_key = test_private_key
 
+        mock_backend = AsyncMock()
+        mock_backend.get_block_time.return_value = 1700000000  # Unix timestamp
+
         mock_wallet = MagicMock()
         mock_wallet.utxo_cache = {
             FIDELITY_BOND_MIXDEPTH: [mock_utxo],
         }
         mock_wallet.get_key_for_address.return_value = mock_key
+        mock_wallet.backend = mock_backend
 
         with patch("maker.fidelity.calculate_timelocked_fidelity_bond_value", return_value=50000):
-            bonds = find_fidelity_bonds(mock_wallet)
+            bonds = await find_fidelity_bonds(mock_wallet)
 
         assert len(bonds) == 1
         assert bonds[0].txid == "txid123"
         assert bonds[0].vout == 0
         assert bonds[0].value == 100_000_000
         assert bonds[0].locktime == 1748736000
+        assert bonds[0].confirmation_time == 1700000000
         assert bonds[0].bond_value == 50000
 
-    def test_skips_external_addresses(self):
+    @pytest.mark.asyncio
+    async def test_skips_external_addresses(self):
         """External addresses (branch 0) should not be considered."""
         mock_utxo = MagicMock()
         mock_utxo.path = "m/84'/0'/0'/0/0:1748736000"  # Branch 0 (external)
@@ -471,25 +482,48 @@ class TestFindFidelityBonds:
             FIDELITY_BOND_MIXDEPTH: [mock_utxo],
         }
 
-        bonds = find_fidelity_bonds(mock_wallet)
+        bonds = await find_fidelity_bonds(mock_wallet)
+        assert bonds == []
+
+    @pytest.mark.asyncio
+    async def test_skips_unconfirmed_bonds(self):
+        """Unconfirmed bonds (height=None) should be skipped."""
+        mock_utxo = MagicMock()
+        mock_utxo.path = "m/84'/0'/0'/2/0:1748736000"
+        mock_utxo.value = 100_000_000
+        mock_utxo.confirmations = 0
+        mock_utxo.height = None  # Unconfirmed
+        mock_utxo.address = "bcrt1qtest"
+        mock_utxo.txid = "txid_unconfirmed"
+        mock_utxo.vout = 0
+
+        mock_wallet = MagicMock()
+        mock_wallet.utxo_cache = {
+            FIDELITY_BOND_MIXDEPTH: [mock_utxo],
+        }
+
+        bonds = await find_fidelity_bonds(mock_wallet)
         assert bonds == []
 
 
 class TestGetBestFidelityBond:
     """Tests for selecting the highest-value bond."""
 
-    def test_no_bonds_returns_none(self):
+    @pytest.mark.asyncio
+    async def test_no_bonds_returns_none(self):
         mock_wallet = MagicMock()
         mock_wallet.utxo_cache = {}
 
-        result = get_best_fidelity_bond(mock_wallet)
+        result = await get_best_fidelity_bond(mock_wallet)
         assert result is None
 
-    def test_returns_highest_bond_value(self, test_private_key, test_pubkey):
+    @pytest.mark.asyncio
+    async def test_returns_highest_bond_value(self, test_private_key, test_pubkey):
         mock_utxo1 = MagicMock()
         mock_utxo1.path = "m/84'/0'/0'/2/0:1748736000"  # Branch 2 with locktime
         mock_utxo1.value = 100_000_000
         mock_utxo1.confirmations = 1000
+        mock_utxo1.height = 850000
         mock_utxo1.address = "bcrt1qtest1"
         mock_utxo1.txid = "txid_low"
         mock_utxo1.vout = 0
@@ -498,6 +532,7 @@ class TestGetBestFidelityBond:
         mock_utxo2.path = "m/84'/0'/0'/2/1:1780272000"  # Branch 2 with locktime
         mock_utxo2.value = 200_000_000
         mock_utxo2.confirmations = 2000
+        mock_utxo2.height = 840000  # Earlier block = earlier confirmation
         mock_utxo2.address = "bcrt1qtest2"
         mock_utxo2.txid = "txid_high"
         mock_utxo2.vout = 1
@@ -506,25 +541,38 @@ class TestGetBestFidelityBond:
         mock_key.get_public_key_bytes.return_value = test_pubkey
         mock_key.private_key = test_private_key
 
+        # Return different block times based on height
+        async def mock_get_block_time(height):
+            if height == 850000:
+                return 1700000000  # Later confirmation
+            return 1600000000  # Earlier confirmation
+
+        mock_backend = AsyncMock()
+        mock_backend.get_block_time.side_effect = mock_get_block_time
+
         mock_wallet = MagicMock()
         mock_wallet.utxo_cache = {
             FIDELITY_BOND_MIXDEPTH: [mock_utxo1, mock_utxo2],
         }
         mock_wallet.get_key_for_address.return_value = mock_key
+        mock_wallet.backend = mock_backend
 
-        # Return different bond values based on confirmations
+        # Mock bond calculation - higher value for longer time locked
+        # utxo2 has earlier confirmation + later locktime = higher bond value
         def mock_bond_value(utxo_value, confirmation_time, locktime):
-            return confirmation_time * 100  # Simple mock
+            time_locked = locktime - confirmation_time
+            return int(utxo_value * (time_locked / 1000000000))
 
         with patch(
             "maker.fidelity.calculate_timelocked_fidelity_bond_value",
             side_effect=mock_bond_value,
         ):
-            best = get_best_fidelity_bond(mock_wallet)
+            best = await get_best_fidelity_bond(mock_wallet)
 
         assert best is not None
         assert best.txid == "txid_high"
-        assert best.bond_value == 200_000  # 2000 * 100
+        # utxo2: 200M * (1780272000 - 1600000000) / 1B = 200M * 0.180272 = 36,054,400
+        assert best.bond_value > 36_000_000
 
 
 class TestConstants:
