@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Directory connections now parallel**: Taker and orderbook watcher connect to all directory servers concurrently instead of sequentially.
+  - Significantly reduces startup time when connecting to multiple directories (especially over Tor).
+  - Directory orderbook fetching is also parallelized.
+- **Removed peerlist-based offer filtering**: Directory's orderbook is now trusted as authoritative.
+  - If a maker has an offer in the directory, they are considered online.
+  - Peerlist responses may be delayed or unavailable over Tor, so offers are no longer filtered based on peerlist presence.
+  - This prevents incorrectly rejecting valid offers from active makers.
+
+## Fixed
+
+- **Signature base64 padding error**: Fixed "Incorrect padding" errors when decoding maker signatures.
+  - Base64 strings without proper padding are now handled correctly.
+- **PoDLE commitment blacklist retry**: Taker now automatically retries with a new NUMS index when a maker rejects due to blacklisted commitment.
+  - Previously, a blacklisted commitment would cause the entire CoinJoin to fail.
+  - Now retries up to `taker_utxo_retries` times (default 3) with different commitment indices.
+
 ## [0.9.0] - 2026-01-12
 
 ### Added

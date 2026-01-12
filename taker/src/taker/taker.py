@@ -162,9 +162,10 @@ class MultiDirectoryClient:
                 self._update_nick_status(nick, server, False)
 
     async def connect_all(self) -> int:
-        """Connect to all directory servers, return count of successful connections."""
-        connected = 0
-        for server in self.directory_servers:
+        """Connect to all directory servers in parallel, return count of successful connections."""
+
+        async def connect_single(server: str) -> tuple[str, DirectoryClient | None]:
+            """Connect to a single directory server."""
             try:
                 parts = server.split(":")
                 host = parts[0]
@@ -180,11 +181,23 @@ class MultiDirectoryClient:
                     neutrino_compat=self.neutrino_compat,
                 )
                 await client.connect()
-                self.clients[server] = client
-                connected += 1
                 logger.info(f"Connected to directory server: {server}")
+                return (server, client)
             except Exception as e:
                 logger.warning(f"Failed to connect to {server}: {e}")
+                return (server, None)
+
+        # Connect to all directories in parallel
+        tasks = [connect_single(server) for server in self.directory_servers]
+        results = await asyncio.gather(*tasks)
+
+        # Collect successful connections
+        connected = 0
+        for server, client in results:
+            if client is not None:
+                self.clients[server] = client
+                connected += 1
+
         return connected
 
     async def close_all(self) -> None:
@@ -198,52 +211,37 @@ class MultiDirectoryClient:
 
     async def fetch_orderbook(self, timeout: float = 10.0) -> list[Offer]:
         """
-        Fetch orderbook from all connected directory servers.
+        Fetch orderbook from all connected directory servers in parallel.
 
-        Also updates multi-directory nick tracking based on peerlists.
-        A maker is only considered gone when it disappears from ALL directories.
+        Trusts the directory's orderbook as authoritative - if a maker has an offer
+        in the directory, they are considered online. This avoids incorrectly filtering
+        offers as "stale" based on slow peerlist responses.
         """
         all_offers: list[Offer] = []
         seen_offers: set[tuple[str, int]] = set()
 
-        for server, client in self.clients.items():
+        async def fetch_from_server(
+            server: str, client: DirectoryClient
+        ) -> tuple[str, list[Offer]]:
+            """Fetch offers from a single directory server."""
             try:
                 offers, _bonds = await client.fetch_orderbooks()
-
-                # Update nick tracking with makers from this server's orderbook
-                active_makers = {offer.counterparty for offer in offers}
-
-                # Try to get peerlist for more accurate nick tracking
-                # (not all directories support this, so we fallback to offer-based tracking)
-                try:
-                    peerlist = await client.get_peerlist()
-                    if peerlist is not None:  # None means rate-limited, don't update tracking
-                        if peerlist:
-                            active_nicks = set(peerlist)
-                            self.sync_nicks_with_peerlist(server, active_nicks)
-                            logger.debug(
-                                f"Updated nick tracking for {server}: "
-                                f"{len(active_nicks)} active nicks"
-                            )
-                        else:
-                            # Fallback: track based on offers (empty peerlist but not rate-limited)
-                            self.sync_nicks_with_peerlist(server, active_makers)
-                    else:
-                        # Rate-limited - don't update nick tracking, use previous state
-                        logger.debug(f"Peerlist rate-limited for {server}, using cached nick state")
-                except Exception as e:
-                    # Peerlist not supported or failed - track based on offers only
-                    logger.debug(f"Peerlist unavailable from {server}, tracking via offers: {e}")
-                    self.sync_nicks_with_peerlist(server, active_makers)
-
-                # Add offers to result (deduplicated)
-                for offer in offers:
-                    key = (offer.counterparty, offer.oid)
-                    if key not in seen_offers:
-                        seen_offers.add(key)
-                        all_offers.append(offer)
+                return (server, offers)
             except Exception as e:
                 logger.warning(f"Failed to fetch orderbook from {server}: {e}")
+                return (server, [])
+
+        # Fetch from all directories in parallel
+        tasks = [fetch_from_server(server, client) for server, client in self.clients.items()]
+        results = await asyncio.gather(*tasks)
+
+        # Aggregate and deduplicate offers
+        for server, offers in results:
+            for offer in offers:
+                key = (offer.counterparty, offer.oid)
+                if key not in seen_offers:
+                    seen_offers.add(key)
+                    all_offers.append(offer)
 
         return all_offers
 
@@ -1065,7 +1063,7 @@ class Taker:
                 self.state = TakerState.FAILED
                 return None
 
-            # Phase 1: Fill orders
+            # Phase 1: Fill orders (with retry logic for blacklisted commitments)
             self.state = TakerState.FILLING
             logger.info("Phase 1: Sending !fill to makers...")
 
@@ -1076,11 +1074,54 @@ class Taker:
                 )
             )
 
-            fill_success = await self._phase_fill()
-            if not fill_success:
-                logger.error("Fill phase failed")
-                self.state = TakerState.FAILED
-                return None
+            # Retry loop for blacklisted commitments
+            max_podle_retries = self.config.taker_utxo_retries
+            for podle_retry in range(max_podle_retries):
+                fill_success, blacklist_error = await self._phase_fill()
+
+                if fill_success:
+                    break  # Success, proceed to next phase
+
+                if not blacklist_error:
+                    # Failed for a reason other than blacklist
+                    logger.error("Fill phase failed")
+                    self.state = TakerState.FAILED
+                    return None
+
+                # Commitment was blacklisted - try with a new commitment
+                if podle_retry < max_podle_retries - 1:
+                    logger.warning(
+                        f"Commitment blacklisted, retrying with new NUMS index "
+                        f"(attempt {podle_retry + 2}/{max_podle_retries})..."
+                    )
+
+                    # The current commitment is already marked as used by generate_fresh_commitment
+                    # Generate a new one (will use next index automatically)
+                    self.podle_commitment = self.podle_manager.generate_fresh_commitment(
+                        wallet_utxos=self.preselected_utxos,
+                        cj_amount=self.cj_amount,
+                        private_key_getter=get_private_key,
+                        min_confirmations=self.config.taker_utxo_age,
+                        min_percent=self.config.taker_utxo_amtpercent,
+                        max_retries=self.config.taker_utxo_retries,
+                    )
+
+                    if not self.podle_commitment:
+                        logger.error("No more PoDLE commitments available - all indices exhausted")
+                        self.state = TakerState.FAILED
+                        return None
+
+                    # Reset maker sessions for retry
+                    self.maker_sessions = {
+                        nick: MakerSession(nick=nick, offer=offer, supports_neutrino_compat=False)
+                        for nick, offer in selected_offers.items()
+                    }
+                else:
+                    logger.error(
+                        f"Fill phase failed after {max_podle_retries} PoDLE commitment attempts"
+                    )
+                    self.state = TakerState.FAILED
+                    return None
 
             # Phase 2: Auth and get maker UTXOs
             self.state = TakerState.AUTHENTICATING
@@ -1249,10 +1290,16 @@ class Taker:
             self.state = TakerState.FAILED
             return None
 
-    async def _phase_fill(self) -> bool:
-        """Send !fill to all selected makers and wait for !pubkey responses."""
+    async def _phase_fill(self) -> tuple[bool, bool]:
+        """Send !fill to all selected makers and wait for !pubkey responses.
+
+        Returns:
+            Tuple of (success, blacklist_error):
+            - success: True if fill phase succeeded with enough makers
+            - blacklist_error: True if any maker rejected with "blacklisted" error
+        """
         if not self.podle_commitment:
-            return False
+            return (False, False)
 
         # Create a new crypto session for this CoinJoin
         self.crypto_session = CryptoSession()
@@ -1276,6 +1323,9 @@ class Taker:
             timeout=timeout,
         )
 
+        # Track if any maker rejected due to blacklisted commitment
+        blacklist_error = False
+
         # Process responses
         # Maker sends: "<nacl_pubkey> [features=...] <signing_pubkey> <signature>"
         # Directory client strips command, we get the data part
@@ -1286,6 +1336,12 @@ class Taker:
                 if responses[nick].get("error"):
                     error_msg = responses[nick].get("data", "Unknown error")
                     logger.error(f"Maker {nick} rejected !fill: {error_msg}")
+                    # Check if this is a blacklist error
+                    if "blacklist" in error_msg.lower():
+                        blacklist_error = True
+                        logger.warning(
+                            f"Commitment was blacklisted by {nick} - may need retry with new index"
+                        )
                     del self.maker_sessions[nick]
                     continue
 
@@ -1334,9 +1390,9 @@ class Taker:
 
         if len(self.maker_sessions) < self.config.minimum_makers:
             logger.error(f"Not enough makers responded: {len(self.maker_sessions)}")
-            return False
+            return (False, blacklist_error)
 
-        return True
+        return (True, blacklist_error)
 
     async def _phase_auth(self) -> bool:
         """Send !auth with PoDLE proof and wait for !ioauth responses."""
@@ -1987,7 +2043,10 @@ class Taker:
 
                         # Parse the signature to extract the witness stack
                         # Format: varint(sig_len) + sig + varint(pub_len) + pub
-                        sig_bytes = base64.b64decode(decrypted_sig)
+                        # Add padding if needed - base64 strings must have length divisible by 4
+                        padding_needed = (4 - len(decrypted_sig) % 4) % 4
+                        padded_sig = decrypted_sig + "=" * padding_needed
+                        sig_bytes = base64.b64decode(padded_sig)
                         sig_len = sig_bytes[0]
                         signature = sig_bytes[1 : 1 + sig_len]
                         pub_len = sig_bytes[1 + sig_len]

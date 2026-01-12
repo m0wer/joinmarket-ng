@@ -692,37 +692,23 @@ class DirectoryClient:
         """
         Fetch orderbooks from all connected peers.
 
+        Trusts the directory's orderbook as authoritative - if a maker has an offer
+        in the directory, they are considered online. The directory server maintains
+        the connection state and removes offers when makers disconnect.
+
         Returns:
             Tuple of (offers, fidelity_bonds)
         """
-        # Use get_peerlist_with_features to populate peer_features cache
+        # Use get_peerlist_with_features to populate peer_features cache for neutrino_compat
+        # detection. The peerlist itself is not used for offer filtering.
         peers_with_features = await self.get_peerlist_with_features()
         offers: list[Offer] = []
         bonds: list[FidelityBond] = []
         bond_utxo_set: set[str] = set()
 
-        # Build set of active nicks for filtering stale offers
-        # Use peerlist_with_features if available, otherwise fall back to basic peerlist
-        active_nicks: set[str] = set()
+        # Log peer count for visibility (but don't filter based on peerlist)
         if peers_with_features:
-            active_nicks = {nick for nick, _loc, _features in peers_with_features}
             logger.info(f"Found {len(peers_with_features)} peers on {self.host}:{self.port}")
-        else:
-            # Fallback for directories without peerlist_features support (reference impl)
-            # or when all peers are NOT-SERVING-ONION (regtest/local)
-            try:
-                basic_peerlist = await self.get_peerlist()
-                if basic_peerlist:
-                    active_nicks = set(basic_peerlist)
-                    logger.info(
-                        f"Found {len(basic_peerlist)} peers on {self.host}:{self.port} (basic peerlist)"
-                    )
-                else:
-                    logger.info(
-                        f"Peerlist empty on {self.host}:{self.port} (makers may be NOT-SERVING-ONION)"
-                    )
-            except DirectoryClientError as e:
-                logger.warning(f"Failed to get basic peerlist: {e}")
 
         if not self.connection:
             raise DirectoryClientError("Not connected")
@@ -868,30 +854,14 @@ class DirectoryClient:
                 logger.warning(f"Failed to process message: {e}")
                 continue
 
-        # Filter offers to only include makers that are still in the current peerlist.
-        # This prevents selecting stale offers from makers that have disconnected.
-        # This is especially important for flaky tests where makers may restart or
-        # disconnect between orderbook fetch and CoinJoin execution.
+        # NOTE: We trust the directory's orderbook as authoritative.
+        # If a maker has an offer in the directory, they are considered online.
+        # The directory server maintains the connection state and removes offers
+        # when makers disconnect. Peerlist responses may be delayed or unavailable,
+        # so we don't filter offers based on peerlist presence.
         #
-        # Note: If peerlist is empty, we skip filtering and trust the offers. This happens when:
-        # 1. All peers use NOT-SERVING-ONION (regtest/local environments)
-        # 2. Directory doesn't support GETPEERLIST (reference implementation)
-        #
-        # The directory server will still reject messages to disconnected peers,
-        # so we're not at risk of sending messages to offline makers.
-        if active_nicks:
-            original_count = len(offers)
-            offers = [o for o in offers if o.counterparty in active_nicks]
-            filtered_count = original_count - len(offers)
-            if filtered_count > 0:
-                logger.warning(
-                    f"Filtered out {filtered_count} stale offers from disconnected makers"
-                )
-        elif self._peerlist_supported is False:
-            logger.debug(
-                "Skipping offer filtering - directory doesn't support GETPEERLIST "
-                "(reference implementation)"
-            )
+        # This prevents incorrectly rejecting valid offers from active makers
+        # whose peerlist entry hasn't been received yet.
 
         logger.info(
             f"Fetched {len(offers)} offers and {len(bonds)} fidelity bonds from "
