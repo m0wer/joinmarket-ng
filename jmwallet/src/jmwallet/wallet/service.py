@@ -1018,6 +1018,13 @@ class WalletService:
             # Try to find address in cache
             path_info = self._find_address_path(address)
             if path_info is None:
+                # Check if this is a P2WSH address (likely a fidelity bond we don't know about)
+                # P2WSH: OP_0 (0x00) + PUSH32 (0x20) + 32-byte hash = 68 hex chars
+                if len(utxo.scriptpubkey) == 68 and utxo.scriptpubkey.startswith("0020"):
+                    # Silently skip P2WSH addresses (fidelity bonds)
+                    # as they can't be used for sending
+                    logger.trace(f"Skipping P2WSH address {address} (likely fidelity bond)")
+                    continue
                 logger.debug(f"Unknown address {address}, skipping")
                 continue
 
