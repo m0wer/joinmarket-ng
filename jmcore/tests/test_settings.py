@@ -52,7 +52,7 @@ class TestConfigTemplate:
         assert "[tor]" in template
         assert "[tor_control]" in template
         assert "[bitcoin]" in template
-        assert "[network]" in template
+        assert "[network_config]" in template
         assert "[wallet]" in template
         assert "[notifications]" in template
         assert "[maker]" in template
@@ -148,8 +148,8 @@ class TestSettingsFromEnv:
 
     def test_env_override_tor_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that environment variables override Tor settings."""
-        monkeypatch.setenv("TOR__SOCKS_HOST", "tor")
-        monkeypatch.setenv("TOR__SOCKS_PORT", "9150")
+        monkeypatch.setenv("TOR_SOCKS_HOST", "tor")
+        monkeypatch.setenv("TOR_SOCKS_PORT", "9150")
 
         settings = JoinMarketSettings()
 
@@ -158,9 +158,9 @@ class TestSettingsFromEnv:
 
     def test_env_override_bitcoin_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that environment variables override Bitcoin settings."""
-        monkeypatch.setenv("BITCOIN__RPC_URL", "http://bitcoind:8332")
-        monkeypatch.setenv("BITCOIN__RPC_USER", "jm")
-        monkeypatch.setenv("BITCOIN__RPC_PASSWORD", "secret")
+        monkeypatch.setenv("BITCOIN_RPC_URL", "http://bitcoind:8332")
+        monkeypatch.setenv("BITCOIN_RPC_USER", "jm")
+        monkeypatch.setenv("BITCOIN_RPC_PASSWORD", "secret")
 
         settings = JoinMarketSettings()
 
@@ -170,7 +170,7 @@ class TestSettingsFromEnv:
 
     def test_env_override_network_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that environment variables override network settings."""
-        monkeypatch.setenv("NETWORK_CONFIG__NETWORK", "signet")
+        monkeypatch.setenv("NETWORK_CONFIG_NETWORK", "signet")
 
         settings = JoinMarketSettings()
 
@@ -178,9 +178,9 @@ class TestSettingsFromEnv:
 
     def test_env_override_maker_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that environment variables override maker settings."""
-        monkeypatch.setenv("MAKER__MIN_SIZE", "50000")
-        monkeypatch.setenv("MAKER__CJ_FEE_RELATIVE", "0.002")
-        monkeypatch.setenv("MAKER__MERGE_ALGORITHM", "greedy")
+        monkeypatch.setenv("MAKER_MIN_SIZE", "50000")
+        monkeypatch.setenv("MAKER_CJ_FEE_RELATIVE", "0.002")
+        monkeypatch.setenv("MAKER_MERGE_ALGORITHM", "greedy")
 
         settings = JoinMarketSettings()
 
@@ -228,7 +228,7 @@ socks_port = 9055
 """)
 
         # Environment should override TOML
-        monkeypatch.setenv("TOR__SOCKS_HOST", "env-tor")
+        monkeypatch.setenv("TOR_SOCKS_HOST", "env-tor")
 
         settings = JoinMarketSettings()
 
@@ -260,12 +260,12 @@ class TestDirectoryServers:
         assert servers == ["custom1.onion:5222", "custom2.onion:5222"]
 
     def test_signet_directory_servers(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test signet network has its own directory servers."""
+        """Test signet network directory servers (currently empty, must be user-configured)."""
         settings = JoinMarketSettings(network_config={"network": "signet"})
 
         servers = settings.get_directory_servers()
-        # Signet has at least one directory server
-        assert len(servers) >= 1
+        # Signet has no default directory servers - users must configure their own
+        assert len(servers) == 0
 
 
 class TestGetSettings:

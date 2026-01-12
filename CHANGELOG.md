@@ -9,11 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Simplified Installation**: New one-line installation with automatic updates.
+  - Install: `curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash`
+  - Update: `curl -sSL ... | bash -s -- --update`
+  - Installs from tagged releases via pip (no git clone required)
+  - Creates shell integration at `~/.joinmarket-ng/activate.sh`
+  - Unified install/update mode with automatic detection of existing installations
+
 - **Configuration File Support**: Added TOML configuration file (`~/.joinmarket-ng/config.toml`) for persistent settings.
   - Configuration priority: CLI args > environment variables > config file > defaults
   - Auto-generated template with all settings commented out on first run
   - Users only uncomment settings they want to change, facilitating software updates
-  - Environment variables use double underscore for nesting: `TOR__SOCKS_HOST`, `BITCOIN__RPC_URL`
   - New `config-init` command for maker and taker to initialize the config file
   - Unified settings model in `jmcore.settings` using pydantic-settings
 
@@ -27,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Installation path**: Virtual environment now lives at `~/.joinmarket-ng/venv/` (was `jmvenv/` in repo)
+- **Documentation**: Updated all READMEs to use config file approach instead of .env files
 - **Directory connections now parallel**: Taker and orderbook watcher connect to all directory servers concurrently instead of sequentially.
   - Significantly reduces startup time when connecting to multiple directories (especially over Tor).
   - Directory orderbook fetching is also parallelized.

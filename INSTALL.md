@@ -11,75 +11,68 @@ This guide walks you through installing JoinMarket-NG on Linux, macOS, and Raspb
 
 ## Quick Installation (Recommended)
 
-The fastest way to get started is using the automated installation script:
-
-### 1. Install System Dependencies
-
-Before installing JoinMarket-NG, you need to install some system packages required for building Python dependencies:
-
-**Debian/Ubuntu/Raspberry Pi OS:**
-```bash
-sudo apt update
-sudo apt install -y git build-essential libffi-dev libsodium-dev pkg-config python3 python3-venv python3-pip
-```
-
-**macOS:**
-```bash
-brew install libsodium pkg-config python3
-```
-
-These packages are needed for:
-- `git`: Version control (required to clone the repository)
-- `build-essential` / Xcode Command Line Tools: C compiler and build tools
-- `libffi-dev`: Foreign Function Interface library (for cryptography)
-- `libsodium-dev` / `libsodium`: Cryptographic library
-- `pkg-config`: Helper tool for compiling (required by coincurve)
-- `python3-venv`: Python virtual environment support
-
-### 2. Clone the Repository
+The easiest way to install JoinMarket-NG is with a single command:
 
 ```bash
-git clone https://github.com/m0wer/joinmarket-ng.git
-cd joinmarket-ng
+curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash
 ```
 
-### 3. Run the Installer
+The installer will:
+- Check and install system dependencies (asks for confirmation)
+- Install and configure Tor for privacy
+- Create a Python virtual environment at `~/.joinmarket-ng/venv/`
+- Install JoinMarket-NG from the latest release
+- Create a configuration file at `~/.joinmarket-ng/config.toml`
+- Add shell integration for easy activation
+
+### Installation Options
 
 ```bash
-./install.sh
+# Install maker only (for earning fees)
+curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash -s -- --maker
+
+# Install taker only (for mixing coins)
+curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash -s -- --taker
+
+# Install both with automatic confirmation
+curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash -s -- --yes
+
+# Install specific version
+curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash -s -- --version 0.9.0
+
+# Skip Tor setup (configure manually later)
+curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash -s -- --skip-tor
 ```
 
-The script will:
-- Check for required system dependencies
-- **Install and configure Tor automatically** (asks for confirmation)
-  - Installs Tor if not present
-  - Configures localhost-only SOCKS proxy (127.0.0.1:9050)
-  - Configures localhost-only control port (127.0.0.1:9051) for maker bots
-  - Creates backup of existing Tor configuration
-  - Restarts Tor service automatically
-- Check Python version (3.11+ required)
-- Create a Python virtual environment at `jmvenv/`
-- Install all dependencies for core components
-- Optionally install maker, taker, or both
-- Set up the basic directory structure
+### After Installation
 
-**Note**: You can run `./install.sh` multiple times safely. If you accidentally exit the script (e.g., with Ctrl+C), simply run it again to resume or change your component selection.
-
-**Skip Tor Setup**: If you want to configure Tor manually later, use `./install.sh --skip-tor`
-
-### 4. Activate the Environment
-
-After installation completes:
+Start a new terminal or run:
 
 ```bash
-source jmvenv/bin/activate
+source ~/.joinmarket-ng/activate.sh
 ```
 
-You're now ready to use JoinMarket-NG! Jump to the [Next Steps](#next-steps) section.
+You're now ready to use JoinMarket-NG! Jump to the [Configuration](#configuration) section.
 
-## Manual Installation
+## Updating
 
-If you prefer to install manually or the script doesn't work on your system:
+To update to the latest version:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash -s -- --update
+```
+
+Or update to a specific version:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash -s -- --update --version 0.9.0
+```
+
+**Note**: After updating, restart any running maker/taker processes.
+
+## Manual Installation (For Developers)
+
+If you prefer to install from source for development:
 
 ### 1. Install System Dependencies
 
@@ -94,71 +87,28 @@ sudo apt install -y git build-essential libffi-dev libsodium-dev pkg-config pyth
 brew install libsodium pkg-config python3
 ```
 
-### 2. Clone the Repository
+### 2. Clone and Install
 
 ```bash
 git clone https://github.com/m0wer/joinmarket-ng.git
 cd joinmarket-ng
-```
 
-### 3. Create Virtual Environment
-
-Python 3.11+ uses externally-managed environments by default, so you need to create a virtual environment:
-
-```bash
+# Create virtual environment
 python3 -m venv jmvenv
 source jmvenv/bin/activate
+
+# Install in development mode (editable)
+cd jmcore && pip install -e . && cd ..
+cd jmwallet && pip install -e . && cd ..
+cd maker && pip install -e . && cd ..  # if using maker
+cd taker && pip install -e . && cd ..  # if using taker
 ```
 
-**Note**: You'll need to run `source jmvenv/bin/activate` every time you open a new terminal to use JoinMarket-NG.
-
-### 4. Install Core Libraries
-
-Install the foundational libraries first:
+### 3. Install Development Dependencies
 
 ```bash
-# Install jmcore (shared library)
-cd jmcore
-pip install -e .
-cd ..
-
-# Install jmwallet (wallet library)
-cd jmwallet
-pip install -e .
-cd ..
-```
-
-### 5. Install Components
-
-Choose which components you want to install:
-
-#### For Makers (Earn Fees)
-
-```bash
-cd maker
-pip install -e .
-cd ..
-```
-
-#### For Takers (Mix Your Coins)
-
-```bash
-cd taker
-pip install -e .
-cd ..
-```
-
-#### For Developers
-
-```bash
-# Install development dependencies for testing
-cd jmcore
-pip install -r requirements-dev.txt
-cd ../jmwallet
-pip install -r requirements-dev.txt
-cd ../maker  # or taker
-pip install -r requirements-dev.txt
-cd ..
+cd jmcore && pip install -r requirements-dev.txt && cd ..
+cd jmwallet && pip install -r requirements-dev.txt && cd ..
 ```
 
 ## Raspberry Pi Specific Notes
@@ -216,6 +166,7 @@ maxconnections=8
 
 3. Start Bitcoin Core and wait for sync
 4. Test connection: `bitcoin-cli getblockchaininfo`
+5. Configure JoinMarket-NG (see [Configuration](#configuration) below)
 
 ### Option B: Neutrino (Light Client)
 
@@ -247,6 +198,66 @@ docker run -d \
 ```
 
 Alternatively, download pre-built binaries from [m0wer/neutrino-api releases](https://github.com/m0wer/neutrino-api/releases).
+
+3. Configure JoinMarket-NG (see [Configuration](#configuration) below)
+
+## Configuration
+
+JoinMarket-NG uses a TOML configuration file at `~/.joinmarket-ng/config.toml`. The installer creates this file automatically with all settings commented out, showing defaults.
+
+### Configuring Your Backend
+
+Edit the config file to match your setup:
+
+```bash
+nano ~/.joinmarket-ng/config.toml
+```
+
+**For Neutrino (Light Client):**
+
+```toml
+[bitcoin]
+backend_type = "neutrino"
+neutrino_url = "http://127.0.0.1:8334"
+```
+
+**For Bitcoin Core (Full Node):**
+
+```toml
+[bitcoin]
+backend_type = "full_node"
+rpc_url = "http://127.0.0.1:8332"
+rpc_user = "your_rpc_user"
+rpc_password = "your_rpc_password"
+```
+
+### Common Settings
+
+```toml
+[network]
+network = "mainnet"  # mainnet, testnet, signet, regtest
+
+[tor]
+socks_host = "127.0.0.1"
+socks_port = 9050
+
+[maker]
+cj_fee_relative = 0.001  # 0.1% fee
+min_size = 100000        # Minimum 100k sats
+
+[taker]
+counterparty_count = 3   # Number of makers per CoinJoin
+```
+
+### Configuration Priority
+
+Settings are loaded in this order (highest priority first):
+1. CLI arguments (e.g., `--backend neutrino`)
+2. Environment variables (e.g., `BITCOIN_RPC_URL`)
+3. Config file (`~/.joinmarket-ng/config.toml`)
+4. Default values
+
+This allows you to override settings temporarily via CLI without modifying the config file.
 
 ## Tor Setup
 
@@ -388,19 +399,36 @@ The automated setup configures Tor for localhost access. For Docker deployments,
 
 Now that installation is complete:
 
-### For Makers
+### 1. Configure Your Backend
 
-Read the [Maker Quick Start](./maker/README.md#quick-start) to:
-1. Create a wallet
-2. Fund it with bitcoin
-3. Start earning fees
+Edit `~/.joinmarket-ng/config.toml` to configure your Bitcoin backend (see [Configuration](#configuration) above).
 
-### For Takers
+### 2. Create a Wallet
 
-Read the [Taker Quick Start](./taker/README.md#quick-start) to:
-1. Create a wallet
-2. Fund it with bitcoin
-3. Execute your first CoinJoin
+```bash
+mkdir -p ~/.joinmarket-ng/wallets
+jm-wallet generate --save --prompt-password --output ~/.joinmarket-ng/wallets/wallet.mnemonic
+```
+
+**IMPORTANT**: Write down the displayed mnemonic - it's your only backup!
+
+### 3. Start Using JoinMarket
+
+**For Makers** (earn fees by providing liquidity):
+
+```bash
+jm-maker start -f ~/.joinmarket-ng/wallets/wallet.mnemonic
+```
+
+See [maker/README.md](./maker/README.md) for detailed maker configuration.
+
+**For Takers** (mix your coins for privacy):
+
+```bash
+jm-taker coinjoin -f ~/.joinmarket-ng/wallets/wallet.mnemonic --amount 1000000
+```
+
+See [taker/README.md](./taker/README.md) for detailed taker options.
 
 ### For Developers
 
@@ -456,74 +484,18 @@ You need to install the `python3-venv` package:
 sudo apt install python3-venv
 ```
 
-Then create the virtual environment:
-
-```bash
-python3 -m venv jmvenv
-source jmvenv/bin/activate
-```
-
-### "Permission denied" When Installing
-
-Don't use `sudo` with pip inside a virtual environment. If you see permission errors:
-
-1. Make sure you activated the virtual environment: `source jmvenv/bin/activate`
-2. Your prompt should show `(jmvenv)` at the beginning
-
-### Virtual Environment Not Activating
-
-Make sure you're in the `joinmarket-ng` directory:
-
-```bash
-cd joinmarket-ng
-source jmvenv/bin/activate
-```
-
 ### Installation Takes a Long Time or Times Out
 
-Some dependencies like `coincurve` need to be compiled from source, which can take a few minutes on slower systems like Raspberry Pi. This is normal. If it fails, make sure all system dependencies are installed (see the "Could NOT find PkgConfig" section above).
+Some dependencies like `coincurve` need to be compiled from source, which can take a few minutes on slower systems like Raspberry Pi. This is normal.
 
-### Installation Script Fails
+### curl Command Not Working (curl | bash)
 
-First, check if system dependencies are installed:
-
-```bash
-# Debian/Ubuntu/Raspberry Pi OS
-sudo apt update
-sudo apt install -y git build-essential libffi-dev libsodium-dev pkg-config python3-venv
-
-# macOS
-brew install libsodium pkg-config
-```
-
-If the script was interrupted (e.g., with Ctrl+C), you can simply run it again:
+If piping to bash doesn't work, download and run manually:
 
 ```bash
+curl -o install.sh https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh
+chmod +x install.sh
 ./install.sh
-```
-
-The script is safe to run multiple times and will let you change your component selection.
-
-If the issue persists, try manual installation (see [Manual Installation](#manual-installation) section above).
-
-## Updating
-
-To update to the latest version:
-
-```bash
-cd joinmarket-ng
-source jmvenv/bin/activate
-
-# Pull latest changes
-git pull
-
-# Update dependencies (re-run install script or manual steps)
-./install.sh
-# OR manually:
-cd jmcore && pip install -e . && cd ..
-cd jmwallet && pip install -e . && cd ..
-cd maker && pip install -e . && cd ..  # if using maker
-cd taker && pip install -e . && cd ..  # if using taker
 ```
 
 ## Uninstalling
@@ -531,23 +503,41 @@ cd taker && pip install -e . && cd ..  # if using taker
 To completely remove JoinMarket-NG:
 
 ```bash
-cd joinmarket-ng
-
-# Deactivate virtual environment if active
-deactivate
-
 # Remove virtual environment
-rm -rf jmvenv/
+rm -rf ~/.joinmarket-ng/venv/
 
 # Optionally remove data directory (contains wallets!)
 # rm -rf ~/.joinmarket-ng/
 
-# Remove repository
-cd ..
-rm -rf joinmarket-ng/
+# Remove shell integration from ~/.bashrc or ~/.zshrc if added
 ```
 
 **Warning**: The data directory `~/.joinmarket-ng/` contains your wallets. Make sure you have backups of your mnemonics before deleting!
+
+## Docker Deployment
+
+For advanced users, Docker Compose files are provided in the `maker/` and `taker/` directories. These are useful for:
+- Running in isolated environments
+- Production deployments
+- Testing
+
+To use Docker:
+
+```bash
+# Clone the repository
+git clone https://github.com/m0wer/joinmarket-ng.git
+cd joinmarket-ng
+
+# Start maker with Docker
+cd maker
+docker-compose up -d
+
+# Or taker
+cd ../taker
+docker-compose up -d
+```
+
+See the respective README files for Docker-specific configuration.
 
 ## Getting Help
 

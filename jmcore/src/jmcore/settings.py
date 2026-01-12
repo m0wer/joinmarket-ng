@@ -30,8 +30,8 @@ Usage:
 
 Environment Variable Naming:
     - Use uppercase with underscores
-    - Nested settings use double underscore: TOR__SOCKS_HOST
-    - Common prefix: JM_ (optional, for namespacing)
+    - Nested settings use single underscore: TOR_SOCKS_HOST, BITCOIN_RPC_URL
+    - Maps to TOML sections: TOR_SOCKS_HOST -> [tor] socks_host
 """
 
 from __future__ import annotations
@@ -54,12 +54,15 @@ from jmcore.paths import get_default_data_dir
 # Default directory servers per network
 DEFAULT_DIRECTORY_SERVERS: dict[str, list[str]] = {
     "mainnet": [
-        "qqd6d52tfslos3rhbcq4q2fjqtvyhtafs7ycka26qe6gjmofrpu7upad.onion:5222",
-        "7xbt2jsq2c5mmokrxahqhxz6ulbmo4pqaeyuwqdl7vp52t6qnbncgsyd.onion:5222",
+        "satoshi2vcg5e2ept7tjkzlkpomkobqmgtsjzegg6wipnoajadissead.onion:5222",
+        "coinjointovy3eq5fjygdwpkbcdx63d7vd4g32mw7y553uj3kjjzkiqd.onion:5222",
+        "nakamotourflxwjnjpnrk7yc2nhkf6r62ed4gdfxmmn5f4saw5q5qoyd.onion:5222",
+        "shssats5ucnwdpbticbb4dymjzf2o27tdecpes35ededagjpdmpxm6yd.onion:5222",
+        "odpwaf67rs5226uabcamvypg3y4bngzmfk7255flcdodesqhsvkptaid.onion:5222",
+        "jmv2dirze66rwxsq7xv7frhmaufyicd3yz5if6obtavsskczjkndn6yd.onion:5222",
+        "jmarketxf5wc4aldf3slm5u6726zsky52bqnfv6qyxe5hnafgly6yuyd.onion:5222",
     ],
-    "signet": [
-        "ccs2lsasqb4ygwvxskvw332bqzblhpb7npyv25w4b24amz6xlqcd4yid.onion:5222",
-    ],
+    "signet": [],
     "testnet": [],
     "regtest": [],
 }
@@ -192,7 +195,7 @@ class NotificationSettings(BaseModel):
     )
     urls: list[str] = Field(
         default_factory=list,
-        description="Apprise notification URLs (gotify://, telegram://, etc.)",
+        description='Apprise notification URLs (e.g., ["tgram://bottoken/ChatID", "gotify://hostname/token"])',
     )
     title_prefix: str = Field(
         default="JoinMarket NG",
@@ -423,7 +426,7 @@ class DirectoryServerSettings(BaseModel):
         description="Port for health check endpoint",
     )
     motd: str = Field(
-        default="JoinMarket Directory Server https://github.com/m0wer/joinmarket-ng",
+        default="JoinMarket Directory Server https://github.com/m0wer/joinmarket-ng/tree/master",
         description="Message of the day sent to clients",
     )
 
@@ -487,7 +490,7 @@ class JoinMarketSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="",  # No prefix by default, use env_nested_delimiter for nested
-        env_nested_delimiter="__",
+        env_nested_delimiter="_",
         case_sensitive=False,
         extra="ignore",  # Ignore unknown fields (for forward compatibility)
     )
@@ -637,9 +640,9 @@ def generate_config_template() -> str:
     lines.append("#   3. This config file")
     lines.append("#   4. Built-in defaults")
     lines.append("#")
-    lines.append("# Environment variables use uppercase with double underscore for nesting:")
-    lines.append("#   TOR__SOCKS_HOST=127.0.0.1")
-    lines.append("#   BITCOIN__RPC_URL=http://localhost:8332")
+    lines.append("# Environment variables use uppercase with single underscore for nesting:")
+    lines.append("#   TOR_SOCKS_HOST=127.0.0.1")
+    lines.append("#   BITCOIN_RPC_URL=http://localhost:8332")
     lines.append("#")
     lines.append("")
 
@@ -674,6 +677,14 @@ def generate_config_template() -> str:
             elif isinstance(default, str):
                 value_str = f'"{default}"'
             elif isinstance(default, list):
+                # For directory_servers, show example from defaults
+                if field_name == "directory_servers" and prefix == "network_config":
+                    lines.append("# directory_servers = [")
+                    for server in DEFAULT_DIRECTORY_SERVERS["mainnet"]:
+                        lines.append(f'#   "{server}",')
+                    lines.append("# ]")
+                    lines.append("")
+                    continue
                 value_str = "[]" if not default else str(default).replace("'", '"')
             elif isinstance(default, SecretStr):
                 value_str = '""'
@@ -700,7 +711,7 @@ def generate_config_template() -> str:
     add_section("Tor Proxy Settings", TorSettings, "tor")
     add_section("Tor Control Port Settings", TorControlSettings, "tor_control")
     add_section("Bitcoin Backend Settings", BitcoinSettings, "bitcoin")
-    add_section("Network Settings", NetworkSettings, "network")
+    add_section("Network Settings", NetworkSettings, "network_config")
     add_section("Wallet Settings", WalletSettings, "wallet")
     add_section("Notification Settings", NotificationSettings, "notifications")
     add_section("Logging Settings", LoggingSettings, "logging")

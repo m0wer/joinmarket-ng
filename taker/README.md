@@ -4,21 +4,16 @@ Mix your bitcoin for privacy via CoinJoin. Takers initiate transactions and pay 
 
 ## Installation
 
-See [INSTALL.md](../INSTALL.md) for complete installation instructions including:
-- Automated installation with `install.sh`
-- Virtual environment setup
-- Backend setup (Bitcoin Core or Neutrino)
-- Tor configuration
-
-**Quick install** (if you already have the repo):
+Install JoinMarket-NG with the taker component:
 
 ```bash
-cd joinmarket-ng
-source jmvenv/bin/activate  # If you used install.sh
-# OR create venv: python3 -m venv jmvenv && source jmvenv/bin/activate
-cd taker
-pip install -e ../jmcore ../jmwallet .
+curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash -s -- --taker
 ```
+
+See [INSTALL.md](../INSTALL.md) for complete installation instructions including:
+- Backend setup (Bitcoin Core or Neutrino)
+- Tor configuration
+- Manual installation for developers
 
 ## Quick Start
 
@@ -50,25 +45,26 @@ Send bitcoin to one of the displayed addresses.
 
 #### Option A: Bitcoin Core Full Node (Recommended)
 
-For maximum trustlessness and privacy. Create an environment file to avoid credentials in shell history:
+For maximum trustlessness and privacy. Configure your Bitcoin Core credentials in the config file:
 
 ```bash
-cat > ~/.joinmarket-ng/bitcoin.env << EOF
-export BITCOIN_RPC_URL=http://127.0.0.1:8332
-export BITCOIN_RPC_USER=your_rpc_user
-export BITCOIN_RPC_PASSWORD=your_rpc_password
-EOF
-chmod 600 ~/.joinmarket-ng/bitcoin.env
+nano ~/.joinmarket-ng/config.toml
+```
+
+```toml
+[bitcoin]
+backend_type = "full_node"
+rpc_url = "http://127.0.0.1:8332"
+rpc_user = "your_rpc_user"
+rpc_password = "your_rpc_password"
 ```
 
 Execute CoinJoin:
 
 ```bash
-source ~/.joinmarket-ng/bitcoin.env
 jm-taker coinjoin \
   --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
-  --amount 1000000 \
-  --backend full_node
+  --amount 1000000
 ```
 
 #### Option B: Neutrino Backend
@@ -89,13 +85,20 @@ docker run -d \
 
 **Note**: Pre-built binaries available at [m0wer/neutrino-api releases](https://github.com/m0wer/neutrino-api/releases).
 
+Configure in `~/.joinmarket-ng/config.toml`:
+
+```toml
+[bitcoin]
+backend_type = "neutrino"
+neutrino_url = "http://127.0.0.1:8334"
+```
+
 Mix to next mixdepth (recommended for privacy):
 
 ```bash
 jm-taker coinjoin \
   --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
-  --amount 1000000 \
-  --backend neutrino
+  --amount 1000000
 ```
 
 This mixes 1,000,000 sats (0.01 BTC) to the next mixdepth in your wallet.
@@ -185,6 +188,8 @@ jm-taker tumble schedule.json --mnemonic-file ~/.joinmarket-ng/wallets/taker.mne
 
 ## Configuration
 
+All settings can be configured in `~/.joinmarket-ng/config.toml`. CLI arguments and environment variables override the config file.
+
 ### Default Settings
 
 Sensible defaults for most users:
@@ -192,6 +197,15 @@ Sensible defaults for most users:
 - **Counterparties**: 3 makers
 - **Max absolute fee**: 500 sats per maker
 - **Max relative fee**: 0.1% (0.001)
+
+To customize, add to your config file:
+
+```toml
+[taker]
+counterparty_count = 4
+max_cj_fee_abs = 1000
+max_cj_fee_rel = 0.002
+```
 
 ### Custom Fee Limits
 
