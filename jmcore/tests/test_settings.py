@@ -148,8 +148,8 @@ class TestSettingsFromEnv:
 
     def test_env_override_tor_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that environment variables override Tor settings."""
-        monkeypatch.setenv("TOR_SOCKS_HOST", "tor")
-        monkeypatch.setenv("TOR_SOCKS_PORT", "9150")
+        monkeypatch.setenv("TOR__SOCKS_HOST", "tor")
+        monkeypatch.setenv("TOR__SOCKS_PORT", "9150")
 
         settings = JoinMarketSettings()
 
@@ -158,9 +158,9 @@ class TestSettingsFromEnv:
 
     def test_env_override_bitcoin_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that environment variables override Bitcoin settings."""
-        monkeypatch.setenv("BITCOIN_RPC_URL", "http://bitcoind:8332")
-        monkeypatch.setenv("BITCOIN_RPC_USER", "jm")
-        monkeypatch.setenv("BITCOIN_RPC_PASSWORD", "secret")
+        monkeypatch.setenv("BITCOIN__RPC_URL", "http://bitcoind:8332")
+        monkeypatch.setenv("BITCOIN__RPC_USER", "jm")
+        monkeypatch.setenv("BITCOIN__RPC_PASSWORD", "secret")
 
         settings = JoinMarketSettings()
 
@@ -170,7 +170,7 @@ class TestSettingsFromEnv:
 
     def test_env_override_network_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that environment variables override network settings."""
-        monkeypatch.setenv("NETWORK_CONFIG_NETWORK", "signet")
+        monkeypatch.setenv("NETWORK_CONFIG__NETWORK", "signet")
 
         settings = JoinMarketSettings()
 
@@ -178,9 +178,9 @@ class TestSettingsFromEnv:
 
     def test_env_override_maker_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that environment variables override maker settings."""
-        monkeypatch.setenv("MAKER_MIN_SIZE", "50000")
-        monkeypatch.setenv("MAKER_CJ_FEE_RELATIVE", "0.002")
-        monkeypatch.setenv("MAKER_MERGE_ALGORITHM", "greedy")
+        monkeypatch.setenv("MAKER__MIN_SIZE", "50000")
+        monkeypatch.setenv("MAKER__CJ_FEE_RELATIVE", "0.002")
+        monkeypatch.setenv("MAKER__MERGE_ALGORITHM", "greedy")
 
         settings = JoinMarketSettings()
 
@@ -228,7 +228,7 @@ socks_port = 9055
 """)
 
         # Environment should override TOML
-        monkeypatch.setenv("TOR_SOCKS_HOST", "env-tor")
+        monkeypatch.setenv("TOR__SOCKS_HOST", "env-tor")
 
         settings = JoinMarketSettings()
 

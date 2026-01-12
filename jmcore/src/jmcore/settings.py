@@ -30,8 +30,8 @@ Usage:
 
 Environment Variable Naming:
     - Use uppercase with underscores
-    - Nested settings use single underscore: TOR_SOCKS_HOST, BITCOIN_RPC_URL
-    - Maps to TOML sections: TOR_SOCKS_HOST -> [tor] socks_host
+    - Nested settings use double underscore: TOR__SOCKS_HOST, BITCOIN__RPC_URL
+    - Maps to TOML sections: TOR__SOCKS_HOST -> [tor] socks_host
 """
 
 from __future__ import annotations
@@ -490,7 +490,7 @@ class JoinMarketSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="",  # No prefix by default, use env_nested_delimiter for nested
-        env_nested_delimiter="_",
+        env_nested_delimiter="__",
         case_sensitive=False,
         extra="ignore",  # Ignore unknown fields (for forward compatibility)
     )
@@ -640,9 +640,9 @@ def generate_config_template() -> str:
     lines.append("#   3. This config file")
     lines.append("#   4. Built-in defaults")
     lines.append("#")
-    lines.append("# Environment variables use uppercase with single underscore for nesting:")
-    lines.append("#   TOR_SOCKS_HOST=127.0.0.1")
-    lines.append("#   BITCOIN_RPC_URL=http://localhost:8332")
+    lines.append("# Environment variables use uppercase with double underscore for nesting:")
+    lines.append("#   TOR__SOCKS_HOST=127.0.0.1")
+    lines.append("#   BITCOIN__RPC_URL=http://localhost:8332")
     lines.append("#")
     lines.append("")
 
