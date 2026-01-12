@@ -257,12 +257,14 @@ class TestNextUnusedUnflaggedAddress:
     @pytest.fixture
     def wallet(self, mock_backend, test_mnemonic, test_network):
         """Create a wallet for testing."""
-        return WalletService(
+        wallet = WalletService(
             mnemonic=test_mnemonic,
             backend=mock_backend,
             network=test_network,
             mixdepth_count=5,
         )
+        wallet.utxo_cache = {i: [] for i in range(5)}
+        return wallet
 
     def test_get_next_address_no_history(self, wallet):
         """Test getting next address with no history."""
@@ -270,37 +272,75 @@ class TestNextUnusedUnflaggedAddress:
         assert index == 0
         assert address  # Should return valid address
 
-    def test_get_next_address_skips_used(self, wallet):
-        """Test that used addresses are skipped."""
-        # Get address at index 0
+    def test_get_next_address_starts_after_blockchain_history(self, wallet):
+        """Test that next address starts after the highest used on blockchain."""
+        # Addresses 0 and 1 had blockchain history (received funds, now spent)
         addr_0 = wallet.get_receive_address(0, 0)
         addr_1 = wallet.get_receive_address(0, 1)
         addr_2 = wallet.get_receive_address(0, 2)
+        wallet.addresses_with_history.add(addr_0)
+        wallet.addresses_with_history.add(addr_1)
 
-        # Mark addresses 0 and 1 as used
-        used = {addr_0, addr_1}
+        # Even with empty used_addresses (CoinJoin history), should start at index 2
+        address, index = wallet.get_next_unused_unflagged_address(0, set())
+        assert index == 2
+        assert address == addr_2
 
+    def test_get_next_address_skips_flagged_after_history(self, wallet):
+        """Test that flagged addresses are skipped after the blockchain history index."""
+        # Address 0 had blockchain history
+        addr_0 = wallet.get_receive_address(0, 0)
+        wallet.addresses_with_history.add(addr_0)
+
+        # Address 1 was flagged in a CoinJoin (shared but tx failed)
+        addr_1 = wallet.get_receive_address(0, 1)
+        addr_2 = wallet.get_receive_address(0, 2)
+        used = {addr_1}
+
+        # Should return index 2 (skipping flagged index 1)
         address, index = wallet.get_next_unused_unflagged_address(0, used)
         assert index == 2
         assert address == addr_2
 
     def test_get_next_address_different_mixdepths(self, wallet):
         """Test getting next address from different mixdepths."""
-        # Get some addresses
+        # Mixdepth 0 has used address at index 0
         addr_m0_0 = wallet.get_receive_address(0, 0)
+        wallet.addresses_with_history.add(addr_m0_0)
+
+        # Mixdepth 1 has no history
         addr_m1_0 = wallet.get_receive_address(1, 0)
 
-        # Mark mixdepth 0 address as used
-        used = {addr_m0_0}
-
-        # Mixdepth 0 should skip to index 1
-        addr, idx = wallet.get_next_unused_unflagged_address(0, used)
+        # Mixdepth 0 should be at index 1 (next after used index 0)
+        addr, idx = wallet.get_next_unused_unflagged_address(0, set())
         assert idx == 1
 
         # Mixdepth 1 should still be at index 0
-        addr, idx = wallet.get_next_unused_unflagged_address(1, used)
+        addr, idx = wallet.get_next_unused_unflagged_address(1, set())
         assert idx == 0
         assert addr == addr_m1_0
+
+    def test_get_next_address_with_utxos(self, wallet):
+        """Test that addresses with current UTXOs affect the starting index."""
+        # Address at index 2 has a UTXO
+        addr_2 = wallet.get_receive_address(0, 2)
+        addr_3 = wallet.get_receive_address(0, 3)
+        utxo = UTXOInfo(
+            txid="0" * 64,
+            vout=0,
+            value=100000,
+            address=addr_2,
+            confirmations=6,
+            scriptpubkey="0014" + "00" * 20,
+            path=f"{wallet.root_path}/0'/0/2",
+            mixdepth=0,
+        )
+        wallet.utxo_cache[0] = [utxo]
+
+        # Should return index 3 (next after the UTXO at index 2)
+        address, index = wallet.get_next_unused_unflagged_address(0, set())
+        assert index == 3
+        assert address == addr_3
 
 
 class TestAddressHistoryTypes:

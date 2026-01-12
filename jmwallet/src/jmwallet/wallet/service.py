@@ -1548,13 +1548,18 @@ class WalletService:
         """
         Get the next unused and unflagged receive address for a mixdepth.
 
+        An address is considered "used" if it has blockchain history (received/spent funds).
         An address is considered "flagged" if it was shared with peers in a
         CoinJoin attempt (even if the transaction failed). These should not
         be reused for privacy.
 
+        This method starts from the next index after the highest used address
+        (based on blockchain history, UTXOs, and CoinJoin history), ensuring
+        we never reuse addresses that have been seen on-chain.
+
         Args:
             mixdepth: The mixdepth (account) number
-            used_addresses: Set of addresses that were used/flagged
+            used_addresses: Set of addresses that were used/flagged in CoinJoins
 
         Returns:
             Tuple of (address, index)
@@ -1567,7 +1572,9 @@ class WalletService:
             else:
                 used_addresses = set()
 
-        index = 0
+        # Start from the next address after the highest used one
+        # This accounts for blockchain history, UTXOs, and CoinJoin history
+        index = self.get_next_address_index(mixdepth, 0)  # 0 = external/receive chain
         max_attempts = 1000  # Safety limit
 
         for _ in range(max_attempts):
