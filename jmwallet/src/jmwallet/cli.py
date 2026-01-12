@@ -1122,6 +1122,14 @@ def send(
         bool, typer.Option("--broadcast", help="Broadcast the transaction")
     ] = True,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompt")] = False,
+    select_utxos: Annotated[
+        bool,
+        typer.Option(
+            "--select-utxos",
+            "-s",
+            help="Interactively select UTXOs (fzf-like TUI)",
+        ),
+    ] = False,
     data_dir: Annotated[
         Path | None,
         typer.Option(
@@ -1168,6 +1176,7 @@ def send(
             neutrino_url,
             broadcast,
             yes,
+            select_utxos,
             resolved_bip39_passphrase,
             resolved_data_dir,
         )
@@ -1189,6 +1198,7 @@ async def _send_transaction(
     neutrino_url: str,
     broadcast: bool,
     skip_confirmation: bool,
+    interactive_utxo_selection: bool,
     bip39_passphrase: str = "",
     data_dir: Path | None = None,
 ) -> None:
@@ -1291,26 +1301,40 @@ async def _send_transaction(
         balance = await wallet.get_balance(mixdepth)
         logger.info(f"Mixdepth {mixdepth} balance: {balance:,} sats")
 
-        if amount == 0:
-            # Sweep
-            send_amount = balance
-        else:
-            send_amount = amount
-
-        if send_amount > balance:
-            logger.error(f"Insufficient funds: need {send_amount:,}, have {balance:,}")
-            raise typer.Exit(1)
-
-        # Estimate transaction size for fee calculation
-        # P2WPKH: ~68 vbytes per input, ~31 vbytes per output
+        # Fetch UTXOs early for interactive selection
         utxos = await wallet.get_utxos(mixdepth)
         if not utxos:
             logger.error("No UTXOs available")
             raise typer.Exit(1)
 
-        # Select UTXOs (simple approach: select all, calculate change)
+        # Interactive UTXO selection if requested
+        if interactive_utxo_selection:
+            from jmwallet.utxo_selector import select_utxos_interactive
+
+            try:
+                selected_utxos = select_utxos_interactive(utxos, amount)
+                if not selected_utxos:
+                    logger.info("UTXO selection cancelled")
+                    return
+                utxos = selected_utxos
+                logger.info(f"Selected {len(utxos)} UTXOs")
+            except RuntimeError as e:
+                logger.error(f"Cannot use interactive UTXO selection: {e}")
+                raise typer.Exit(1)
+
+        # Calculate totals based on selected UTXOs
         total_input = sum(u.value for u in utxos)
         num_inputs = len(utxos)
+
+        if amount == 0:
+            # Sweep selected UTXOs
+            send_amount = total_input
+        else:
+            send_amount = amount
+
+        if send_amount > total_input:
+            logger.error(f"Insufficient funds: need {send_amount:,}, have {total_input:,}")
+            raise typer.Exit(1)
 
         # Estimate transaction size
         from jmcore.bitcoin import estimate_vsize, get_address_type

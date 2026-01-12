@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Interactive UTXO Selection TUI**: New `--select-utxos` / `-s` flag for `jm-wallet send` command.
+  - fzf-like curses interface for manually selecting UTXOs
+  - Navigate with arrow keys or j/k, toggle selection with Tab/Space
+  - Shows mixdepth, amount (sats and BTC), confirmations, and outpoint
+  - Visual indicators for timelocked fidelity bond UTXOs
+  - Real-time display of selected total vs target amount
+  - Keyboard shortcuts: a (select all), n (deselect all), g/G (top/bottom)
+
 ### Changed
 
 - **Directory connections now parallel**: Taker and orderbook watcher connect to all directory servers concurrently instead of sequentially.
