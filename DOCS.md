@@ -192,13 +192,13 @@ On first run, the config file is automatically created with all settings comment
 
 ### Environment Variable Mapping
 
-Environment variables use uppercase with double underscore (`__`) for nested settings:
+Environment variables use uppercase with single underscore (`_`) for nested settings:
 
 | Config File | Environment Variable |
 |-------------|---------------------|
-| `[tor]` `socks_host` | `TOR__SOCKS_HOST` |
-| `[bitcoin]` `rpc_url` | `BITCOIN__RPC_URL` |
-| `[maker]` `min_size` | `MAKER__MIN_SIZE` |
+| `[tor]` `socks_host` | `TOR_SOCKS_HOST` |
+| `[bitcoin]` `rpc_url` | `BITCOIN_RPC_URL` |
+| `[maker]` `min_size` | `MAKER_MIN_SIZE` |
 
 ### Configuration Sections
 

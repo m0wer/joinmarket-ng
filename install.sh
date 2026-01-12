@@ -1,10 +1,28 @@
 #!/usr/bin/env bash
 #
 # JoinMarket-NG Installation Script
-# Automated installation with virtual environment setup
+#
+# When piped from curl, auto-confirms Tor setup and other prompts.
+#
+# Usage:
+#   curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash
+#   curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash -s -- --maker
+#   curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash -s -- --update
+#
+# Or run locally:
+#   ./install.sh
+#   ./install.sh --update
+#   ./install.sh --maker --taker
 #
 
 set -e  # Exit on error
+
+# Configuration
+VENV_DIR="${JMNG_VENV_DIR:-$HOME/.joinmarket-ng/venv}"
+DATA_DIR="${JOINMARKET_DATA_DIR:-$HOME/.joinmarket-ng}"
+PYTHON_MIN_VERSION="3.11"
+GITHUB_REPO="m0wer/joinmarket-ng"
+DEFAULT_VERSION="0.9.0"  # Updated on each release
 
 # Colors for output
 RED='\033[0;31m'
@@ -13,17 +31,13 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Configuration
-VENV_DIR="jmvenv"
-PYTHON_MIN_VERSION="3.11"
-
 # Helper functions
 print_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
 }
 
 print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+    echo -e "${GREEN}[OK]${NC} $1"
 }
 
 print_warning() {
@@ -36,10 +50,30 @@ print_error() {
 
 print_header() {
     echo ""
-    echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
-    echo -e "${BLUE}  $1${NC}"
-    echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}=== $1 ===${NC}"
     echo ""
+}
+
+# Detect OS
+detect_os() {
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        OS_TYPE="linux"
+        if command -v apt &> /dev/null; then
+            PKG_MANAGER="apt"
+        elif command -v dnf &> /dev/null; then
+            PKG_MANAGER="dnf"
+        elif command -v pacman &> /dev/null; then
+            PKG_MANAGER="pacman"
+        else
+            PKG_MANAGER="unknown"
+        fi
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        OS_TYPE="macos"
+        PKG_MANAGER="brew"
+    else
+        OS_TYPE="unknown"
+        PKG_MANAGER="unknown"
+    fi
 }
 
 # Check system dependencies
@@ -47,229 +81,78 @@ check_system_dependencies() {
     print_header "Checking System Dependencies"
 
     local missing_deps=()
-    local os_type=""
 
-    # Detect OS
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        os_type="linux"
-        # Check for Debian/Ubuntu-based systems
-        if command -v apt &> /dev/null; then
-            # Check for required build tools
-            if ! dpkg -s build-essential &> /dev/null; then
-                missing_deps+=("build-essential")
-            fi
-            if ! dpkg -s libffi-dev &> /dev/null; then
-                missing_deps+=("libffi-dev")
-            fi
-            if ! dpkg -s libsodium-dev &> /dev/null; then
-                missing_deps+=("libsodium-dev")
-            fi
-            if ! dpkg -s pkg-config &> /dev/null; then
-                missing_deps+=("pkg-config")
-            fi
-            if ! dpkg -s python3-venv &> /dev/null; then
-                missing_deps+=("python3-venv")
-            fi
+    detect_os
+
+    if [[ "$OS_TYPE" == "linux" ]] && [[ "$PKG_MANAGER" == "apt" ]]; then
+        # Debian/Ubuntu/Raspberry Pi OS
+        if ! dpkg -s build-essential &> /dev/null 2>&1; then
+            missing_deps+=("build-essential")
         fi
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        os_type="macos"
-        # Check for Homebrew
+        if ! dpkg -s libffi-dev &> /dev/null 2>&1; then
+            missing_deps+=("libffi-dev")
+        fi
+        if ! dpkg -s libsodium-dev &> /dev/null 2>&1; then
+            missing_deps+=("libsodium-dev")
+        fi
+        if ! dpkg -s pkg-config &> /dev/null 2>&1; then
+            missing_deps+=("pkg-config")
+        fi
+        if ! dpkg -s python3-venv &> /dev/null 2>&1; then
+            missing_deps+=("python3-venv")
+        fi
+        if ! dpkg -s git &> /dev/null 2>&1; then
+            missing_deps+=("git")
+        fi
+    elif [[ "$OS_TYPE" == "macos" ]]; then
         if ! command -v brew &> /dev/null; then
-            print_warning "Homebrew not found. Install from https://brew.sh"
-        else
-            # Check for required packages
-            if ! brew list libsodium &> /dev/null 2>&1; then
-                missing_deps+=("libsodium")
-            fi
-            if ! brew list pkg-config &> /dev/null 2>&1; then
-                missing_deps+=("pkg-config")
-            fi
+            print_error "Homebrew not found. Install from https://brew.sh"
+            exit 1
+        fi
+        if ! brew list libsodium &> /dev/null 2>&1; then
+            missing_deps+=("libsodium")
+        fi
+        if ! brew list pkg-config &> /dev/null 2>&1; then
+            missing_deps+=("pkg-config")
         fi
     fi
 
     if [ ${#missing_deps[@]} -gt 0 ]; then
         print_warning "Missing system dependencies: ${missing_deps[*]}"
         echo ""
-        echo "Please install the required dependencies:"
+        echo "Please install the required dependencies first:"
         echo ""
-        if [[ "$os_type" == "linux" ]]; then
-            echo "  sudo apt update"
-            echo "  sudo apt install -y ${missing_deps[*]}"
-        elif [[ "$os_type" == "macos" ]]; then
+        if [[ "$PKG_MANAGER" == "apt" ]]; then
+            echo "  sudo apt update && sudo apt install -y ${missing_deps[*]}"
+        elif [[ "$PKG_MANAGER" == "brew" ]]; then
             echo "  brew install ${missing_deps[*]}"
         fi
         echo ""
-        read -p "Continue anyway? [y/N] " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            exit 1
-        fi
-    else
-        print_success "All system dependencies are installed"
-    fi
-}
 
-# Check and setup Tor
-setup_tor() {
-    print_header "Setting Up Tor"
-
-    local os_type=""
-    local tor_installed=false
-
-    # Detect OS
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        os_type="linux"
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        os_type="macos"
-    fi
-
-    # Check if Tor is installed
-    if command -v tor &> /dev/null; then
-        tor_installed=true
-        print_success "Tor is already installed"
-    else
-        print_warning "Tor is not installed"
-        echo ""
-        echo "JoinMarket-NG requires Tor for privacy and anonymity."
-        echo ""
-        read -p "Do you want to install Tor now? [Y/n] " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-            print_info "Installing Tor..."
-            if [[ "$os_type" == "linux" ]]; then
-                if command -v apt &> /dev/null; then
-                    sudo apt update
-                    sudo apt install -y tor
-                    tor_installed=true
-                else
-                    print_warning "Automatic Tor installation not supported on this system"
-                    echo "Please install Tor manually and re-run this script"
-                fi
-            elif [[ "$os_type" == "macos" ]]; then
-                if command -v brew &> /dev/null; then
-                    brew install tor
-                    tor_installed=true
-                else
-                    print_warning "Homebrew not found. Please install from https://brew.sh"
-                    echo "Then run: brew install tor"
-                fi
+        if [[ "$AUTO_YES" == "true" ]]; then
+            print_info "Attempting to install dependencies automatically..."
+            if [[ "$PKG_MANAGER" == "apt" ]]; then
+                sudo apt update && sudo apt install -y "${missing_deps[@]}"
+            elif [[ "$PKG_MANAGER" == "brew" ]]; then
+                brew install "${missing_deps[@]}"
             fi
         else
-            print_warning "Skipping Tor installation"
-            echo "You will need to install Tor manually before using JoinMarket-NG"
-            return 0
-        fi
-    fi
-
-    if [ "$tor_installed" = false ]; then
-        print_warning "Tor installation was not completed"
-        return 0
-    fi
-
-    # Configure Tor for JoinMarket use
-    print_info "Configuring Tor for JoinMarket..."
-
-    local torrc_path=""
-    local need_config=false
-
-    # Determine torrc path
-    if [[ "$os_type" == "linux" ]]; then
-        torrc_path="/etc/tor/torrc"
-    elif [[ "$os_type" == "macos" ]]; then
-        if [ -d "$(brew --prefix)/etc/tor" ]; then
-            torrc_path="$(brew --prefix)/etc/tor/torrc"
-        else
-            print_warning "Could not find Tor configuration directory"
-            return 0
-        fi
-    fi
-
-    # Check if torrc exists and if it has the required configuration
-    if [ -f "$torrc_path" ]; then
-        if ! grep -q "^ControlPort 127.0.0.1:9051" "$torrc_path" 2>/dev/null; then
-            need_config=true
-        fi
-    else
-        need_config=true
-    fi
-
-    if [ "$need_config" = true ]; then
-        echo ""
-        echo "Tor needs to be configured with control port access for maker bots"
-        echo "to create ephemeral hidden services."
-        echo ""
-        echo "Required configuration (localhost-only):"
-        echo "  SocksPort 127.0.0.1:9050"
-        echo "  ControlPort 127.0.0.1:9051"
-        echo "  CookieAuthentication 1"
-        echo ""
-        read -p "Do you want to configure Tor now? [Y/n] " -n 1 -r
-        echo
-
-        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-            print_info "Configuring Tor..."
-
-            # Create backup of existing torrc
-            if [ -f "$torrc_path" ]; then
-                sudo cp "$torrc_path" "${torrc_path}.backup.$(date +%Y%m%d_%H%M%S)"
-                print_info "Created backup: ${torrc_path}.backup.$(date +%Y%m%d_%H%M%S)"
-            fi
-
-            # Append JoinMarket configuration
-            sudo bash -c "cat >> $torrc_path" << 'EOF'
-
-## JoinMarket Configuration
-# SOCKS proxy for clients (bound to localhost only)
-SocksPort 127.0.0.1:9050
-
-# Control port for maker bots to create ephemeral hidden services (localhost only)
-ControlPort 127.0.0.1:9051
-CookieAuthentication 1
-EOF
-
-            print_success "Tor configuration updated"
-
-            # Restart Tor to apply changes
-            print_info "Restarting Tor..."
-            if [[ "$os_type" == "linux" ]]; then
-                if command -v systemctl &> /dev/null; then
-                    sudo systemctl restart tor
-                    sudo systemctl enable tor
-                    print_success "Tor restarted and enabled"
-                else
-                    print_warning "Could not restart Tor automatically"
-                    echo "Please restart Tor manually: sudo service tor restart"
+            read -p "Do you want to install them now? [Y/n] " -n 1 -r </dev/tty
+            echo
+            if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+                if [[ "$PKG_MANAGER" == "apt" ]]; then
+                    sudo apt update && sudo apt install -y "${missing_deps[@]}"
+                elif [[ "$PKG_MANAGER" == "brew" ]]; then
+                    brew install "${missing_deps[@]}"
                 fi
-            elif [[ "$os_type" == "macos" ]]; then
-                if brew services list | grep -q "^tor.*started"; then
-                    brew services restart tor
-                else
-                    brew services start tor
-                fi
-                print_success "Tor started"
-            fi
-
-            # Verify Tor is running
-            sleep 2
-            if nc -z 127.0.0.1 9050 2>/dev/null; then
-                print_success "Tor SOCKS proxy is accessible on 127.0.0.1:9050"
             else
-                print_warning "Could not verify Tor SOCKS proxy"
+                print_error "Cannot continue without required dependencies."
+                exit 1
             fi
-
-            if nc -z 127.0.0.1 9051 2>/dev/null; then
-                print_success "Tor control port is accessible on 127.0.0.1:9051"
-            else
-                print_warning "Could not verify Tor control port"
-            fi
-        else
-            print_warning "Skipping Tor configuration"
-            echo ""
-            echo "You will need to manually configure Tor. See INSTALL.md for instructions."
         fi
-    else
-        print_success "Tor is already configured for JoinMarket"
     fi
+
+    print_success "All system dependencies are installed"
 }
 
 # Check Python version
@@ -289,281 +172,468 @@ check_python_version() {
         print_success "Python $PYTHON_VERSION detected (minimum: $PYTHON_MIN_VERSION)"
     else
         print_error "Python $PYTHON_VERSION is too old. Minimum required: $PYTHON_MIN_VERSION"
-        echo ""
-        echo "  For Debian/Ubuntu:"
-        echo "    sudo apt install software-properties-common"
-        echo "    sudo add-apt-repository ppa:deadsnakes/ppa"
-        echo "    sudo apt update"
-        echo "    sudo apt install python3.11 python3.11-venv"
-        echo ""
-        echo "  For macOS:"
-        echo "    brew install python@3.11"
         exit 1
     fi
 }
 
-# Create virtual environment
-create_virtualenv() {
-    print_header "Creating Virtual Environment"
+# Setup Tor
+setup_tor() {
+    print_header "Setting Up Tor"
 
-    if [ -d "$VENV_DIR" ]; then
-        print_warning "Virtual environment already exists at $VENV_DIR"
-        read -p "Do you want to recreate it? This will delete the existing environment. [y/N] " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            print_info "Removing existing virtual environment..."
-            rm -rf "$VENV_DIR"
+    detect_os
+
+    # Check if Tor is installed
+    if command -v tor &> /dev/null; then
+        print_success "Tor is already installed"
+    else
+        print_warning "Tor is not installed"
+        echo ""
+        echo "JoinMarket-NG requires Tor for privacy."
+        echo ""
+
+        if [[ "$AUTO_YES" == "true" ]]; then
+            REPLY="y"
         else
-            print_info "Using existing virtual environment..."
+            read -p "Do you want to install Tor now? [Y/n] " -n 1 -r </dev/tty
+            echo
+        fi
+
+        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+            print_info "Installing Tor..."
+            if [[ "$PKG_MANAGER" == "apt" ]]; then
+                sudo apt update && sudo apt install -y tor
+            elif [[ "$PKG_MANAGER" == "brew" ]]; then
+                brew install tor
+            else
+                print_warning "Please install Tor manually for your system"
+                return 0
+            fi
+        else
+            print_warning "Skipping Tor installation"
             return 0
         fi
     fi
 
-    print_info "Creating virtual environment at $VENV_DIR..."
-    python3 -m venv "$VENV_DIR"
-    print_success "Virtual environment created"
+    # Configure Tor for JoinMarket
+    local torrc_path=""
+    if [[ "$OS_TYPE" == "linux" ]]; then
+        torrc_path="/etc/tor/torrc"
+    elif [[ "$OS_TYPE" == "macos" ]]; then
+        torrc_path="$(brew --prefix 2>/dev/null)/etc/tor/torrc"
+    fi
+
+    if [ -n "$torrc_path" ] && [ -f "$torrc_path" ]; then
+        if ! grep -q "^ControlPort 127.0.0.1:9051" "$torrc_path" 2>/dev/null; then
+            echo ""
+            echo "Tor needs control port configuration for maker bots."
+            echo ""
+
+            if [[ "$AUTO_YES" == "true" ]]; then
+                REPLY="y"
+            else
+                read -p "Configure Tor control port now? [Y/n] " -n 1 -r </dev/tty
+                echo
+            fi
+
+            if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+                sudo cp "$torrc_path" "${torrc_path}.backup.$(date +%Y%m%d_%H%M%S)"
+                sudo bash -c "cat >> $torrc_path" << 'EOF'
+
+## JoinMarket-NG Configuration
+SocksPort 127.0.0.1:9050
+ControlPort 127.0.0.1:9051
+CookieAuthentication 1
+EOF
+                print_success "Tor configured"
+
+                # Restart Tor
+                if [[ "$OS_TYPE" == "linux" ]] && command -v systemctl &> /dev/null; then
+                    sudo systemctl restart tor
+                    sudo systemctl enable tor
+                elif [[ "$OS_TYPE" == "macos" ]]; then
+                    brew services restart tor 2>/dev/null || brew services start tor
+                fi
+            fi
+        else
+            print_success "Tor is already configured for JoinMarket"
+        fi
+    fi
 }
 
-# Activate virtual environment
-activate_virtualenv() {
-    print_info "Activating virtual environment..."
+# Get latest release version from GitHub
+get_latest_version() {
+    if command -v curl &> /dev/null; then
+        curl -sL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>/dev/null | \
+            grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || echo "$DEFAULT_VERSION"
+    else
+        echo "$DEFAULT_VERSION"
+    fi
+}
+
+# Create or update virtual environment
+setup_virtualenv() {
+    print_header "Setting Up Virtual Environment"
+
+    if [ -d "$VENV_DIR" ]; then
+        if [[ "$MODE" == "update" ]]; then
+            print_info "Using existing virtual environment at $VENV_DIR"
+        else
+            print_warning "Virtual environment already exists at $VENV_DIR"
+            if [[ "$AUTO_YES" != "true" ]]; then
+                read -p "Recreate it? (This removes existing packages) [y/N] " -n 1 -r </dev/tty
+                echo
+                if [[ $REPLY =~ ^[Yy]$ ]]; then
+                    print_info "Removing existing virtual environment..."
+                    rm -rf "$VENV_DIR"
+                fi
+            fi
+        fi
+    fi
+
+    if [ ! -d "$VENV_DIR" ]; then
+        print_info "Creating virtual environment at $VENV_DIR..."
+        mkdir -p "$(dirname "$VENV_DIR")"
+        python3 -m venv "$VENV_DIR"
+        print_success "Virtual environment created"
+    fi
+
+    # Activate
     # shellcheck source=/dev/null
     source "$VENV_DIR/bin/activate"
     print_success "Virtual environment activated"
-}
 
-# Upgrade pip
-upgrade_pip() {
+    # Upgrade pip
     print_info "Upgrading pip..."
-    pip install --upgrade pip
-    print_success "pip upgraded"
+    pip install --upgrade pip --quiet
 }
 
-# Install core libraries
-install_core() {
-    print_header "Installing Core Libraries"
+# Install JoinMarket-NG packages from GitHub
+install_packages() {
+    print_header "Installing JoinMarket-NG"
 
+    # Determine version to install
+    if [[ -n "$INSTALL_VERSION" ]]; then
+        VERSION="$INSTALL_VERSION"
+    else
+        VERSION=$(get_latest_version)
+    fi
+
+    print_info "Installing version $VERSION..."
+
+    local git_base="git+https://github.com/${GITHUB_REPO}.git@${VERSION}"
+
+    # Always install core libraries
     print_info "Installing jmcore..."
-    cd jmcore
-    pip install -e .
-    cd ..
+    pip install "${git_base}#subdirectory=jmcore" --quiet
     print_success "jmcore installed"
 
     print_info "Installing jmwallet..."
-    cd jmwallet
-    pip install -e .
-    cd ..
+    pip install "${git_base}#subdirectory=jmwallet" --quiet
     print_success "jmwallet installed"
+
+    # Install selected components
+    if [[ "$INSTALL_MAKER" == "true" ]]; then
+        print_info "Installing maker..."
+        pip install "${git_base}#subdirectory=maker" --quiet
+        print_success "Maker installed"
+    fi
+
+    if [[ "$INSTALL_TAKER" == "true" ]]; then
+        print_info "Installing taker..."
+        pip install "${git_base}#subdirectory=taker" --quiet
+        print_success "Taker installed"
+    fi
+
+    # Verify installation
+    print_info "Verifying installation..."
+    if python3 -c "import jmcore; import jmwallet" 2>/dev/null; then
+        print_success "Core libraries verified"
+    else
+        print_error "Installation verification failed"
+        exit 1
+    fi
 }
 
-# Ask user which components to install
+# Update packages
+update_packages() {
+    print_header "Updating JoinMarket-NG"
+
+    # Get version
+    if [[ -n "$INSTALL_VERSION" ]]; then
+        VERSION="$INSTALL_VERSION"
+    else
+        VERSION=$(get_latest_version)
+    fi
+
+    print_info "Updating to version $VERSION..."
+
+    local git_base="git+https://github.com/${GITHUB_REPO}.git@${VERSION}"
+
+    # Update core libraries
+    print_info "Updating jmcore..."
+    pip install --upgrade "${git_base}#subdirectory=jmcore" --quiet
+    print_success "jmcore updated"
+
+    print_info "Updating jmwallet..."
+    pip install --upgrade "${git_base}#subdirectory=jmwallet" --quiet
+    print_success "jmwallet updated"
+
+    # Update components if installed
+    if pip show jm-maker &> /dev/null; then
+        print_info "Updating maker..."
+        pip install --upgrade "${git_base}#subdirectory=maker" --quiet
+        print_success "Maker updated"
+    fi
+
+    if pip show jm-taker &> /dev/null; then
+        print_info "Updating taker..."
+        pip install --upgrade "${git_base}#subdirectory=taker" --quiet
+        print_success "Taker updated"
+    fi
+
+    print_success "Update complete!"
+}
+
+# Setup data directory and config
+setup_data_directory() {
+    print_header "Setting Up Configuration"
+
+    mkdir -p "$DATA_DIR/wallets"
+    chmod 700 "$DATA_DIR"
+    chmod 700 "$DATA_DIR/wallets"
+
+    # Initialize config file if it doesn't exist
+    local config_file="$DATA_DIR/config.toml"
+    if [ ! -f "$config_file" ]; then
+        print_info "Creating config file at $config_file..."
+
+        # Download config template from repository
+        # Use VERSION if available, otherwise use master branch
+        local version_tag="${VERSION:-master}"
+        local config_template_url="https://raw.githubusercontent.com/$GITHUB_REPO/${version_tag}/config.toml.template"
+        if ! curl -fsSL "$config_template_url" -o "$config_file"; then
+            print_warning "Failed to download config template, using fallback..."
+            # Fallback: create minimal config if download fails
+            cat > "$config_file" << 'EOF'
+# JoinMarket-NG Configuration
+# See: https://github.com/m0wer/joinmarket-ng/blob/master/DOCS.md
+# For full template: https://github.com/m0wer/joinmarket-ng/blob/master/config.toml.template
+
+# [bitcoin]
+# rpc_url = "http://127.0.0.1:8332"
+# rpc_user = ""
+# rpc_password = ""
+EOF
+        fi
+        print_success "Config file created"
+
+        echo ""
+        print_info "Edit $config_file to customize your settings."
+        echo "  Required: Configure the [bitcoin] section (RPC credentials)"
+        echo "  Optional: Review [maker] and [taker] fee/privacy settings"
+        echo "  All options documented with defaults in the config file"
+    else
+        print_info "Config file already exists at $config_file"
+    fi
+}
+
+# Create shell integration script
+create_shell_integration() {
+    print_header "Setting Up Shell Integration"
+
+    local shell_script="$DATA_DIR/activate.sh"
+
+    cat > "$shell_script" << EOF
+# JoinMarket-NG Shell Integration
+# Source this file to activate the environment:
+#   source ~/.joinmarket-ng/activate.sh
+
+export JOINMARKET_DATA_DIR="$DATA_DIR"
+export PATH="$VENV_DIR/bin:\$PATH"
+
+# Optional: Alias for convenience
+alias jm-activate='source "$VENV_DIR/bin/activate"'
+
+echo "JoinMarket-NG environment activated"
+echo "  Data directory: $DATA_DIR"
+echo "  Config file: $DATA_DIR/config.toml"
+EOF
+
+    chmod 644 "$shell_script"
+
+    # Add to shell rc if not already there
+    local shell_rc=""
+    if [ -f "$HOME/.bashrc" ]; then
+        shell_rc="$HOME/.bashrc"
+    elif [ -f "$HOME/.zshrc" ]; then
+        shell_rc="$HOME/.zshrc"
+    fi
+
+    if [ -n "$shell_rc" ]; then
+        local source_line="source \"$shell_script\""
+        if ! grep -q "joinmarket-ng/activate.sh" "$shell_rc" 2>/dev/null; then
+            echo ""
+            if [[ "$AUTO_YES" == "true" ]]; then
+                REPLY="y"
+            else
+                read -p "Add JoinMarket-NG to your shell config ($shell_rc)? [Y/n] " -n 1 -r </dev/tty
+                echo
+            fi
+
+            if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+                echo "" >> "$shell_rc"
+                echo "# JoinMarket-NG" >> "$shell_rc"
+                echo "$source_line" >> "$shell_rc"
+                print_success "Added to $shell_rc"
+            fi
+        fi
+    fi
+}
+
+# Ask user for component selection
 ask_components() {
-    print_header "Component Selection"
+    if [[ "$AUTO_YES" == "true" ]]; then
+        return
+    fi
 
-    echo "Which components would you like to install?"
-    echo ""
-    echo "  1) Maker only (earn fees by providing liquidity)"
-    echo "  2) Taker only (mix your coins for privacy)"
-    echo "  3) Both Maker and Taker"
-    echo "  4) Skip component installation (core libraries only)"
-    echo ""
+    if [[ "$INSTALL_MAKER" == "false" ]] && [[ "$INSTALL_TAKER" == "false" ]]; then
+        print_header "Component Selection"
+        echo "Which components do you want to install?"
+        echo ""
+        echo "  1) Maker only (earn fees by providing liquidity)"
+        echo "  2) Taker only (mix your coins for privacy)"
+        echo "  3) Both Maker and Taker"
+        echo "  4) Core only (libraries only, no CLI tools)"
+        echo ""
 
-    read -p "Enter your choice [1-4]: " -n 1 -r
-    echo
+        read -p "Enter your choice [1-4]: " -n 1 -r </dev/tty
+        echo
 
-    case $REPLY in
-        1)
-            INSTALL_MAKER=true
-            INSTALL_TAKER=false
-            ;;
-        2)
-            INSTALL_MAKER=false
-            INSTALL_TAKER=true
-            ;;
-        3)
-            INSTALL_MAKER=true
-            INSTALL_TAKER=true
-            ;;
-        4)
-            INSTALL_MAKER=false
-            INSTALL_TAKER=false
-            ;;
-        *)
-            print_warning "Invalid choice. Skipping component installation."
-            INSTALL_MAKER=false
-            INSTALL_TAKER=false
-            ;;
-    esac
-}
-
-# Install maker
-install_maker() {
-    print_header "Installing Maker Bot"
-
-    print_info "Installing maker..."
-    cd maker
-    pip install -e .
-    cd ..
-    print_success "Maker bot installed"
-}
-
-# Install taker
-install_taker() {
-    print_header "Installing Taker Bot"
-
-    print_info "Installing taker..."
-    cd taker
-    pip install -e .
-    cd ..
-    print_success "Taker bot installed"
-}
-
-# Ask about development dependencies
-ask_dev_dependencies() {
-    print_header "Development Dependencies"
-
-    echo "Do you want to install development dependencies?"
-    echo "This includes testing tools (pytest, ruff, mypy, etc.)"
-    echo ""
-
-    read -p "Install development dependencies? [y/N] " -n 1 -r
-    echo
-
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        INSTALL_DEV=true
-    else
-        INSTALL_DEV=false
+        case $REPLY in
+            1)
+                INSTALL_MAKER=true
+                INSTALL_TAKER=false
+                ;;
+            2)
+                INSTALL_MAKER=false
+                INSTALL_TAKER=true
+                ;;
+            3)
+                INSTALL_MAKER=true
+                INSTALL_TAKER=true
+                ;;
+            *)
+                INSTALL_MAKER=false
+                INSTALL_TAKER=false
+                ;;
+        esac
     fi
 }
 
-# Install development dependencies
-install_dev_dependencies() {
-    print_header "Installing Development Dependencies"
-
-    print_info "Installing jmcore dev dependencies..."
-    cd jmcore
-    pip install -r requirements-dev.txt
-    cd ..
-
-    print_info "Installing jmwallet dev dependencies..."
-    cd jmwallet
-    pip install -r requirements-dev.txt
-    cd ..
-
-    if [ "$INSTALL_MAKER" = true ]; then
-        print_info "Installing maker dev dependencies..."
-        cd maker
-        pip install -r requirements-dev.txt
-        cd ..
-    fi
-
-    if [ "$INSTALL_TAKER" = true ]; then
-        print_info "Installing taker dev dependencies..."
-        cd taker
-        pip install -r requirements-dev.txt
-        cd ..
-    fi
-
-    print_success "Development dependencies installed"
-}
-
-# Create data directory
-create_data_directory() {
-    print_header "Setting Up Data Directory"
-
-    DATA_DIR="$HOME/.joinmarket-ng"
-
-    if [ -d "$DATA_DIR" ]; then
-        print_info "Data directory already exists at $DATA_DIR"
-    else
-        print_info "Creating data directory at $DATA_DIR..."
-        mkdir -p "$DATA_DIR/wallets"
-        chmod 700 "$DATA_DIR"
-        chmod 700 "$DATA_DIR/wallets"
-        print_success "Data directory created"
-    fi
-}
-
-# Print next steps
-print_next_steps() {
+# Print completion message
+print_completion() {
     print_header "Installation Complete!"
 
-    echo "To start using JoinMarket-NG:"
-    echo ""
-    echo -e "${GREEN}1. Activate the virtual environment:${NC}"
-    echo "   source $VENV_DIR/bin/activate"
+    echo "JoinMarket-NG has been installed to: $VENV_DIR"
+    echo "Configuration directory: $DATA_DIR"
     echo ""
 
-    if [ "$INSTALL_MAKER" = true ] || [ "$INSTALL_TAKER" = true ]; then
-        echo -e "${GREEN}2. Create a wallet:${NC}"
-        echo "   jm-wallet generate --save --prompt-password --output ~/.joinmarket-ng/wallets/wallet.mnemonic"
+    if [[ -f "$HOME/.bashrc" ]] || [[ -f "$HOME/.zshrc" ]]; then
+        echo -e "${GREEN}To get started:${NC}"
+        echo ""
+        echo "  1. Start a new terminal (or run: source ~/.joinmarket-ng/activate.sh)"
+        echo ""
+    else
+        echo -e "${GREEN}To get started:${NC}"
+        echo ""
+        echo "  1. Activate the environment:"
+        echo "     source $VENV_DIR/bin/activate"
         echo ""
     fi
 
-    if [ "$INSTALL_MAKER" = true ]; then
-        echo -e "${GREEN}3. Start the maker bot:${NC}"
-        echo "   See maker/README.md for detailed instructions"
-        echo "   Quick start: jm-maker start --mnemonic-file ~/.joinmarket-ng/wallets/wallet.mnemonic"
-        echo ""
-    fi
-
-    if [ "$INSTALL_TAKER" = true ]; then
-        echo -e "${GREEN}3. Execute a CoinJoin:${NC}"
-        echo "   See taker/README.md for detailed instructions"
-        echo "   Quick start: jm-taker coinjoin --mnemonic-file ~/.joinmarket-ng/wallets/wallet.mnemonic --amount 1000000"
-        echo ""
-    fi
-
-    echo -e "${BLUE}For more information:${NC}"
-    echo "  - Installation guide: INSTALL.md"
-    echo "  - Project README: README.md"
-    echo "  - Architecture docs: DOCS.md"
-    if [ "$INSTALL_MAKER" = true ]; then
-        echo "  - Maker guide: maker/README.md"
-    fi
-    if [ "$INSTALL_TAKER" = true ]; then
-        echo "  - Taker guide: taker/README.md"
-    fi
+    echo "  2. Edit your configuration:"
+    echo "     nano $DATA_DIR/config.toml"
     echo ""
-    echo -e "${YELLOW}IMPORTANT:${NC} You'll need to activate the virtual environment every time"
-    echo -e "you open a new terminal: ${GREEN}source $VENV_DIR/bin/activate${NC}"
+
+    if [[ "$INSTALL_MAKER" == "true" ]] || [[ "$INSTALL_TAKER" == "true" ]]; then
+        echo "  3. Create a wallet:"
+        echo "     jm-wallet generate --save --prompt-password --output $DATA_DIR/wallets/wallet.mnemonic"
+        echo ""
+    fi
+
+    if [[ "$INSTALL_MAKER" == "true" ]]; then
+        echo "  4. Start maker: jm-maker start -f $DATA_DIR/wallets/wallet.mnemonic"
+    fi
+    if [[ "$INSTALL_TAKER" == "true" ]]; then
+        echo "  4. Run CoinJoin: jm-taker coinjoin -f $DATA_DIR/wallets/wallet.mnemonic --amount 1000000"
+    fi
+
+    echo ""
+    echo -e "${BLUE}To update later:${NC}"
+    echo "  curl -sSL https://raw.githubusercontent.com/${GITHUB_REPO}/master/install.sh | bash -s -- --update"
+    echo ""
+    echo -e "${BLUE}Documentation:${NC}"
+    echo "  https://github.com/${GITHUB_REPO}"
+    echo ""
+
+    # Docker hint for advanced users
+    echo -e "${YELLOW}Docker users:${NC} See the docker-compose files in maker/ and taker/ directories."
+    echo "  git clone https://github.com/${GITHUB_REPO}.git && cd joinmarket-ng"
     echo ""
 }
 
 # Show help
 show_help() {
-    cat << EOF
+    cat << 'EOF'
 JoinMarket-NG Installation Script
 
-Usage: $0 [OPTIONS]
+Usage:
+  curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash
+  curl -sSL ... | bash -s -- [OPTIONS]
+  ./install.sh [OPTIONS]
 
 Options:
-  -h, --help              Show this help message
-  -y, --yes               Automatic yes to prompts (install maker and taker)
-  -m, --maker-only        Install maker only
-  -t, --taker-only        Install taker only
-  -c, --core-only         Install core libraries only
-  -d, --dev               Install development dependencies
-  --no-dev                Skip development dependencies (default)
-  --skip-tor              Skip Tor installation and configuration
+  -h, --help          Show this help message
+  -y, --yes           Automatic yes to prompts
+  --update            Update existing installation
+  --maker             Install maker component
+  --taker             Install taker component
+  --version VERSION   Install specific version (default: latest)
+  --dev               Install from main branch (for development)
+  --skip-tor          Skip Tor installation and configuration
+  --venv PATH         Custom virtual environment path
+
+Note: When piped from curl, auto-confirm is enabled by default for Tor
+      configuration and other prompts. Use --skip-tor to skip Tor setup.
 
 Examples:
-  $0                      Interactive installation
-  $0 -y                   Install everything automatically
-  $0 -m                   Install maker only
-  $0 -t -d                Install taker with dev dependencies
-  $0 --skip-tor           Install without setting up Tor
+  # Install (auto-confirms Tor setup when piped)
+  curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash
+
+  # Install maker only, auto-confirm
+  curl -sSL ... | bash -s -- --maker --yes
+
+  # Update existing installation
+  curl -sSL ... | bash -s -- --update
+
+  # Install specific version
+  curl -sSL ... | bash -s -- --version 0.9.0
+
+Environment:
+  JMNG_VENV_DIR       Custom venv path (default: ~/.joinmarket-ng/venv)
+  JOINMARKET_DATA_DIR Custom data directory (default: ~/.joinmarket-ng)
 
 EOF
 }
 
-# Parse command line arguments
+# Parse arguments
 parse_args() {
-    INTERACTIVE=true
+    MODE="install"
     INSTALL_MAKER=false
     INSTALL_TAKER=false
-    INSTALL_DEV=false
+    AUTO_YES=false
     SKIP_TOR=false
+    INSTALL_VERSION=""
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -572,106 +642,105 @@ parse_args() {
                 exit 0
                 ;;
             -y|--yes)
-                INTERACTIVE=false
+                AUTO_YES=true
                 INSTALL_MAKER=true
                 INSTALL_TAKER=true
                 shift
                 ;;
-            -m|--maker-only)
-                INTERACTIVE=false
-                INSTALL_MAKER=true
-                INSTALL_TAKER=false
+            --update)
+                MODE="update"
                 shift
                 ;;
-            -t|--taker-only)
-                INTERACTIVE=false
-                INSTALL_MAKER=false
+            --maker)
+                INSTALL_MAKER=true
+                shift
+                ;;
+            --taker)
                 INSTALL_TAKER=true
                 shift
                 ;;
-            -c|--core-only)
-                INTERACTIVE=false
-                INSTALL_MAKER=false
-                INSTALL_TAKER=false
-                shift
+            --version)
+                INSTALL_VERSION="$2"
+                shift 2
                 ;;
-            -d|--dev)
-                INSTALL_DEV=true
-                shift
-                ;;
-            --no-dev)
-                INSTALL_DEV=false
+            --dev)
+                INSTALL_VERSION="main"
                 shift
                 ;;
             --skip-tor)
                 SKIP_TOR=true
                 shift
                 ;;
+            --venv)
+                VENV_DIR="$2"
+                shift 2
+                ;;
             *)
                 print_error "Unknown option: $1"
-                echo "Use -h or --help for usage information"
+                echo "Use --help for usage information"
                 exit 1
                 ;;
         esac
     done
 }
 
-# Main installation flow
+# Main
 main() {
-    print_header "JoinMarket-NG Installation"
+    echo ""
+    echo -e "${BLUE}JoinMarket-NG Installer${NC}"
+    echo ""
 
-    # Parse arguments
     parse_args "$@"
 
-    # Check system dependencies
+    # If stdin is not a terminal (piped from curl) and no --yes flag, auto-enable yes mode
+    if [[ ! -t 0 ]] && [[ "$AUTO_YES" != "true" ]]; then
+        print_info "Non-interactive mode detected (piped install), enabling auto-confirm"
+        AUTO_YES=true
+        # Don't auto-enable maker/taker in this case - let user specify
+    fi
+
+    # Detect if this is an update
+    if [ -d "$VENV_DIR" ] && [[ "$MODE" != "update" ]]; then
+        print_info "Existing installation detected at $VENV_DIR"
+        if [[ "$AUTO_YES" != "true" ]]; then
+            echo ""
+            read -p "Do you want to update? [Y/n] " -n 1 -r </dev/tty
+            echo
+            if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+                MODE="update"
+            else
+                print_info "Continuing with fresh install (will not remove existing venv)"
+            fi
+        else
+            # In auto mode, default to update if venv exists
+            MODE="update"
+        fi
+    fi
+
+    if [[ "$MODE" == "update" ]]; then
+        # Update mode - minimal checks
+        setup_virtualenv
+        update_packages
+        print_success "JoinMarket-NG updated successfully!"
+        echo ""
+        echo "Restart any running maker/taker processes to use the new version."
+        exit 0
+    fi
+
+    # Fresh install
     check_system_dependencies
 
-    # Setup Tor (unless --skip-tor is used)
-    if [ "$SKIP_TOR" = false ]; then
+    if [[ "$SKIP_TOR" == "false" ]]; then
         setup_tor
-    else
-        print_warning "Skipping Tor setup (--skip-tor flag used)"
     fi
 
-    # Check Python version
     check_python_version
-
-    # Create and activate virtual environment
-    create_virtualenv
-    activate_virtualenv
-
-    # Upgrade pip
-    upgrade_pip
-
-    # Install core libraries
-    install_core
-
-    # Ask which components to install (if interactive)
-    if [ "$INTERACTIVE" = true ]; then
-        ask_components
-        ask_dev_dependencies
-    fi
-
-    # Install selected components
-    if [ "$INSTALL_MAKER" = true ]; then
-        install_maker
-    fi
-
-    if [ "$INSTALL_TAKER" = true ]; then
-        install_taker
-    fi
-
-    # Install dev dependencies if requested
-    if [ "$INSTALL_DEV" = true ]; then
-        install_dev_dependencies
-    fi
-
-    # Create data directory
-    create_data_directory
-
-    # Print next steps
-    print_next_steps
+    ask_components
+    setup_virtualenv
+    install_packages
+    setup_data_directory
+    create_shell_integration
+    print_completion
 }
 
-# Run main
 main "$@"

@@ -4,21 +4,16 @@ Earn fees by providing liquidity for CoinJoin transactions. Makers passively ear
 
 ## Installation
 
-See [INSTALL.md](../INSTALL.md) for complete installation instructions including:
-- Automated installation with `install.sh`
-- Virtual environment setup
-- Backend setup (Bitcoin Core or Neutrino)
-- Tor configuration
-
-**Quick install** (if you already have the repo):
+Install JoinMarket-NG with the maker component:
 
 ```bash
-cd joinmarket-ng
-source jmvenv/bin/activate  # If you used install.sh
-# OR create venv: python3 -m venv jmvenv && source jmvenv/bin/activate
-cd maker
-pip install -e ../jmcore ../jmwallet .
+curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash -s -- --maker
 ```
+
+See [INSTALL.md](../INSTALL.md) for complete installation instructions including:
+- Backend setup (Bitcoin Core or Neutrino)
+- Tor configuration
+- Manual installation for developers
 
 ## Prerequisites
 
@@ -63,24 +58,24 @@ Send bitcoin to displayed addresses. For best results, spread funds across multi
 
 #### Option A: Bitcoin Core Full Node (Recommended)
 
-For maximum trustlessness, privacy, and compatibility with all takers. Create an environment file to avoid credentials in shell history:
+For maximum trustlessness, privacy, and compatibility with all takers. Configure your Bitcoin Core credentials in the config file:
 
 ```bash
-cat > ~/.joinmarket-ng/bitcoin.env << EOF
-export BITCOIN_RPC_URL=http://127.0.0.1:8332
-export BITCOIN_RPC_USER=your_rpc_user
-export BITCOIN_RPC_PASSWORD=your_rpc_password
-EOF
-chmod 600 ~/.joinmarket-ng/bitcoin.env
+nano ~/.joinmarket-ng/config.toml
+```
+
+```toml
+[bitcoin]
+backend_type = "full_node"
+rpc_url = "http://127.0.0.1:8332"
+rpc_user = "your_rpc_user"
+rpc_password = "your_rpc_password"
 ```
 
 Start maker bot:
 
 ```bash
-source ~/.joinmarket-ng/bitcoin.env
-jm-maker start \
-  --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
-  --backend-type full_node
+jm-maker start --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic
 ```
 
 #### Option B: Neutrino Backend
@@ -101,12 +96,18 @@ docker run -d \
 
 **Note**: Pre-built binaries available at [m0wer/neutrino-api releases](https://github.com/m0wer/neutrino-api/releases).
 
+Configure in `~/.joinmarket-ng/config.toml`:
+
+```toml
+[bitcoin]
+backend_type = "neutrino"
+neutrino_url = "http://127.0.0.1:8334"
+```
+
 Start maker bot:
 
 ```bash
-jm-maker start \
-  --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
-  --backend-type neutrino
+jm-maker start --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic
 ```
 
 The bot will:
@@ -119,12 +120,22 @@ The bot will:
 
 ## Configuration
 
+All settings can be configured in `~/.joinmarket-ng/config.toml`. CLI arguments and environment variables override the config file.
+
 ### Default Fee Settings
 
 The defaults are sensible for most users:
 
 - **Fee model**: Relative fees (0.1%)
 - **Minimum size**: 100,000 sats
+
+To customize fees, add to your config file:
+
+```toml
+[maker]
+cj_fee_relative = 0.001   # 0.1% fee
+min_size = 100000         # Minimum CoinJoin size in sats
+```
 
 ### Offer Types and Fees
 

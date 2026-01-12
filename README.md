@@ -206,44 +206,54 @@ Lightweight SPV server using BIP157/158 compact block filters.
 
 ### Installation
 
-**New users**: See [INSTALL.md](./INSTALL.md) for the complete installation guide with automated setup script.
-
-**Quick install** (Linux/macOS):
+**One-line install** (Linux/macOS):
 
 ```bash
-# Install system dependencies first
-# Debian/Ubuntu/Raspberry Pi OS:
-sudo apt update
-sudo apt install -y build-essential libffi-dev libsodium-dev pkg-config python3 python3-venv python3-pip
-
-# macOS:
-# brew install libsodium pkg-config python3
-
-# Clone and install
-git clone https://github.com/m0wer/joinmarket-ng.git
-cd joinmarket-ng
-./install.sh
-source jmvenv/bin/activate
+curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash
 ```
 
-**Manual install** for developers:
+The installer will:
+- Check and install system dependencies (asks for confirmation)
+- Install and configure Tor
+- Create a Python virtual environment
+- Install JoinMarket-NG from the latest release
+- Set up configuration files
+
+**With options:**
 
 ```bash
-# Install system dependencies (see above)
+# Install maker only
+curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash -s -- --maker
 
-# Create virtual environment
-python3 -m venv jmvenv
-source jmvenv/bin/activate
+# Install both maker and taker, auto-confirm prompts
+curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash -s -- --yes
 
-# Install core libraries
-cd jmcore && pip install -e . && cd ..
-cd jmwallet && pip install -e . && cd ..
-
-# Install components (maker/taker/etc.)
-cd maker && pip install -e . && cd ..
+# Install specific version
+curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash -s -- --version 0.9.0
 ```
 
-See [INSTALL.md](./INSTALL.md) for troubleshooting and platform-specific instructions.
+### Updating
+
+```bash
+curl -sSL https://raw.githubusercontent.com/m0wer/joinmarket-ng/master/install.sh | bash -s -- --update
+```
+
+### Configuration
+
+After installation, edit `~/.joinmarket-ng/config.toml` to configure your Bitcoin backend:
+
+```toml
+[bitcoin]
+backend_type = "neutrino"  # or "full_node" for Bitcoin Core
+neutrino_url = "http://127.0.0.1:8334"
+
+# For full_node:
+# rpc_url = "http://127.0.0.1:8332"
+# rpc_user = "your_user"
+# rpc_password = "your_password"
+```
+
+See [INSTALL.md](./INSTALL.md) for the complete installation guide, Docker setup, and troubleshooting.
 
 ### Component Documentation
 

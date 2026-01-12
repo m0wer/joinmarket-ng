@@ -1,0 +1,237 @@
+# JoinMarket-NG Configuration
+# Uncomment and modify settings as needed. Defaults are sensible for most users.
+# See: https://github.com/m0wer/joinmarket-ng/blob/master/DOCS.md
+
+# ============================================================================
+# Core Settings
+# ============================================================================
+
+# [core]
+# data_dir = "~/.joinmarket-ng"  # Default data directory
+
+# ============================================================================
+# Tor Settings
+# ============================================================================
+
+# [tor]
+# socks_host = "127.0.0.1"
+# socks_port = 9050
+
+# [tor_control]
+# enabled = true
+# host = "127.0.0.1"
+# port = 9051
+# cookie_path = "/var/run/tor/control.authcookie"  # Auto-detected if not set
+# password = ""  # Use cookie auth by default
+
+# ============================================================================
+# Bitcoin Backend Settings
+# ============================================================================
+
+# [bitcoin]
+# Backend type: "descriptor_wallet" (default), "full_node", or "neutrino"
+# backend_type = "descriptor_wallet"
+
+# Bitcoin Core RPC settings (for all backend types)
+# rpc_url = "http://127.0.0.1:8332"
+# rpc_user = ""
+# rpc_password = ""
+
+# Neutrino backend settings (only used when backend_type = "neutrino")
+# neutrino_url = "http://127.0.0.1:8334"
+
+# ============================================================================
+# Network Settings
+# ============================================================================
+
+# [network_config]
+# Network: "mainnet", "testnet", "signet", or "regtest"
+# network = "mainnet"
+
+# Optional: Override Bitcoin network (usually same as network)
+# bitcoin_network = "mainnet"
+
+# Directory servers (leave empty to use network defaults)
+# Mainnet defaults (uncomment and modify to override):
+# directory_servers = ["satoshi2vcg5e2ept7tjkzlkpomkobqmgtsjzegg6wipnoajadissead.onion:5222", "coinjointovy3eq5fjygdwpkbcdx63d7vd4g32mw7y553uj3kjjzkiqd.onion:5222", "nakamotourflxwjnjpnrk7yc2nhkf6r62ed4gdfxmmn5f4saw5q5qoyd.onion:5222", "shssats5ucnwdpbticbb4dymjzf2o27tdecpes35ededagjpdmpxm6yd.onion:5222", "odpwaf67rs5226uabcamvypg3y4bngzmfk7255flcdodesqhsvkptaid.onion:5222", "jmv2dirze66rwxsq7xv7frhmaufyicd3yz5if6obtavsskczjkndn6yd.onion:5222", "jmarketxf5wc4aldf3slm5u6726zsky52bqnfv6qyxe5hnafgly6yuyd.onion:5222"]
+
+# ============================================================================
+# Wallet Settings
+# ============================================================================
+
+# [wallet]
+# Number of mixing depths (1-10)
+# mixdepth_count = 5
+
+# Address gap limit for wallet scanning (minimum: 6)
+# gap_limit = 20
+
+# Dust threshold in satoshis
+# dust_threshold = 27300
+
+# Smart wallet scanning optimizations
+# smart_scan = true
+# background_full_rescan = true
+
+# Blocks to look back during wallet scan (~1 year)
+# scan_lookback_blocks = 52560
+
+# ============================================================================
+# Logging Settings
+# ============================================================================
+
+# [logging]
+# Log level: "DEBUG", "INFO", "WARNING", "ERROR"
+# level = "INFO"
+
+# Log sensitive information (private keys, mnemonics, etc.)
+# sensitive = false
+
+# ============================================================================
+# Notification Settings (Apprise integration)
+# ============================================================================
+
+# [notifications]
+# Enable notifications
+# enabled = false
+
+# Apprise notification URLs
+# Examples:
+#   Telegram: "tgram://bottoken/ChatID"
+#   Gotify: "gotify://hostname/token"
+# See: https://github.com/caronc/apprise
+# urls = []
+
+# Notification preferences
+# title_prefix = "JoinMarket NG"
+# include_amounts = true
+# include_txids = false
+# include_nick = true
+# use_tor = true
+
+# Event notifications
+# notify_fill = true
+# notify_rejection = true
+# notify_signing = true
+# notify_mempool = true
+# notify_confirmed = true
+# notify_nick_change = true
+# notify_disconnect = true
+# notify_coinjoin_start = true
+# notify_coinjoin_complete = true
+# notify_coinjoin_failed = true
+# notify_peer_events = false
+# notify_rate_limit = true
+# notify_startup = true
+
+# ============================================================================
+# Maker Settings (Yield Generator)
+# ============================================================================
+
+# [maker]
+# Minimum CoinJoin amount in satoshis
+# min_size = 100000
+
+# Fee settings
+# cj_fee_relative = "0.001"  # 0.001 = 0.1% relative fee
+# cj_fee_absolute = 500      # Absolute fee in satoshis
+# tx_fee_contribution = 0    # Mining fee contribution in satoshis
+
+# Minimum confirmations for UTXOs
+# min_confirmations = 1
+
+# UTXO merge algorithm: "default", "gradual", "greedy", "random"
+# merge_algorithm = "default"
+
+# Timeouts and intervals
+# session_timeout_sec = 300
+# rescan_interval_sec = 600
+
+# Onion service settings
+# onion_serving_host = "127.0.0.1"
+# onion_serving_port = 5222
+# tor_target_host = "127.0.0.1"
+
+# Rate limiting
+# message_rate_limit = 10   # Messages per second
+# message_burst_limit = 100
+
+# ============================================================================
+# Taker Settings (CoinJoin Client)
+# ============================================================================
+
+# [taker]
+# Number of counterparty makers to use (1-20)
+# counterparty_count = 10
+
+# Maximum acceptable fees
+# max_cj_fee_abs = 500        # Absolute fee in satoshis
+# max_cj_fee_rel = "0.001"    # Relative fee (0.001 = 0.1%)
+
+# Transaction fee settings
+# tx_fee_factor = 3.0         # Fee estimation multiplier (minimum: 1.0)
+# fee_block_target = 6        # Target blocks for fee estimation (1-1008, omit to use default)
+
+# Fidelity bond settings
+# bondless_makers_allowance = 0.0  # 0.0-1.0 (0 = require bonds, 1 = allow all)
+# bond_value_exponent = 1.3
+# bondless_require_zero_fee = true
+
+# Timeouts and intervals
+# maker_timeout_sec = 60
+# order_wait_time = 10.0
+# rescan_interval_sec = 600
+
+# Transaction broadcast settings
+# Options: "self", "random-peer", "multiple-peers", "not-self"
+# tx_broadcast = "multiple-peers"
+# broadcast_peer_count = 3
+
+# Minimum number of makers required
+# minimum_makers = 2
+
+# ============================================================================
+# Directory Server Settings
+# ============================================================================
+
+# [directory_server]
+# Server listening address
+# host = "127.0.0.1"
+# port = 5222
+
+# Limits
+# max_peers = 10000
+# max_message_size = 2097152  # 2MB
+
+# Rate limiting
+# message_rate_limit = 500    # Messages per second
+# message_burst_limit = 1000
+
+# Broadcast settings
+# broadcast_batch_size = 50
+
+# Health check endpoint
+# health_check_host = "127.0.0.1"
+# health_check_port = 8080
+
+# Message of the day
+# motd = "JoinMarket Directory Server https://github.com/m0wer/joinmarket-ng/tree/master"
+
+# ============================================================================
+# Orderbook Watcher Settings
+# ============================================================================
+
+# [orderbook_watcher]
+# HTTP API settings
+# http_host = "0.0.0.0"
+# http_port = 8000
+
+# Update interval in seconds
+# update_interval = 60
+
+# Mempool API settings
+# mempool_api_url = "http://mempopwcaqoi7z5xj5zplfdwk5bgzyl3hemx725d4a3agado6xtk3kqd.onion/api"
+# mempool_web_url = "https://mempool.sgn.space"
+
+# Uptime tracking
+# uptime_grace_period = 60    # Seconds
