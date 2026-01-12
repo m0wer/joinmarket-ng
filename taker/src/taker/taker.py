@@ -245,11 +245,36 @@ class MultiDirectoryClient:
 
         return all_offers
 
-    async def send_privmsg(self, recipient: str, command: str, data: str) -> None:
-        """Send a private message via all connected directory servers."""
+    async def send_privmsg(
+        self, recipient: str, command: str, data: str, log_routing: bool = False
+    ) -> None:
+        """Send a private message via all connected directory servers.
+
+        Args:
+            recipient: Target maker nick
+            command: Command name (without ! prefix)
+            data: Command arguments
+            log_routing: If True, log detailed routing information for each directory
+        """
+        # Get maker's direct onion location if available
+        maker_location = None
+        for client in self.clients.values():
+            maker_location = client._active_peers.get(recipient)
+            if maker_location and maker_location != "NOT-SERVING-ONION":
+                break
+
         for client in self.clients.values():
             try:
                 await client.send_private_message(recipient, command, data)
+                if log_routing:
+                    directory = f"{client.host}:{client.port}"
+                    if maker_location and maker_location != "NOT-SERVING-ONION":
+                        logger.debug(
+                            f"Sent !{command} to {recipient} via directory {directory} "
+                            f"(maker onion: {maker_location}, using relay)"
+                        )
+                    else:
+                        logger.debug(f"Sent !{command} to {recipient} via directory {directory}")
             except Exception as e:
                 logger.warning(f"Failed to send privmsg: {e}")
 
@@ -1017,11 +1042,18 @@ class Taker:
                     for nick, session in self.maker_sessions.items():
                         fee = session.offer.calculate_fee(self.cj_amount)
                         bond_value = session.offer.fidelity_bond_value
+                        # Get maker's location from any connected directory
+                        location = None
+                        for client in self.directory_client.clients.values():
+                            location = client._active_peers.get(nick)
+                            if location and location != "NOT-SERVING-ONION":
+                                break
                         maker_details.append(
                             {
                                 "nick": nick,
                                 "fee": fee,
                                 "bond_value": bond_value,
+                                "location": location,
                             }
                         )
 
@@ -1066,6 +1098,18 @@ class Taker:
             # Phase 1: Fill orders (with retry logic for blacklisted commitments)
             self.state = TakerState.FILLING
             logger.info("Phase 1: Sending !fill to makers...")
+            # Log directory routing info
+            directory_count = len(self.directory_client.clients)
+            directories = [
+                f"{client.host}:{client.port}" for client in self.directory_client.clients.values()
+            ]
+            logger.info(
+                f"Routing via {directory_count} director{'y' if directory_count == 1 else 'ies'}: "
+                f"{', '.join(directories)}"
+            )
+            logger.debug(
+                "All messages will be relayed through directory servers (no direct connections)"
+            )
 
             # Fire-and-forget notification for CoinJoin start
             asyncio.create_task(
@@ -1310,8 +1354,7 @@ class Taker:
         # Format: fill <oid> <amount> <taker_pubkey> <commitment>
         for nick, session in self.maker_sessions.items():
             fill_data = f"{session.offer.oid} {self.cj_amount} {taker_pubkey} {commitment_hex}"
-            await self.directory_client.send_privmsg(nick, "fill", fill_data)
-            logger.debug(f"Sent !fill to {nick}")
+            await self.directory_client.send_privmsg(nick, "fill", fill_data, log_routing=True)
 
         # Wait for all !pubkey responses at once
         timeout = self.config.maker_timeout_sec
@@ -1462,7 +1505,9 @@ class Taker:
 
             # Encrypt and send
             encrypted_revelation = session.crypto.encrypt(revelation_str)
-            await self.directory_client.send_privmsg(nick, "auth", encrypted_revelation)
+            await self.directory_client.send_privmsg(
+                nick, "auth", encrypted_revelation, log_routing=True
+            )
 
         # Check if we still have enough makers after filtering incompatible ones
         if len(self.maker_sessions) < self.config.minimum_makers:
@@ -1989,8 +2034,7 @@ class Taker:
                 continue
 
             encrypted_tx = session.crypto.encrypt(tx_b64)
-            await self.directory_client.send_privmsg(nick, "tx", encrypted_tx)
-            logger.debug(f"Sent encrypted !tx to {nick}")
+            await self.directory_client.send_privmsg(nick, "tx", encrypted_tx, log_routing=True)
 
         # Wait for all !sig responses at once
         timeout = self.config.maker_timeout_sec
@@ -2345,8 +2389,7 @@ class Taker:
         async def send_push(nick: str) -> bool:
             """Send !push to a single maker, return True if no exception."""
             try:
-                await self.directory_client.send_privmsg(nick, "push", tx_b64)
-                logger.debug(f"Sent !push to {nick}")
+                await self.directory_client.send_privmsg(nick, "push", tx_b64, log_routing=True)
                 return True
             except Exception as e:
                 logger.warning(f"Failed to send !push to {nick}: {e}")
@@ -2393,7 +2436,7 @@ class Taker:
             logger.info(f"Requesting broadcast via maker: {maker_nick}")
 
             # Send !push to the maker (unencrypted, like reference implementation)
-            await self.directory_client.send_privmsg(maker_nick, "push", tx_b64)
+            await self.directory_client.send_privmsg(maker_nick, "push", tx_b64, log_routing=True)
 
             # Wait and check if the transaction was broadcast
             await asyncio.sleep(2)  # Give maker time to broadcast
