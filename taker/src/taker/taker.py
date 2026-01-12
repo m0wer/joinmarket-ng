@@ -454,6 +454,23 @@ class MakerSession:
     supports_neutrino_compat: bool = False  # Supports extended UTXO metadata for Neutrino
 
 
+@dataclass
+class PhaseResult:
+    """Result from a CoinJoin phase with failed maker tracking.
+
+    Used to communicate phase outcomes and enable maker replacement logic.
+    """
+
+    success: bool
+    failed_makers: list[str] = Field(default_factory=list)
+    blacklist_error: bool = False  # True if any maker rejected due to blacklisted commitment
+
+    @property
+    def needs_replacement(self) -> bool:
+        """True if phase failed due to non-responsive makers (not other errors)."""
+        return not self.success and len(self.failed_makers) > 0
+
+
 class Taker:
     """
     Main Taker class for executing CoinJoin transactions.
@@ -1118,61 +1135,219 @@ class Taker:
                 )
             )
 
-            # Retry loop for blacklisted commitments
+            # Retry loop for blacklisted commitments and maker replacement
             max_podle_retries = self.config.taker_utxo_retries
-            for podle_retry in range(max_podle_retries):
-                fill_success, blacklist_error = await self._phase_fill()
+            max_replacement_attempts = self.config.max_maker_replacement_attempts
+            replacement_attempt = 0
 
-                if fill_success:
+            for podle_retry in range(max_podle_retries):
+                fill_result = await self._phase_fill()
+
+                if fill_result.success:
                     break  # Success, proceed to next phase
 
-                if not blacklist_error:
-                    # Failed for a reason other than blacklist
-                    logger.error("Fill phase failed")
-                    self.state = TakerState.FAILED
-                    return None
+                # Add failed makers to ignore list for potential replacement
+                for failed_nick in fill_result.failed_makers:
+                    self.orderbook_manager.add_ignored_maker(failed_nick)
+                    logger.debug(f"Added {failed_nick} to ignored makers (failed fill)")
 
-                # Commitment was blacklisted - try with a new commitment
-                if podle_retry < max_podle_retries - 1:
-                    logger.warning(
-                        f"Commitment blacklisted, retrying with new NUMS index "
-                        f"(attempt {podle_retry + 2}/{max_podle_retries})..."
-                    )
+                if fill_result.blacklist_error:
+                    # Commitment was blacklisted - try with a new commitment
+                    if podle_retry < max_podle_retries - 1:
+                        logger.warning(
+                            f"Commitment blacklisted, retrying with new NUMS index "
+                            f"(attempt {podle_retry + 2}/{max_podle_retries})..."
+                        )
 
-                    # The current commitment is already marked as used by generate_fresh_commitment
-                    # Generate a new one (will use next index automatically)
-                    self.podle_commitment = self.podle_manager.generate_fresh_commitment(
-                        wallet_utxos=self.preselected_utxos,
-                        cj_amount=self.cj_amount,
-                        private_key_getter=get_private_key,
-                        min_confirmations=self.config.taker_utxo_age,
-                        min_percent=self.config.taker_utxo_amtpercent,
-                        max_retries=self.config.taker_utxo_retries,
-                    )
+                        # The current commitment is already marked as used
+                        # Generate a new one (will use next index automatically)
+                        self.podle_commitment = self.podle_manager.generate_fresh_commitment(
+                            wallet_utxos=self.preselected_utxos,
+                            cj_amount=self.cj_amount,
+                            private_key_getter=get_private_key,
+                            min_confirmations=self.config.taker_utxo_age,
+                            min_percent=self.config.taker_utxo_amtpercent,
+                            max_retries=self.config.taker_utxo_retries,
+                        )
 
-                    if not self.podle_commitment:
-                        logger.error("No more PoDLE commitments available - all indices exhausted")
+                        if not self.podle_commitment:
+                            logger.error(
+                                "No more PoDLE commitments available - all indices exhausted"
+                            )
+                            self.state = TakerState.FAILED
+                            return None
+
+                        # Reset maker sessions for retry (excluding ignored makers)
+                        self.maker_sessions = {
+                            nick: MakerSession(
+                                nick=nick, offer=offer, supports_neutrino_compat=False
+                            )
+                            for nick, offer in selected_offers.items()
+                            if nick not in self.orderbook_manager.ignored_makers
+                        }
+                        continue
+                    else:
+                        logger.error(
+                            f"Fill phase failed after {max_podle_retries} PoDLE commitment attempts"
+                        )
                         self.state = TakerState.FAILED
                         return None
 
-                    # Reset maker sessions for retry
-                    self.maker_sessions = {
-                        nick: MakerSession(nick=nick, offer=offer, supports_neutrino_compat=False)
-                        for nick, offer in selected_offers.items()
-                    }
-                else:
-                    logger.error(
-                        f"Fill phase failed after {max_podle_retries} PoDLE commitment attempts"
+                # Not a blacklist error - try maker replacement if enabled
+                if fill_result.needs_replacement and replacement_attempt < max_replacement_attempts:
+                    replacement_attempt += 1
+                    needed = self.config.minimum_makers - len(self.maker_sessions)
+                    logger.info(
+                        f"Attempting maker replacement (attempt {replacement_attempt}/"
+                        f"{max_replacement_attempts}): need {needed} more makers"
                     )
-                    self.state = TakerState.FAILED
-                    return None
 
-            # Phase 2: Auth and get maker UTXOs
+                    # Select replacement makers from orderbook
+                    replacement_offers, _ = self.orderbook_manager.select_makers(
+                        cj_amount=self.cj_amount,
+                        n=needed,
+                    )
+
+                    if len(replacement_offers) < needed:
+                        logger.error(
+                            f"Not enough replacement makers available: "
+                            f"found {len(replacement_offers)}, need {needed}"
+                        )
+                        self.state = TakerState.FAILED
+                        return None
+
+                    # Add replacement makers to session
+                    for nick, offer in replacement_offers.items():
+                        self.maker_sessions[nick] = MakerSession(
+                            nick=nick, offer=offer, supports_neutrino_compat=False
+                        )
+                        logger.info(f"Added replacement maker: {nick}")
+
+                    # Update selected_offers for potential future retries
+                    selected_offers.update(replacement_offers)
+                    continue
+
+                # Failed and no replacement possible
+                logger.error("Fill phase failed")
+                self.state = TakerState.FAILED
+                return None
+
+            # Phase 2: Auth and get maker UTXOs (with maker replacement)
             self.state = TakerState.AUTHENTICATING
             logger.info("Phase 2: Sending !auth and receiving !ioauth...")
 
-            auth_success = await self._phase_auth()
-            if not auth_success:
+            auth_replacement_attempt = 0
+            while True:
+                auth_result = await self._phase_auth()
+
+                if auth_result.success:
+                    break  # Success, proceed to next phase
+
+                # Add failed makers to ignore list
+                for failed_nick in auth_result.failed_makers:
+                    self.orderbook_manager.add_ignored_maker(failed_nick)
+                    logger.debug(f"Added {failed_nick} to ignored makers (failed auth)")
+
+                # Try maker replacement if enabled
+                if (
+                    auth_result.needs_replacement
+                    and auth_replacement_attempt < max_replacement_attempts
+                ):
+                    auth_replacement_attempt += 1
+                    needed = self.config.minimum_makers - len(self.maker_sessions)
+                    logger.info(
+                        f"Attempting maker replacement in auth phase "
+                        f"(attempt {auth_replacement_attempt}/{max_replacement_attempts}): "
+                        f"need {needed} more makers"
+                    )
+
+                    # Select replacement makers
+                    replacement_offers, _ = self.orderbook_manager.select_makers(
+                        cj_amount=self.cj_amount,
+                        n=needed,
+                    )
+
+                    if len(replacement_offers) < needed:
+                        logger.error(
+                            f"Not enough replacement makers for auth phase: "
+                            f"found {len(replacement_offers)}, need {needed}"
+                        )
+                        self.state = TakerState.FAILED
+                        return None
+
+                    # Add replacement makers - they need to go through fill first
+                    for nick, offer in replacement_offers.items():
+                        self.maker_sessions[nick] = MakerSession(
+                            nick=nick, offer=offer, supports_neutrino_compat=False
+                        )
+                        logger.info(f"Added replacement maker for auth: {nick}")
+
+                    # Run fill phase for new makers only
+                    logger.info("Running fill phase for replacement makers...")
+                    new_maker_nicks = list(replacement_offers.keys())
+
+                    # Send !fill to new makers
+                    if not self.podle_commitment or not self.crypto_session:
+                        logger.error("Missing commitment or crypto session for replacement")
+                        self.state = TakerState.FAILED
+                        return None
+
+                    commitment_hex = self.podle_commitment.to_commitment_str()
+                    taker_pubkey = self.crypto_session.get_pubkey_hex()
+                    for nick in new_maker_nicks:
+                        session = self.maker_sessions[nick]
+                        fill_data = (
+                            f"{session.offer.oid} {self.cj_amount} {taker_pubkey} {commitment_hex}"
+                        )
+                        await self.directory_client.send_privmsg(
+                            nick, "fill", fill_data, log_routing=True
+                        )
+
+                    # Wait for !pubkey responses from new makers
+                    responses = await self.directory_client.wait_for_responses(
+                        expected_nicks=new_maker_nicks,
+                        expected_command="!pubkey",
+                        timeout=self.config.maker_timeout_sec,
+                    )
+
+                    # Process responses for new makers
+                    new_makers_ready = 0
+                    for nick in new_maker_nicks:
+                        if nick in responses and not responses[nick].get("error"):
+                            try:
+                                response_data = responses[nick]["data"].strip()
+                                parts = response_data.split()
+                                if parts:
+                                    nacl_pubkey = parts[0]
+                                    self.maker_sessions[nick].pubkey = nacl_pubkey
+                                    self.maker_sessions[nick].responded_fill = True
+
+                                    # Set up encryption (reuse taker keypair)
+                                    crypto = CryptoSession.__new__(CryptoSession)
+                                    crypto.keypair = self.crypto_session.keypair
+                                    crypto.box = None
+                                    crypto.counterparty_pubkey = ""
+                                    crypto.setup_encryption(nacl_pubkey)
+                                    self.maker_sessions[nick].crypto = crypto
+                                    new_makers_ready += 1
+                                    logger.debug(f"Replacement maker {nick} ready")
+                            except Exception as e:
+                                logger.warning(f"Failed to process {nick}: {e}")
+                                del self.maker_sessions[nick]
+                        else:
+                            logger.warning(f"Replacement maker {nick} didn't respond")
+                            if nick in self.maker_sessions:
+                                del self.maker_sessions[nick]
+
+                    if new_makers_ready == 0:
+                        logger.error("No replacement makers responded to fill")
+                        self.state = TakerState.FAILED
+                        return None
+
+                    # Continue to retry auth with all makers
+                    continue
+
+                # Failed and no replacement possible
                 logger.error("Auth phase failed")
                 self.state = TakerState.FAILED
                 return None
@@ -1334,16 +1509,14 @@ class Taker:
             self.state = TakerState.FAILED
             return None
 
-    async def _phase_fill(self) -> tuple[bool, bool]:
+    async def _phase_fill(self) -> PhaseResult:
         """Send !fill to all selected makers and wait for !pubkey responses.
 
         Returns:
-            Tuple of (success, blacklist_error):
-            - success: True if fill phase succeeded with enough makers
-            - blacklist_error: True if any maker rejected with "blacklisted" error
+            PhaseResult with success status, failed makers list, and blacklist flag.
         """
         if not self.podle_commitment:
-            return (False, False)
+            return PhaseResult(success=False)
 
         # Create a new crypto session for this CoinJoin
         self.crypto_session = CryptoSession()
@@ -1366,7 +1539,8 @@ class Taker:
             timeout=timeout,
         )
 
-        # Track if any maker rejected due to blacklisted commitment
+        # Track failed makers and blacklist errors
+        failed_makers: list[str] = []
         blacklist_error = False
 
         # Process responses
@@ -1385,6 +1559,7 @@ class Taker:
                         logger.warning(
                             f"Commitment was blacklisted by {nick} - may need retry with new index"
                         )
+                    failed_makers.append(nick)
                     del self.maker_sessions[nick]
                     continue
 
@@ -1423,24 +1598,35 @@ class Taker:
                         )
                     else:
                         logger.warning(f"Empty !pubkey response from {nick}")
+                        failed_makers.append(nick)
                         del self.maker_sessions[nick]
                 except Exception as e:
                     logger.warning(f"Invalid !pubkey response from {nick}: {e}")
+                    failed_makers.append(nick)
                     del self.maker_sessions[nick]
             else:
                 logger.warning(f"No !pubkey response from {nick}")
+                failed_makers.append(nick)
                 del self.maker_sessions[nick]
 
         if len(self.maker_sessions) < self.config.minimum_makers:
             logger.error(f"Not enough makers responded: {len(self.maker_sessions)}")
-            return (False, blacklist_error)
+            return PhaseResult(
+                success=False, failed_makers=failed_makers, blacklist_error=blacklist_error
+            )
 
-        return (True, blacklist_error)
+        return PhaseResult(
+            success=True, failed_makers=failed_makers, blacklist_error=blacklist_error
+        )
 
-    async def _phase_auth(self) -> bool:
-        """Send !auth with PoDLE proof and wait for !ioauth responses."""
+    async def _phase_auth(self) -> PhaseResult:
+        """Send !auth with PoDLE proof and wait for !ioauth responses.
+
+        Returns:
+            PhaseResult with success status and failed makers list.
+        """
         if not self.podle_commitment:
-            return False
+            return PhaseResult(success=False)
 
         # Send !auth to each maker with format based on their feature support.
         # - Makers with neutrino_compat: MUST receive extended format
@@ -1509,13 +1695,16 @@ class Taker:
                 nick, "auth", encrypted_revelation, log_routing=True
             )
 
+        # Track makers filtered due to incompatibility (not the same as failed)
+        incompatible_makers: list[str] = []
+
         # Check if we still have enough makers after filtering incompatible ones
         if len(self.maker_sessions) < self.config.minimum_makers:
             logger.error(
                 f"Not enough compatible makers: {len(self.maker_sessions)} "
                 f"< {self.config.minimum_makers}. Neutrino takers require neutrino_compat."
             )
-            return False
+            return PhaseResult(success=False, failed_makers=incompatible_makers)
 
         # Wait for all !ioauth responses at once
         timeout = self.config.maker_timeout_sec
@@ -1526,6 +1715,9 @@ class Taker:
             expected_command="!ioauth",
             timeout=timeout,
         )
+
+        # Track failed makers for potential replacement
+        failed_makers: list[str] = []
 
         # Process responses
         # Maker sends !ioauth as ENCRYPTED space-separated:
@@ -1540,6 +1732,7 @@ class Taker:
                     session = self.maker_sessions[nick]
                     if session.crypto is None:
                         logger.warning(f"No encryption session for {nick}")
+                        failed_makers.append(nick)
                         del self.maker_sessions[nick]
                         continue
 
@@ -1548,6 +1741,7 @@ class Taker:
                     parts = response_data.split()
                     if not parts:
                         logger.warning(f"Empty !ioauth response from {nick}")
+                        failed_makers.append(nick)
                         del self.maker_sessions[nick]
                         continue
 
@@ -1564,6 +1758,7 @@ class Taker:
                             f"Invalid !ioauth format from {nick}: expected 5 parts, "
                             f"got {len(ioauth_parts)}"
                         )
+                        failed_makers.append(nick)
                         del self.maker_sessions[nick]
                         continue
 
@@ -1693,16 +1888,18 @@ class Taker:
                     )
                 except Exception as e:
                     logger.warning(f"Invalid !ioauth response from {nick}: {e}")
+                    failed_makers.append(nick)
                     del self.maker_sessions[nick]
             else:
                 logger.warning(f"No !ioauth response from {nick}")
+                failed_makers.append(nick)
                 del self.maker_sessions[nick]
 
         if len(self.maker_sessions) < self.config.minimum_makers:
             logger.error(f"Not enough makers sent UTXOs: {len(self.maker_sessions)}")
-            return False
+            return PhaseResult(success=False, failed_makers=failed_makers)
 
-        return True
+        return PhaseResult(success=True, failed_makers=failed_makers)
 
     def _parse_utxos(self, utxos_dict: dict[str, Any]) -> list[dict[str, Any]]:
         """Parse UTXO data from !ioauth response."""

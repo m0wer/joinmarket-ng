@@ -584,3 +584,128 @@ async def test_message_encryption_roundtrip():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# --- Tests for PhaseResult and Maker Replacement Logic ---
+
+
+class TestPhaseResult:
+    """Tests for PhaseResult dataclass."""
+
+    def test_phase_result_success(self):
+        """Test successful phase result."""
+        from taker.taker import PhaseResult
+
+        result = PhaseResult(success=True)
+        assert result.success
+        assert result.failed_makers == []
+        assert not result.blacklist_error
+        assert not result.needs_replacement
+
+    def test_phase_result_failure_with_failed_makers(self):
+        """Test failed phase result with failed makers."""
+        from taker.taker import PhaseResult
+
+        result = PhaseResult(
+            success=False, failed_makers=["maker1", "maker2"], blacklist_error=False
+        )
+        assert not result.success
+        assert result.failed_makers == ["maker1", "maker2"]
+        assert not result.blacklist_error
+        assert result.needs_replacement  # Has failed makers, so needs replacement
+
+    def test_phase_result_blacklist_error(self):
+        """Test phase result with blacklist error."""
+        from taker.taker import PhaseResult
+
+        result = PhaseResult(success=False, failed_makers=["maker1"], blacklist_error=True)
+        assert not result.success
+        assert result.blacklist_error
+        assert result.needs_replacement
+
+    def test_phase_result_success_with_some_failures(self):
+        """Test successful phase even with some failed makers (but enough remaining)."""
+        from taker.taker import PhaseResult
+
+        # Success can have failed makers if enough responded
+        result = PhaseResult(success=True, failed_makers=["maker1"])
+        assert result.success
+        assert result.failed_makers == ["maker1"]
+        # Even though we have failed makers, we don't need replacement since we succeeded
+        assert not result.needs_replacement
+
+
+class TestMakerReplacementConfig:
+    """Tests for maker replacement configuration."""
+
+    def test_max_maker_replacement_default(self):
+        """Test default max_maker_replacement_attempts value."""
+        from jmcore.models import NetworkType
+
+        from taker.config import TakerConfig
+
+        config = TakerConfig(
+            mnemonic="abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon abandon abandon about",
+            network=NetworkType.REGTEST,
+            directory_servers=["localhost:5222"],
+        )
+        assert config.max_maker_replacement_attempts == 3
+
+    def test_max_maker_replacement_custom(self):
+        """Test custom max_maker_replacement_attempts value."""
+        from jmcore.models import NetworkType
+
+        from taker.config import TakerConfig
+
+        config = TakerConfig(
+            mnemonic="abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon abandon abandon about",
+            network=NetworkType.REGTEST,
+            directory_servers=["localhost:5222"],
+            max_maker_replacement_attempts=5,
+        )
+        assert config.max_maker_replacement_attempts == 5
+
+    def test_max_maker_replacement_disabled(self):
+        """Test disabled maker replacement (set to 0)."""
+        from jmcore.models import NetworkType
+
+        from taker.config import TakerConfig
+
+        config = TakerConfig(
+            mnemonic="abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon abandon abandon about",
+            network=NetworkType.REGTEST,
+            directory_servers=["localhost:5222"],
+            max_maker_replacement_attempts=0,
+        )
+        assert config.max_maker_replacement_attempts == 0
+
+    def test_max_maker_replacement_bounds(self):
+        """Test max_maker_replacement_attempts bounds validation."""
+        from jmcore.models import NetworkType
+
+        from taker.config import TakerConfig
+
+        # Should accept max value of 10
+        config = TakerConfig(
+            mnemonic="abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon abandon abandon about",
+            network=NetworkType.REGTEST,
+            directory_servers=["localhost:5222"],
+            max_maker_replacement_attempts=10,
+        )
+        assert config.max_maker_replacement_attempts == 10
+
+        # Should reject value > 10
+        import pytest
+
+        with pytest.raises(ValueError):
+            TakerConfig(
+                mnemonic="abandon abandon abandon abandon abandon abandon "
+                "abandon abandon abandon abandon abandon about",
+                network=NetworkType.REGTEST,
+                directory_servers=["localhost:5222"],
+                max_maker_replacement_attempts=11,
+            )
