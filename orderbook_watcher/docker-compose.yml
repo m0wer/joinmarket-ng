@@ -5,15 +5,15 @@ services:
       dockerfile: orderbook_watcher/Dockerfile
     container_name: joinmarket_orderbook_watcher
     environment:
-      - NETWORK=mainnet
+      - NETWORK_CONFIG__NETWORK=mainnet
       - DIRECTORY_NODES=satoshi2vcg5e2ept7tjkzlkpomkobqmgtsjzegg6wipnoajadissead.onion:5222,coinjointovy3eq5fjygdwpkbcdx63d7vd4g32mw7y553uj3kjjzkiqd.onion:5222,nakamotourflxwjnjpnrk7yc2nhkf6r62ed4gdfxmmn5f4saw5q5qoyd.onion:5222,shssats5ucnwdpbticbb4dymjzf2o27tdecpes35ededagjpdmpxm6yd.onion:5222,odpwaf67rs5226uabcamvypg3y4bngzmfk7255flcdodesqhsvkptaid.onion:5222,jmv2dirze66rwxsq7xv7frhmaufyicd3yz5if6obtavsskczjkndn6yd.onion:5222,jmarketxf5wc4aldf3slm5u6726zsky52bqnfv6qyxe5hnafgly6yuyd.onion:5222
-      - TOR_SOCKS_HOST=tor
-      - TOR_SOCKS_PORT=9050
-      - MEMPOOL_API_URL=https://mempool.sgn.space/api
-      - HTTP_HOST=0.0.0.0
-      - HTTP_PORT=8000
-      - UPDATE_INTERVAL=60
-      - LOG_LEVEL=INFO
+      - TOR__SOCKS_HOST=tor
+      - TOR__SOCKS_PORT=9050
+      - ORDERBOOK_WATCHER__MEMPOOL_API_URL=https://mempool.sgn.space/api
+      - ORDERBOOK_WATCHER__HTTP_HOST=0.0.0.0
+      - ORDERBOOK_WATCHER__HTTP_PORT=8000
+      - ORDERBOOK_WATCHER__UPDATE_INTERVAL=60
+      - LOGGING__LEVEL=INFO
     ports:
       - "8000:8000"
     networks:

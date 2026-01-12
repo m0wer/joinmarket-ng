@@ -120,10 +120,10 @@ services:
         max-size: "50m"
         max-file: "5"
     environment:
-      - NETWORK=testnet
-      - LOG_LEVEL=DEBUG
-      - PORT=5222
-      - HOST=0.0.0.0
+      - NETWORK_CONFIG__NETWORK=testnet
+      - LOGGING__LEVEL=DEBUG
+      - DIRECTORY_SERVER__PORT=5222
+      - DIRECTORY_SERVER__HOST=0.0.0.0
     ports:
       - "5222:5222"
     networks:
@@ -137,7 +137,7 @@ services:
       bitcoin:
         condition: service_healthy
 
-  # Second directory server for testing multi-directory scenarios
+    # Second directory server for testing multi-directory scenarios
   # This helps test:
   # - Message deduplication when receiving from multiple directories
   # - Rate limiting with legitimate duplicates
@@ -155,10 +155,10 @@ services:
         max-size: "50m"
         max-file: "5"
     environment:
-      - NETWORK=testnet
-      - LOG_LEVEL=DEBUG
-      - PORT=5223
-      - HOST=0.0.0.0
+      - NETWORK_CONFIG__NETWORK=testnet
+      - LOGGING__LEVEL=DEBUG
+      - DIRECTORY_SERVER__PORT=5223
+      - DIRECTORY_SERVER__HOST=0.0.0.0
     ports:
       - "5223:5223"
     networks:
@@ -191,8 +191,8 @@ services:
         max-size: "50m"
         max-file: "5"
     environment:
-      - NETWORK=testnet
-      - LOG_LEVEL=DEBUG
+      - NETWORK_CONFIG__NETWORK=testnet
+      - LOGGING__LEVEL=DEBUG
       - DIRECTORY_NODES=jm-directory:5222
     ports:
       - "8080:8000"
@@ -202,7 +202,7 @@ services:
       directory:
         condition: service_healthy
 
-  # ============================================================================
+# ============================================================================
   # Maker Bot (profile: maker)
   # ============================================================================
 
@@ -212,6 +212,7 @@ services:
       context: .
       dockerfile: maker/Dockerfile
     container_name: jm-maker
+    command: ["jm-maker", "start"]
     restart: "no"
     logging:
       driver: json-file
@@ -220,17 +221,17 @@ services:
         max-file: "5"
     environment:
       - MNEMONIC=${MAKER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
-      - NETWORK=testnet
-      - BITCOIN_NETWORK=regtest
-      - BACKEND_TYPE=descriptor_wallet
-      - BITCOIN_RPC_URL=http://jm-bitcoin:18443
-      - BITCOIN_RPC_USER=test
-      - BITCOIN_RPC_PASSWORD=test
+      - NETWORK_CONFIG__NETWORK=testnet
+      - NETWORK_CONFIG__BITCOIN_NETWORK=regtest
+      - BITCOIN__BACKEND_TYPE=descriptor_wallet
+      - BITCOIN__RPC_URL=http://jm-bitcoin:18443
+      - BITCOIN__RPC_USER=test
+      - BITCOIN__RPC_PASSWORD=test
       - DIRECTORY_SERVERS=jm-directory:5222
-      - LOG_LEVEL=DEBUG
-      - MIN_SIZE=10000
-      - TX_FEE_CONTRIBUTION=500
-      - CJ_FEE_RELATIVE=0.001
+      - LOGGING__LEVEL=DEBUG
+      - MAKER__MIN_SIZE=10000
+      - MAKER__TX_FEE_CONTRIBUTION=500
+      - MAKER__CJ_FEE_RELATIVE=0.001
     volumes:
       - maker-data:/home/jm/.joinmarket-ng
     networks:
@@ -261,18 +262,18 @@ services:
         max-file: "5"
     environment:
       - MNEMONIC=${TAKER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
-      - NETWORK=testnet
-      - BITCOIN_NETWORK=regtest
-      - BACKEND_TYPE=descriptor_wallet
-      - BITCOIN_RPC_URL=http://jm-bitcoin:18443
-      - BITCOIN_RPC_USER=test
-      - BITCOIN_RPC_PASSWORD=test
+      - NETWORK_CONFIG__NETWORK=testnet
+      - NETWORK_CONFIG__BITCOIN_NETWORK=regtest
+      - BITCOIN__BACKEND_TYPE=descriptor_wallet
+      - BITCOIN__RPC_URL=http://jm-bitcoin:18443
+      - BITCOIN__RPC_USER=test
+      - BITCOIN__RPC_PASSWORD=test
       - DIRECTORY_SERVERS=jm-directory:5222
-      - LOG_LEVEL=DEBUG
+      - LOGGING__LEVEL=DEBUG
       - COINJOIN_AMOUNT=1000000
-      - MIN_MAKERS=2
-      - MAX_CJ_FEE_REL=0.01
-      - MAX_CJ_FEE_ABS=10000
+      - TAKER__MINIMUM_MAKERS=2
+      - TAKER__MAX_CJ_FEE_REL=0.01
+      - TAKER__MAX_CJ_FEE_ABS=10000
     volumes:
       - taker-data:/home/jm/.joinmarket-ng
     networks:
@@ -327,6 +328,7 @@ services:
       context: .
       dockerfile: maker/Dockerfile
     container_name: jm-maker1
+    command: ["jm-maker", "start", "--fidelity-bond-locktime", "4099766400"]
     restart: unless-stopped
     logging:
       driver: json-file
@@ -335,27 +337,27 @@ services:
         max-file: "5"
     environment:
       - MNEMONIC=avoid whisper mesh corn already blur sudden fine planet chicken hover sniff
-      - NETWORK=testnet
-      - BITCOIN_NETWORK=regtest
-      - BACKEND_TYPE=descriptor_wallet
-      - BITCOIN_RPC_URL=http://jm-bitcoin:18443
-      - BITCOIN_RPC_USER=test
-      - BITCOIN_RPC_PASSWORD=test
+      - NETWORK_CONFIG__NETWORK=testnet
+      - NETWORK_CONFIG__BITCOIN_NETWORK=regtest
+      - BITCOIN__BACKEND_TYPE=descriptor_wallet
+      - BITCOIN__RPC_URL=http://jm-bitcoin:18443
+      - BITCOIN__RPC_USER=test
+      - BITCOIN__RPC_PASSWORD=test
       - DIRECTORY_SERVERS=jm-directory:5222,jm-directory2:5223
-      - LOG_LEVEL=DEBUG
-      - MIN_SIZE=10000
-      - TX_FEE_CONTRIBUTION=500
-      - CJ_FEE_RELATIVE=0.0003
+      - LOGGING__LEVEL=DEBUG
+      - MAKER__MIN_SIZE=10000
+      - MAKER__TX_FEE_CONTRIBUTION=500
+      - MAKER__CJ_FEE_RELATIVE=0.0003
       # Fidelity bond configuration (manual specification without registry)
-      - FIDELITY_BOND_LOCKTIMES=4099766400
+      - MAKER__FIDELITY_BOND_LOCKTIMES=4099766400
       - FIDELITY_BOND_INDEX=0
       # Tor configuration for direct connections
-      - TOR_SOCKS_HOST=jm-tor
-      - TOR_SOCKS_PORT=9050
+      - TOR__SOCKS_HOST=jm-tor
+      - TOR__SOCKS_PORT=9050
       - TOR_CONTROL_HOST=jm-tor
       - TOR_CONTROL_PORT=9051
-      - ONION_SERVING_HOST=0.0.0.0
-      - ONION_SERVING_PORT=5000
+      - MAKER__ONION_SERVING_HOST=0.0.0.0
+      - MAKER__ONION_SERVING_PORT=5000
     volumes:
       - maker1-data:/home/jm/.joinmarket-ng
     networks:
@@ -384,6 +386,7 @@ services:
       context: .
       dockerfile: maker/Dockerfile
     container_name: jm-maker2
+    command: ["jm-maker", "start"]
     restart: unless-stopped
     logging:
       driver: json-file
@@ -392,24 +395,24 @@ services:
         max-file: "5"
     environment:
       - MNEMONIC=minute faint grape plate stock mercy tent world space opera apple rocket
-      - NETWORK=testnet
-      - BITCOIN_NETWORK=regtest
-      - BACKEND_TYPE=descriptor_wallet
-      - BITCOIN_RPC_URL=http://jm-bitcoin:18443
-      - BITCOIN_RPC_USER=test
-      - BITCOIN_RPC_PASSWORD=test
+      - NETWORK_CONFIG__NETWORK=testnet
+      - NETWORK_CONFIG__BITCOIN_NETWORK=regtest
+      - BITCOIN__BACKEND_TYPE=descriptor_wallet
+      - BITCOIN__RPC_URL=http://jm-bitcoin:18443
+      - BITCOIN__RPC_USER=test
+      - BITCOIN__RPC_PASSWORD=test
       - DIRECTORY_SERVERS=jm-directory:5222,jm-directory2:5223
-      - LOG_LEVEL=DEBUG
-      - MIN_SIZE=10000
-      - TX_FEE_CONTRIBUTION=500
-      - CJ_FEE_RELATIVE=0.00025
+      - LOGGING__LEVEL=DEBUG
+      - MAKER__MIN_SIZE=10000
+      - MAKER__TX_FEE_CONTRIBUTION=500
+      - MAKER__CJ_FEE_RELATIVE=0.00025
       # Tor configuration for direct connections
-      - TOR_SOCKS_HOST=jm-tor
-      - TOR_SOCKS_PORT=9050
+      - TOR__SOCKS_HOST=jm-tor
+      - TOR__SOCKS_PORT=9050
       - TOR_CONTROL_HOST=jm-tor
       - TOR_CONTROL_PORT=9051
-      - ONION_SERVING_HOST=0.0.0.0
-      - ONION_SERVING_PORT=5000
+      - MAKER__ONION_SERVING_HOST=0.0.0.0
+      - MAKER__ONION_SERVING_PORT=5000
     volumes:
       - maker2-data:/home/jm/.joinmarket-ng
     networks:
@@ -440,6 +443,7 @@ services:
       context: .
       dockerfile: maker/Dockerfile
     container_name: jm-maker3
+    command: ["jm-maker", "start"]
     restart: unless-stopped
     logging:
       driver: json-file
@@ -448,25 +452,25 @@ services:
         max-file: "5"
     environment:
       - MNEMONIC=echo rural present blue chapter game keen keen keen keen keen keen
-      - NETWORK=testnet
-      - BITCOIN_NETWORK=regtest
-      - BACKEND_TYPE=descriptor_wallet
-      - BITCOIN_RPC_URL=http://jm-bitcoin:18443
-      - BITCOIN_RPC_USER=test
-      - BITCOIN_RPC_PASSWORD=test
+      - NETWORK_CONFIG__NETWORK=testnet
+      - NETWORK_CONFIG__BITCOIN_NETWORK=regtest
+      - BITCOIN__BACKEND_TYPE=descriptor_wallet
+      - BITCOIN__RPC_URL=http://jm-bitcoin:18443
+      - BITCOIN__RPC_USER=test
+      - BITCOIN__RPC_PASSWORD=test
       # Connect to both directories to test multi-directory handling
       - DIRECTORY_SERVERS=jm-directory:5222,jm-directory2:5223
-      - LOG_LEVEL=DEBUG
-      - MIN_SIZE=10000
-      - TX_FEE_CONTRIBUTION=500
-      - CJ_FEE_RELATIVE=0.0002
+      - LOGGING__LEVEL=DEBUG
+      - MAKER__MIN_SIZE=10000
+      - MAKER__TX_FEE_CONTRIBUTION=500
+      - MAKER__CJ_FEE_RELATIVE=0.0002
       # Tor configuration for direct connections
-      - TOR_SOCKS_HOST=jm-tor
-      - TOR_SOCKS_PORT=9050
+      - TOR__SOCKS_HOST=jm-tor
+      - TOR__SOCKS_PORT=9050
       - TOR_CONTROL_HOST=jm-tor
       - TOR_CONTROL_PORT=9051
-      - ONION_SERVING_HOST=0.0.0.0
-      - ONION_SERVING_PORT=5000
+      - MAKER__ONION_SERVING_HOST=0.0.0.0
+      - MAKER__ONION_SERVING_PORT=5000
     volumes:
       - maker3-data:/home/jm/.joinmarket-ng
       - tor-data:/var/lib/tor:ro
@@ -887,6 +891,7 @@ services:
       context: .
       dockerfile: maker/Dockerfile
     container_name: jm-maker-neutrino
+    command: ["jm-maker", "start"]
     restart: "no"
     logging:
       driver: json-file
@@ -895,15 +900,15 @@ services:
         max-file: "5"
     environment:
       - MNEMONIC=avoid whisper mesh corn already blur sudden fine planet chicken hover sniff
-      - NETWORK=testnet
-      - BITCOIN_NETWORK=regtest
-      - BACKEND_TYPE=neutrino
-      - NEUTRINO_URL=http://jm-neutrino:8334
+      - NETWORK_CONFIG__NETWORK=testnet
+      - NETWORK_CONFIG__BITCOIN_NETWORK=regtest
+      - BITCOIN__BACKEND_TYPE=neutrino
+      - BITCOIN__NEUTRINO_URL=http://jm-neutrino:8334
       - DIRECTORY_SERVERS=jm-directory:5222
-      - LOG_LEVEL=DEBUG
-      - MIN_SIZE=10000
-      - TX_FEE_CONTRIBUTION=500
-      - CJ_FEE_RELATIVE=0.001
+      - LOGGING__LEVEL=DEBUG
+      - MAKER__MIN_SIZE=10000
+      - MAKER__TX_FEE_CONTRIBUTION=500
+      - MAKER__CJ_FEE_RELATIVE=0.001
     volumes:
       - maker-neutrino-data:/home/jm/.joinmarket-ng
     networks:
@@ -934,16 +939,16 @@ services:
         max-file: "5"
     environment:
       - MNEMONIC=${TAKER_NEUTRINO_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
-      - NETWORK=testnet
-      - BITCOIN_NETWORK=regtest
-      - BACKEND_TYPE=neutrino
-      - NEUTRINO_URL=http://jm-neutrino:8334
+      - NETWORK_CONFIG__NETWORK=testnet
+      - NETWORK_CONFIG__BITCOIN_NETWORK=regtest
+      - BITCOIN__BACKEND_TYPE=neutrino
+      - BITCOIN__NEUTRINO_URL=http://jm-neutrino:8334
       - DIRECTORY_SERVERS=jm-directory:5222
-      - LOG_LEVEL=DEBUG
+      - LOGGING__LEVEL=DEBUG
       - COINJOIN_AMOUNT=1000000
-      - MIN_MAKERS=2
-      - MAX_CJ_FEE_REL=0.01
-      - MAX_CJ_FEE_ABS=10000
+      - TAKER__MINIMUM_MAKERS=2
+      - TAKER__MAX_CJ_FEE_REL=0.01
+      - TAKER__MAX_CJ_FEE_ABS=10000
     volumes:
       - taker-neutrino-data:/home/jm/.joinmarket-ng
     networks:
