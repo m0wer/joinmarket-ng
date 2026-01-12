@@ -709,3 +709,119 @@ class TestMakerReplacementConfig:
                 directory_servers=["localhost:5222"],
                 max_maker_replacement_attempts=11,
             )
+
+
+# --- Tests for MultiDirectoryClient Direct Peer Connections ---
+
+
+class TestMultiDirectoryClientDirectConnections:
+    """Tests for MultiDirectoryClient direct peer connection feature."""
+
+    def test_direct_connections_enabled_by_default(self):
+        """Test that direct connections are enabled by default."""
+        from jmcore.crypto import NickIdentity
+
+        from taker.taker import MultiDirectoryClient
+
+        nick_identity = NickIdentity(5)
+        client = MultiDirectoryClient(
+            directory_servers=["localhost:5222"],
+            network="regtest",
+            nick_identity=nick_identity,
+        )
+
+        assert client.prefer_direct_connections is True
+        assert client.our_location == "NOT-SERVING-ONION"
+        assert client._peer_connections == {}
+
+    def test_direct_connections_can_be_disabled(self):
+        """Test that direct connections can be disabled."""
+        from jmcore.crypto import NickIdentity
+
+        from taker.taker import MultiDirectoryClient
+
+        nick_identity = NickIdentity(5)
+        client = MultiDirectoryClient(
+            directory_servers=["localhost:5222"],
+            network="regtest",
+            nick_identity=nick_identity,
+            prefer_direct_connections=False,
+        )
+
+        assert client.prefer_direct_connections is False
+
+    def test_get_peer_location_returns_none_when_not_found(self):
+        """Test _get_peer_location returns None for unknown nicks."""
+        from jmcore.crypto import NickIdentity
+
+        from taker.taker import MultiDirectoryClient
+
+        nick_identity = NickIdentity(5)
+        client = MultiDirectoryClient(
+            directory_servers=["localhost:5222"],
+            network="regtest",
+            nick_identity=nick_identity,
+        )
+
+        location = client._get_peer_location("J5unknown")
+        assert location is None
+
+    def test_should_try_direct_connect_disabled(self):
+        """Test _should_try_direct_connect returns False when disabled."""
+        from jmcore.crypto import NickIdentity
+
+        from taker.taker import MultiDirectoryClient
+
+        nick_identity = NickIdentity(5)
+        client = MultiDirectoryClient(
+            directory_servers=["localhost:5222"],
+            network="regtest",
+            nick_identity=nick_identity,
+            prefer_direct_connections=False,
+        )
+
+        assert not client._should_try_direct_connect("J5maker")
+
+    def test_get_connected_peer_returns_none_when_not_connected(self):
+        """Test _get_connected_peer returns None when no connection exists."""
+        from jmcore.crypto import NickIdentity
+
+        from taker.taker import MultiDirectoryClient
+
+        nick_identity = NickIdentity(5)
+        client = MultiDirectoryClient(
+            directory_servers=["localhost:5222"],
+            network="regtest",
+            nick_identity=nick_identity,
+        )
+
+        peer = client._get_connected_peer("J5maker")
+        assert peer is None
+
+    @pytest.mark.asyncio
+    async def test_cleanup_peer_connections(self):
+        """Test that peer connections are cleaned up on close."""
+        from unittest.mock import AsyncMock
+
+        from jmcore.crypto import NickIdentity
+        from jmcore.network import OnionPeer
+
+        from taker.taker import MultiDirectoryClient
+
+        nick_identity = NickIdentity(5)
+        client = MultiDirectoryClient(
+            directory_servers=["localhost:5222"],
+            network="regtest",
+            nick_identity=nick_identity,
+        )
+
+        # Add a mock peer
+        mock_peer = Mock(spec=OnionPeer)
+        mock_peer.disconnect = AsyncMock()
+        client._peer_connections["J5maker"] = mock_peer
+
+        # Cleanup
+        await client._cleanup_peer_connections()
+
+        mock_peer.disconnect.assert_called_once()
+        assert client._peer_connections == {}

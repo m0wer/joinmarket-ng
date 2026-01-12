@@ -532,8 +532,11 @@ The reference implementation opportunistically establishes direct Tor connection
 
 **Implementation Status**:
 - Reference implementation: Uses direct connections opportunistically (lines 801-830 in `onionmc.py`)
-- Our implementation: Currently uses directory relay only
-- Future enhancement: Add direct peer connections as an optimization
+- Our implementation: Supports direct connections (enabled by default in `MultiDirectoryClient`)
+  - First message sent via directory relay (opportunistic connection starts in background)
+  - Subsequent messages use direct connection if available
+  - Automatic fallback to directory relay on connection failure
+  - Configurable via `prefer_direct_connections` parameter
 
 **Note**: In both modes, encrypted message contents (`!auth`, `!ioauth`, `!tx`, `!sig`) are end-to-end encrypted with NaCl, so directories and network observers cannot read them.
 

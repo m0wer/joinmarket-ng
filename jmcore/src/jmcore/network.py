@@ -5,6 +5,7 @@ Network primitives and connection management.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine
 from typing import Any
@@ -269,3 +270,418 @@ class HiddenServiceListener:
         """Run the server until stopped."""
         if self.server:
             await self.server.serve_forever()
+
+
+class PeerStatus:
+    """Connection status for OnionPeer."""
+
+    UNCONNECTED = 0
+    CONNECTING = 1
+    CONNECTED = 2
+    HANDSHAKED = 3
+    DISCONNECTED = 4
+
+
+class OnionPeerError(Exception):
+    """Base exception for OnionPeer errors."""
+
+
+class OnionPeerConnectionError(OnionPeerError):
+    """Error during connection to peer."""
+
+
+class OnionPeer:
+    """
+    Represents a direct peer connection over Tor.
+
+    Used by takers to establish direct connections to makers,
+    bypassing the directory server for private message exchange.
+    This improves privacy by preventing directories from seeing
+    who is communicating with whom.
+
+    Connection Flow:
+    1. Taker gets maker's onion address from peerlist
+    2. Taker creates OnionPeer and calls try_to_connect()
+    3. Connection is established via Tor SOCKS proxy
+    4. Handshake is performed (same protocol as directory)
+    5. Messages can be sent/received directly
+
+    State Machine:
+    UNCONNECTED -> CONNECTING -> CONNECTED -> HANDSHAKED -> DISCONNECTED
+                      |              |             |
+                      v              v             v
+                   (failure)    (failure)     (disconnect)
+                      |              |             |
+                      v              v             v
+                  UNCONNECTED   DISCONNECTED  DISCONNECTED
+    """
+
+    def __init__(
+        self,
+        nick: str,
+        location: str,
+        socks_host: str = "127.0.0.1",
+        socks_port: int = 9050,
+        timeout: float = 30.0,
+        max_message_size: int = 2097152,
+        on_message: Callable[[str, bytes], Coroutine[Any, Any, None]] | None = None,
+        on_disconnect: Callable[[str], Coroutine[Any, Any, None]] | None = None,
+        on_handshake_complete: Callable[[str], Coroutine[Any, Any, None]] | None = None,
+    ):
+        """
+        Initialize OnionPeer.
+
+        Args:
+            nick: Peer's JoinMarket nick
+            location: Peer's onion address (host:port)
+            socks_host: SOCKS proxy host for Tor
+            socks_port: SOCKS proxy port for Tor
+            timeout: Connection timeout in seconds
+            max_message_size: Maximum message size in bytes
+            on_message: Callback when message received (nick, data)
+            on_disconnect: Callback when peer disconnects (nick)
+            on_handshake_complete: Callback when handshake completes (nick)
+        """
+        self.nick = nick
+        self.location = location
+        self.socks_host = socks_host
+        self.socks_port = socks_port
+        self.timeout = timeout
+        self.max_message_size = max_message_size
+        self.on_message = on_message
+        self.on_disconnect = on_disconnect
+        self.on_handshake_complete = on_handshake_complete
+
+        # Parse location
+        self._hostname: str | None = None
+        self._port: int | None = None
+        self._parse_location()
+
+        # Connection state
+        self._status = PeerStatus.UNCONNECTED
+        self._connection: TCPConnection | None = None
+        self._receive_task: asyncio.Task | None = None  # type: ignore[type-arg]
+        self._lock = asyncio.Lock()
+
+        # Retry/backoff state
+        self._connect_attempts = 0
+        self._max_connect_attempts = 3
+        self._base_backoff = 2.0  # seconds
+        self._last_connect_attempt: float = 0.0
+
+    def _parse_location(self) -> None:
+        """Parse location string into hostname and port."""
+        if self.location == "NOT-SERVING-ONION":
+            self._hostname = None
+            self._port = None
+            return
+
+        try:
+            host, port_str = self.location.split(":")
+            self._hostname = host
+            self._port = int(port_str)
+        except (ValueError, AttributeError) as e:
+            logger.warning(f"Invalid peer location: {self.location}: {e}")
+            self._hostname = None
+            self._port = None
+
+    @property
+    def hostname(self) -> str | None:
+        """Get peer's hostname."""
+        return self._hostname
+
+    @property
+    def port(self) -> int | None:
+        """Get peer's port."""
+        return self._port
+
+    def status(self) -> int:
+        """Get current connection status."""
+        return self._status
+
+    def is_connected(self) -> bool:
+        """Check if peer is connected and ready to send messages."""
+        return self._status == PeerStatus.HANDSHAKED
+
+    def is_connecting(self) -> bool:
+        """Check if connection is in progress."""
+        return self._status == PeerStatus.CONNECTING
+
+    def can_connect(self) -> bool:
+        """Check if we can attempt to connect to this peer."""
+        if self._hostname is None or self._port is None:
+            return False
+        return self._status not in (
+            PeerStatus.CONNECTING,
+            PeerStatus.CONNECTED,
+            PeerStatus.HANDSHAKED,
+        )
+
+    async def connect(
+        self,
+        our_nick: str,
+        our_location: str,
+        network: str,
+    ) -> bool:
+        """
+        Connect to the peer and perform handshake.
+
+        Args:
+            our_nick: Our JoinMarket nick
+            our_location: Our onion address or NOT-SERVING-ONION
+            network: Bitcoin network (mainnet, testnet, signet, regtest)
+
+        Returns:
+            True if connection and handshake succeeded
+        """
+        async with self._lock:
+            if not self.can_connect():
+                logger.debug(f"Cannot connect to peer {self.nick}: status={self._status}")
+                return False
+
+            self._status = PeerStatus.CONNECTING
+            self._connect_attempts += 1
+            self._last_connect_attempt = asyncio.get_event_loop().time()
+
+        try:
+            logger.info(f"Connecting to peer {self.nick} at {self.location}")
+
+            # Connect via Tor
+            if self._hostname and self._hostname.endswith(".onion"):
+                self._connection = await connect_via_tor(
+                    self._hostname,
+                    self._port or 5222,
+                    self.socks_host,
+                    self.socks_port,
+                    self.max_message_size,
+                    self.timeout,
+                )
+            else:
+                # Direct connection (for testing)
+                self._connection = await connect_direct(
+                    self._hostname or "localhost",
+                    self._port or 5222,
+                    self.max_message_size,
+                    self.timeout,
+                )
+
+            async with self._lock:
+                self._status = PeerStatus.CONNECTED
+
+            # Perform handshake
+            await self._handshake(our_nick, our_location, network)
+
+            async with self._lock:
+                self._status = PeerStatus.HANDSHAKED
+                self._connect_attempts = 0  # Reset on success
+
+            logger.info(f"Connected and handshaked with peer {self.nick}")
+
+            # Start receive loop
+            self._receive_task = asyncio.create_task(self._receive_loop())
+
+            if self.on_handshake_complete:
+                await self.on_handshake_complete(self.nick)
+
+            return True
+
+        except Exception as e:
+            logger.warning(f"Failed to connect to peer {self.nick}: {e}")
+            async with self._lock:
+                self._status = PeerStatus.DISCONNECTED
+            if self._connection:
+                await self._connection.close()
+                self._connection = None
+            return False
+
+    async def _handshake(self, our_nick: str, our_location: str, network: str) -> None:
+        """Perform handshake with peer (same protocol as directory)."""
+        if not self._connection:
+            raise OnionPeerConnectionError("Not connected")
+
+        # Import here to avoid circular dependency
+        import json
+
+        from jmcore.protocol import (
+            MessageType,
+            create_handshake_request,
+        )
+
+        # Send handshake request
+        handshake = create_handshake_request(
+            nick=our_nick,
+            location=our_location,
+            network=network,
+            directory=False,
+        )
+        msg = json.dumps({"type": MessageType.HANDSHAKE.value, "data": handshake})
+        await self._connection.send(msg.encode("utf-8"))
+
+        # Wait for handshake response
+        response_data = await asyncio.wait_for(self._connection.receive(), timeout=self.timeout)
+        response = json.loads(response_data.decode("utf-8"))
+
+        if response.get("type") != MessageType.HANDSHAKE.value:
+            raise OnionPeerConnectionError(f"Expected HANDSHAKE, got type {response.get('type')}")
+
+        data = response.get("data", {})
+
+        # Peer-to-peer handshake response format (different from directory response)
+        # Validate the response fields
+        app_name = data.get("app-name")
+        proto_ver = data.get("proto-ver")
+        is_directory = data.get("directory", False)
+        peer_network = data.get("network")
+
+        if app_name != "joinmarket":
+            raise OnionPeerConnectionError(f"Invalid app-name: {app_name}")
+
+        if proto_ver != 5:
+            raise OnionPeerConnectionError(f"Incompatible protocol version: {proto_ver}")
+
+        if is_directory:
+            raise OnionPeerConnectionError("Expected non-directory peer")
+
+        # Verify network matches
+        if peer_network != network:
+            raise OnionPeerConnectionError(
+                f"Network mismatch: expected {network}, got {peer_network}"
+            )
+
+        logger.debug(f"Handshake with peer {self.nick} successful")
+
+    async def _receive_loop(self) -> None:
+        """Background task to receive messages from peer."""
+        if not self._connection:
+            return
+
+        try:
+            while self._status == PeerStatus.HANDSHAKED and self._connection.is_connected():
+                try:
+                    data = await self._connection.receive()
+                    if self.on_message:
+                        await self.on_message(self.nick, data)
+                except ConnectionError:
+                    break
+                except Exception as e:
+                    logger.warning(f"Error receiving from peer {self.nick}: {e}")
+                    break
+        finally:
+            await self._handle_disconnect()
+
+    async def _handle_disconnect(self) -> None:
+        """Handle peer disconnection."""
+        async with self._lock:
+            if self._status == PeerStatus.DISCONNECTED:
+                return
+            self._status = PeerStatus.DISCONNECTED
+
+        logger.info(f"Peer {self.nick} disconnected")
+
+        if self._connection:
+            await self._connection.close()
+            self._connection = None
+
+        if self.on_disconnect:
+            await self.on_disconnect(self.nick)
+
+    async def send(self, data: bytes) -> bool:
+        """
+        Send data to peer.
+
+        Args:
+            data: Raw message bytes to send
+
+        Returns:
+            True if send succeeded
+        """
+        if not self.is_connected() or not self._connection:
+            return False
+
+        try:
+            await self._connection.send(data)
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to send to peer {self.nick}: {e}")
+            await self._handle_disconnect()
+            return False
+
+    async def send_privmsg(self, our_nick: str, command: str, message: str) -> bool:
+        """
+        Send a private message to peer.
+
+        Args:
+            our_nick: Our JoinMarket nick
+            command: Command name (e.g., "fill", "pubkey")
+            message: Message content
+
+        Returns:
+            True if send succeeded
+        """
+        import json
+
+        from jmcore.protocol import MessageType, format_jm_message
+
+        # Format: from_nick!to_nick!command message
+        jm_msg = format_jm_message(our_nick, self.nick, command, message)
+        msg = json.dumps({"type": MessageType.PRIVMSG.value, "line": jm_msg})
+        return await self.send(msg.encode("utf-8"))
+
+    async def disconnect(self) -> None:
+        """Disconnect from peer."""
+        if self._receive_task:
+            self._receive_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._receive_task
+            self._receive_task = None
+
+        await self._handle_disconnect()
+
+    def try_to_connect(
+        self,
+        our_nick: str,
+        our_location: str,
+        network: str,
+    ) -> asyncio.Task | None:  # type: ignore[type-arg]
+        """
+        Try to connect to peer asynchronously (non-blocking).
+
+        This method is called opportunistically when we want to send
+        a message but don't have a direct connection yet. The message
+        is sent via directory relay, but we start a background connection
+        for future messages.
+
+        Args:
+            our_nick: Our JoinMarket nick
+            our_location: Our onion address
+            network: Bitcoin network
+
+        Returns:
+            Task if connection attempt started, None if skipped
+        """
+        if not self.can_connect():
+            return None
+
+        # Check backoff
+        now = asyncio.get_event_loop().time()
+        if self._connect_attempts > 0:
+            backoff = self._base_backoff * (2 ** min(self._connect_attempts - 1, 5))
+            if now - self._last_connect_attempt < backoff:
+                logger.debug(
+                    f"Skipping connect to {self.nick}: backoff {backoff:.1f}s "
+                    f"(attempt {self._connect_attempts})"
+                )
+                return None
+
+        # Check max attempts
+        if self._connect_attempts >= self._max_connect_attempts:
+            logger.debug(f"Giving up on peer {self.nick} after {self._connect_attempts} attempts")
+            return None
+
+        return asyncio.create_task(
+            self.connect(our_nick, our_location, network),
+            name=f"peer_connect_{self.nick}",
+        )
+
+    def __repr__(self) -> str:
+        return f"OnionPeer(nick={self.nick!r}, location={self.location!r}, status={self._status})"

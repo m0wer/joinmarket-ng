@@ -2,11 +2,18 @@
 Tests for jmcore.network
 """
 
-from unittest.mock import AsyncMock, Mock
+import asyncio
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from jmcore.network import ConnectionError, ConnectionPool, TCPConnection
+from jmcore.network import (
+    ConnectionError,
+    ConnectionPool,
+    OnionPeer,
+    PeerStatus,
+    TCPConnection,
+)
 
 
 @pytest.mark.asyncio
@@ -140,3 +147,301 @@ async def test_tcp_connection_concurrent_receive():
     # No RuntimeError should have occurred
     error_events = [e for e in events if "error" in e]
     assert not error_events, f"Unexpected errors: {error_events}"
+
+
+# =============================================================================
+# OnionPeer Tests
+# =============================================================================
+
+
+class TestOnionPeerBasic:
+    """Basic OnionPeer tests without network calls."""
+
+    def test_peer_initialization(self):
+        """Test OnionPeer initialization with valid location."""
+        peer = OnionPeer(
+            nick="J5maker123",
+            location="abc123def.onion:5222",
+        )
+
+        assert peer.nick == "J5maker123"
+        assert peer.location == "abc123def.onion:5222"
+        assert peer.hostname == "abc123def.onion"
+        assert peer.port == 5222
+        assert peer.status() == PeerStatus.UNCONNECTED
+        assert not peer.is_connected()
+        assert peer.can_connect()
+
+    def test_peer_not_serving_onion(self):
+        """Test OnionPeer with NOT-SERVING-ONION location."""
+        peer = OnionPeer(
+            nick="J5taker456",
+            location="NOT-SERVING-ONION",
+        )
+
+        assert peer.nick == "J5taker456"
+        assert peer.hostname is None
+        assert peer.port is None
+        assert not peer.can_connect()  # Cannot connect to non-serving peer
+
+    def test_peer_invalid_location(self):
+        """Test OnionPeer with invalid location format."""
+        peer = OnionPeer(
+            nick="J5bad",
+            location="invalid-no-port",
+        )
+
+        assert peer.hostname is None
+        assert peer.port is None
+        assert not peer.can_connect()
+
+    def test_peer_status_transitions(self):
+        """Test that peer status is tracked correctly."""
+        peer = OnionPeer(
+            nick="J5test",
+            location="test.onion:5222",
+        )
+
+        assert peer.status() == PeerStatus.UNCONNECTED
+        assert peer.can_connect()
+        assert not peer.is_connected()
+        assert not peer.is_connecting()
+
+
+class TestOnionPeerConnection:
+    """OnionPeer connection tests with mocked network."""
+
+    @pytest.mark.asyncio
+    async def test_connect_success(self):
+        """Test successful peer connection and handshake."""
+        peer = OnionPeer(
+            nick="J5maker",
+            location="test.onion:5222",
+        )
+
+        # Mock the connection
+        mock_connection = AsyncMock()
+        mock_connection.is_connected.return_value = True
+
+        # Mock handshake response (peer-to-peer format)
+        handshake_response = {
+            "type": 793,  # HANDSHAKE
+            "data": {
+                "app-name": "joinmarket",
+                "proto-ver": 5,
+                "directory": False,
+                "features": {},
+                "location-string": "test.onion:5222",
+                "nick": "J5maker",
+                "network": "regtest",
+            },
+        }
+        import json
+
+        mock_connection.receive.return_value = json.dumps(handshake_response).encode()
+
+        with patch("jmcore.network.connect_via_tor", return_value=mock_connection):
+            success = await peer.connect(
+                our_nick="J5taker",
+                our_location="NOT-SERVING-ONION",
+                network="regtest",
+            )
+
+            # Disconnect immediately to stop the receive loop task
+            await peer.disconnect()
+
+        assert success
+        # Status will be DISCONNECTED after disconnect()
+        # But success indicates the connect+handshake worked
+
+    @pytest.mark.asyncio
+    async def test_connect_handshake_rejected(self):
+        """Test connection when handshake has wrong app name."""
+        peer = OnionPeer(
+            nick="J5maker",
+            location="test.onion:5222",
+        )
+
+        mock_connection = AsyncMock()
+        mock_connection.is_connected.return_value = True
+
+        # Wrong app name
+        handshake_response = {
+            "type": 793,
+            "data": {
+                "app-name": "wrongapp",
+                "proto-ver": 5,
+                "directory": False,
+                "features": {},
+                "location-string": "test.onion:5222",
+                "nick": "J5maker",
+                "network": "regtest",
+            },
+        }
+        import json
+
+        mock_connection.receive.return_value = json.dumps(handshake_response).encode()
+
+        with patch("jmcore.network.connect_via_tor", return_value=mock_connection):
+            success = await peer.connect(
+                our_nick="J5taker",
+                our_location="NOT-SERVING-ONION",
+                network="regtest",
+            )
+
+        assert not success
+        assert peer.status() == PeerStatus.DISCONNECTED
+
+    @pytest.mark.asyncio
+    async def test_connect_network_mismatch(self):
+        """Test connection when network doesn't match."""
+        peer = OnionPeer(
+            nick="J5maker",
+            location="test.onion:5222",
+        )
+
+        mock_connection = AsyncMock()
+        mock_connection.is_connected.return_value = True
+
+        # Different network
+        handshake_response = {
+            "type": 793,
+            "data": {
+                "app-name": "joinmarket",
+                "proto-ver": 5,
+                "directory": False,
+                "features": {},
+                "location-string": "test.onion:5222",
+                "nick": "J5maker",
+                "network": "mainnet",  # We expect regtest
+            },
+        }
+        import json
+
+        mock_connection.receive.return_value = json.dumps(handshake_response).encode()
+
+        with patch("jmcore.network.connect_via_tor", return_value=mock_connection):
+            success = await peer.connect(
+                our_nick="J5taker",
+                our_location="NOT-SERVING-ONION",
+                network="regtest",
+            )
+
+        assert not success
+        assert peer.status() == PeerStatus.DISCONNECTED
+
+    @pytest.mark.asyncio
+    async def test_connect_connection_failure(self):
+        """Test connection when network connection fails."""
+        peer = OnionPeer(
+            nick="J5maker",
+            location="test.onion:5222",
+        )
+
+        with patch(
+            "jmcore.network.connect_via_tor", side_effect=ConnectionError("Connection refused")
+        ):
+            success = await peer.connect(
+                our_nick="J5taker",
+                our_location="NOT-SERVING-ONION",
+                network="regtest",
+            )
+
+        assert not success
+        assert peer.status() == PeerStatus.DISCONNECTED
+
+    @pytest.mark.asyncio
+    async def test_send_privmsg(self):
+        """Test sending a private message via direct connection."""
+        peer = OnionPeer(
+            nick="J5maker",
+            location="test.onion:5222",
+        )
+
+        # Set up as connected (without starting receive loop)
+        mock_connection = AsyncMock()
+        mock_connection.is_connected.return_value = True
+        peer._connection = mock_connection
+        peer._status = PeerStatus.HANDSHAKED
+
+        success = await peer.send_privmsg(
+            our_nick="J5taker",
+            command="fill",
+            message="123 456 abc",
+        )
+
+        assert success
+        mock_connection.send.assert_called_once()
+
+        # Verify message format
+        import json
+
+        sent_data = mock_connection.send.call_args[0][0]
+        msg = json.loads(sent_data.decode())
+        assert msg["type"] == 685  # PRIVMSG
+        assert "J5taker!J5maker!fill 123 456 abc" in msg["line"]
+
+    @pytest.mark.asyncio
+    async def test_send_when_not_connected(self):
+        """Test that send fails when not connected."""
+        peer = OnionPeer(
+            nick="J5maker",
+            location="test.onion:5222",
+        )
+
+        success = await peer.send(b"test message")
+        assert not success
+
+        success = await peer.send_privmsg(
+            our_nick="J5taker",
+            command="fill",
+            message="test",
+        )
+        assert not success
+
+
+class TestOnionPeerBackoff:
+    """Test connection backoff and retry behavior."""
+
+    @pytest.mark.asyncio
+    async def test_try_to_connect_backoff(self):
+        """Test that failed connections trigger backoff."""
+        peer = OnionPeer(
+            nick="J5maker",
+            location="test.onion:5222",
+        )
+
+        # First attempt should be allowed
+        assert peer.can_connect()
+
+        # Simulate a failed connection attempt
+        peer._connect_attempts = 1
+        peer._last_connect_attempt = asyncio.get_event_loop().time()
+        peer._status = PeerStatus.DISCONNECTED
+
+        # Immediate retry should be blocked by backoff
+        task = peer.try_to_connect(
+            our_nick="J5taker",
+            our_location="NOT-SERVING-ONION",
+            network="regtest",
+        )
+        assert task is None  # Blocked by backoff
+
+    @pytest.mark.asyncio
+    async def test_max_attempts_exceeded(self):
+        """Test that connection gives up after max attempts."""
+        peer = OnionPeer(
+            nick="J5maker",
+            location="test.onion:5222",
+        )
+
+        peer._connect_attempts = 3  # Max default
+        peer._status = PeerStatus.DISCONNECTED
+        peer._last_connect_attempt = 0  # Long ago, no backoff
+
+        task = peer.try_to_connect(
+            our_nick="J5taker",
+            our_location="NOT-SERVING-ONION",
+            network="regtest",
+        )
+        assert task is None  # Gave up

@@ -26,8 +26,9 @@ from jmcore.deduplication import ResponseDeduplicator
 from jmcore.directory_client import DirectoryClient
 from jmcore.encryption import CryptoSession
 from jmcore.models import Offer
+from jmcore.network import OnionPeer
 from jmcore.notifications import get_notifier
-from jmcore.protocol import JM_VERSION, parse_utxo_list
+from jmcore.protocol import JM_VERSION, NOT_SERVING_ONION_HOSTNAME, parse_utxo_list
 from jmwallet.backends.base import BlockchainBackend
 from jmwallet.history import (
     TransactionHistoryEntry,
@@ -65,6 +66,18 @@ class MultiDirectoryClient:
     tracking - a nick is only considered "gone" when ALL directories report
     it as disconnected.
 
+    Direct Peer Connections:
+    When enabled (prefer_direct_connections=True), the client will establish
+    direct Tor connections to makers when possible, bypassing directory servers
+    for private messages. This improves privacy by preventing directories from
+    observing who is communicating with whom.
+
+    Connection flow:
+    1. First message to a maker goes via directory relay
+    2. Opportunistically starts direct connection in background
+    3. Subsequent messages prefer direct connection if available
+    4. Falls back to directory relay if direct connection fails
+
     This prevents premature maker removal when:
     - A maker temporarily disconnects from one directory but remains on others
     - Directory connections are flaky or experiencing network issues
@@ -82,6 +95,8 @@ class MultiDirectoryClient:
         socks_port: int = 9050,
         neutrino_compat: bool = False,
         on_nick_leave: Any | None = None,
+        prefer_direct_connections: bool = True,
+        our_location: str = "NOT-SERVING-ONION",
     ):
         self.directory_servers = directory_servers
         self.network = network
@@ -93,6 +108,14 @@ class MultiDirectoryClient:
         self.clients: dict[str, DirectoryClient] = {}
         self._response_queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
         self.on_nick_leave = on_nick_leave
+
+        # Direct peer connection settings
+        self.prefer_direct_connections = prefer_direct_connections
+        self.our_location = our_location
+        # Peer connections indexed by nick
+        self._peer_connections: dict[str, OnionPeer] = {}
+        # Background tasks for pending connections
+        self._pending_connect_tasks: dict[str, asyncio.Task[bool]] = {}
 
         # Multi-directory nick tracking
         # Format: active_nicks[nick] = {server1: True, server2: True, ...}
@@ -161,6 +184,153 @@ class MultiDirectoryClient:
             if server in self._active_nicks[nick] and nick not in active_nicks:
                 self._update_nick_status(nick, server, False)
 
+    # =========================================================================
+    # Direct Peer Connection Methods
+    # =========================================================================
+
+    def _get_peer_location(self, nick: str) -> str | None:
+        """
+        Get a maker's onion location from the peerlist.
+
+        Args:
+            nick: Maker's JoinMarket nick
+
+        Returns:
+            Onion address (host:port) or None if not found/not serving
+        """
+        for client in self.clients.values():
+            location = client._active_peers.get(nick)
+            if location and location != NOT_SERVING_ONION_HOSTNAME:
+                return location
+        return None
+
+    def _should_try_direct_connect(self, nick: str) -> bool:
+        """
+        Check if we should attempt a direct connection to this peer.
+
+        Returns False if:
+        - Direct connections are disabled
+        - We already have a connected peer
+        - Peer doesn't serve an onion address
+        - Connection attempt is already in progress
+        """
+        if not self.prefer_direct_connections:
+            return False
+
+        # Already connected?
+        if nick in self._peer_connections:
+            peer = self._peer_connections[nick]
+            if peer.is_connected() or peer.is_connecting():
+                return False
+
+        # Connection attempt in progress?
+        if nick in self._pending_connect_tasks:
+            task = self._pending_connect_tasks[nick]
+            if not task.done():
+                return False
+
+        # Has a valid onion address?
+        location = self._get_peer_location(nick)
+        return location is not None
+
+    def _get_connected_peer(self, nick: str) -> OnionPeer | None:
+        """
+        Get a connected peer by nick.
+
+        Returns:
+            OnionPeer if connected and handshaked, None otherwise
+        """
+        peer = self._peer_connections.get(nick)
+        if peer and peer.is_connected():
+            return peer
+        return None
+
+    async def _on_peer_message(self, nick: str, data: bytes) -> None:
+        """
+        Handle message received from a direct peer connection.
+
+        Messages are forwarded to the response queues for processing
+        by wait_for_responses().
+        """
+        try:
+            import json
+
+            msg = json.loads(data.decode("utf-8"))
+            logger.debug(f"Received direct message from {nick}: type={msg.get('type')}")
+
+            # Queue for processing by wait_for_responses
+            # Format matches what directory client returns
+            for queue in self._response_queues.values():
+                await queue.put(msg)
+        except Exception as e:
+            logger.warning(f"Error processing peer message from {nick}: {e}")
+
+    async def _on_peer_disconnect(self, nick: str) -> None:
+        """Handle peer disconnection."""
+        logger.debug(f"Peer {nick} disconnected")
+        # Clean up but don't remove from _peer_connections immediately
+        # in case we want to reconnect
+
+    async def _on_peer_handshake_complete(self, nick: str) -> None:
+        """Handle successful peer handshake."""
+        logger.info(f"Direct connection established with {nick}")
+
+    def _try_direct_connect(self, nick: str) -> None:
+        """
+        Opportunistically try to establish a direct connection to a maker.
+
+        This is called asynchronously when sending a message via directory relay.
+        The connection attempt runs in the background and future messages will
+        use the direct connection if it succeeds.
+        """
+        if not self._should_try_direct_connect(nick):
+            return
+
+        location = self._get_peer_location(nick)
+        if not location:
+            return
+
+        # Create peer if needed
+        if nick not in self._peer_connections:
+            peer = OnionPeer(
+                nick=nick,
+                location=location,
+                socks_host=self.socks_host,
+                socks_port=self.socks_port,
+                on_message=self._on_peer_message,
+                on_disconnect=self._on_peer_disconnect,
+                on_handshake_complete=self._on_peer_handshake_complete,
+            )
+            self._peer_connections[nick] = peer
+        else:
+            peer = self._peer_connections[nick]
+
+        # Start connection in background
+        task = peer.try_to_connect(
+            our_nick=self.nick,
+            our_location=self.our_location,
+            network=self.network,
+        )
+        if task:
+            self._pending_connect_tasks[nick] = task
+            logger.debug(f"Started background connection to {nick} at {location}")
+
+    async def _cleanup_peer_connections(self) -> None:
+        """Clean up all peer connections (called on close)."""
+        # Cancel pending connection tasks
+        for nick, task in self._pending_connect_tasks.items():
+            if not task.done():
+                task.cancel()
+        self._pending_connect_tasks.clear()
+
+        # Disconnect all peers
+        for nick, peer in self._peer_connections.items():
+            try:
+                await peer.disconnect()
+            except Exception as e:
+                logger.debug(f"Error disconnecting from peer {nick}: {e}")
+        self._peer_connections.clear()
+
     async def connect_all(self) -> int:
         """Connect to all directory servers in parallel, return count of successful connections."""
 
@@ -201,7 +371,11 @@ class MultiDirectoryClient:
         return connected
 
     async def close_all(self) -> None:
-        """Close all directory connections."""
+        """Close all directory and peer connections."""
+        # Clean up peer connections first
+        await self._cleanup_peer_connections()
+
+        # Close directory connections
         for server, client in self.clients.items():
             try:
                 await client.close()
@@ -248,7 +422,14 @@ class MultiDirectoryClient:
     async def send_privmsg(
         self, recipient: str, command: str, data: str, log_routing: bool = False
     ) -> None:
-        """Send a private message via all connected directory servers.
+        """Send a private message, preferring direct connection if available.
+
+        Message routing priority:
+        1. Direct peer connection (if connected and prefer_direct_connections=True)
+        2. Directory relay (always used as fallback)
+
+        When using directory relay, opportunistically starts a direct connection
+        in the background for future messages.
 
         Args:
             recipient: Target maker nick
@@ -257,26 +438,48 @@ class MultiDirectoryClient:
             log_routing: If True, log detailed routing information for each directory
         """
         # Get maker's direct onion location if available
-        maker_location = None
-        for client in self.clients.values():
-            maker_location = client._active_peers.get(recipient)
-            if maker_location and maker_location != "NOT-SERVING-ONION":
-                break
+        maker_location = self._get_peer_location(recipient)
 
-        for client in self.clients.values():
-            try:
-                await client.send_private_message(recipient, command, data)
-                if log_routing:
-                    directory = f"{client.host}:{client.port}"
-                    if maker_location and maker_location != "NOT-SERVING-ONION":
-                        logger.debug(
-                            f"Sent !{command} to {recipient} via directory {directory} "
-                            f"(maker onion: {maker_location}, using relay)"
-                        )
-                    else:
-                        logger.debug(f"Sent !{command} to {recipient} via directory {directory}")
-            except Exception as e:
-                logger.warning(f"Failed to send privmsg: {e}")
+        # Try direct connection first if available
+        sent_direct = False
+        if self.prefer_direct_connections:
+            peer = self._get_connected_peer(recipient)
+            if peer:
+                try:
+                    success = await peer.send_privmsg(self.nick, command, data)
+                    if success:
+                        sent_direct = True
+                        if log_routing:
+                            logger.debug(
+                                f"Sent !{command} to {recipient} via DIRECT connection "
+                                f"(onion: {maker_location})"
+                            )
+                except Exception as e:
+                    logger.debug(f"Direct send to {recipient} failed: {e}")
+
+        # Fall back to directory relay
+        if not sent_direct:
+            # Opportunistically start direct connection for future messages
+            if self.prefer_direct_connections and maker_location:
+                self._try_direct_connect(recipient)
+
+            # Send via directory servers
+            for client in self.clients.values():
+                try:
+                    await client.send_private_message(recipient, command, data)
+                    if log_routing:
+                        directory = f"{client.host}:{client.port}"
+                        if maker_location:
+                            logger.debug(
+                                f"Sent !{command} to {recipient} via directory {directory} "
+                                f"(maker onion: {maker_location}, using relay)"
+                            )
+                        else:
+                            logger.debug(
+                                f"Sent !{command} to {recipient} via directory {directory}"
+                            )
+                except Exception as e:
+                    logger.warning(f"Failed to send privmsg: {e}")
 
     async def wait_for_responses(
         self,

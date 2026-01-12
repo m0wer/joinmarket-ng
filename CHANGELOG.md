@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Direct Peer Connections**: Taker can now establish direct Tor connections to makers, bypassing directory servers for private message exchange.
+  - Improves privacy by preventing directories from observing who is communicating with whom
+  - First message goes via directory relay, subsequent messages use direct connection if available
+  - Automatic fallback to directory relay on connection failure
+  - Connection attempts use exponential backoff to avoid overwhelming peers
+  - Enabled by default (`prefer_direct_connections=True` in `MultiDirectoryClient`)
+  - New `OnionPeer` class in `jmcore.network` handles direct peer connection lifecycle
+
 - **Maker Replacement on Non-Response**: Taker now automatically replaces non-responsive makers during CoinJoin.
   - New config option: `max_maker_replacement_attempts` (default: 3, range: 0-10)
   - If makers fail to respond during fill or auth phases, taker selects replacements from orderbook
@@ -54,7 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Shows which directory servers are used to relay messages to makers.
   - Displays maker onion addresses in the transaction confirmation prompt.
   - Debug logs show routing details for !fill, !auth, !tx, and !push messages.
-  - Note: All taker messages are currently relayed via directory servers (no direct connections).
+  - Indicates whether messages are sent via direct connection or directory relay.
 
 ## Fixed
 
