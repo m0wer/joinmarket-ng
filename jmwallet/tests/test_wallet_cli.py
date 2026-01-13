@@ -4,6 +4,7 @@ E2E tests for jm-wallet CLI commands.
 
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -292,3 +293,69 @@ def test_bip39_prompt_passphrase():
             assert expected_first_address in result.stdout, (
                 f"First address not found in output:\n{result.stdout}"
             )
+
+
+def test_send_respects_config_block_target():
+    """
+    Test that 'send' command uses the configured default_fee_block_target
+    when no --block-target is provided via CLI.
+    """
+    # Mock backend
+    mock_backend = MagicMock()
+    mock_backend.estimate_fee = AsyncMock(return_value=1.0)  # 1 sat/vB
+    mock_backend.get_balance = AsyncMock(return_value=100000)
+    mock_backend.get_utxos = AsyncMock(return_value=[])  # Empty to stop execution early
+    mock_backend.close = AsyncMock()
+
+    # We expect the configured value (6) to be used, not the default (3)
+    expected_target = 6
+
+    # Set environment variable to override config
+    env = os.environ.copy()
+    env["WALLET__DEFAULT_FEE_BLOCK_TARGET"] = str(expected_target)
+
+    with patch.dict(os.environ, env):
+        with patch("jmwallet.backends.bitcoin_core.BitcoinCoreBackend", return_value=mock_backend):
+            # Mock WalletService to avoid initialization issues
+            mock_wallet = MagicMock()
+            mock_wallet.get_balance = AsyncMock(return_value=100000)
+            mock_wallet.get_utxos = AsyncMock(
+                return_value=[]
+            )  # Return empty to trigger "No UTXOs available" and exit
+            mock_wallet.close = AsyncMock()
+            mock_wallet.sync_all = AsyncMock()
+            mock_wallet.is_descriptor_wallet_ready = AsyncMock(return_value=True)
+
+            # Patch where it is defined, so the local import gets the mock
+            with patch("jmwallet.wallet.service.WalletService", return_value=mock_wallet):
+                # Run send command
+                # We expect it to fail with "No UTXOs available" but that's fine,
+                # we just want to check estimate_fee call
+                runner.invoke(
+                    app,
+                    [
+                        "send",
+                        "bcrt1q...",
+                        "--amount",
+                        "1000",
+                        "--mnemonic",
+                        "abandon abandon abandon abandon abandon abandon "
+                        "abandon abandon abandon abandon abandon about",
+                        "--network",
+                        "regtest",
+                        "--backend",
+                        "full_node",
+                    ],
+                )
+
+                # It should have called estimate_fee
+                # If the bug is present, it will be called with 3 (hardcoded default)
+                # If fixed, it will be called with 6 (from env var)
+                try:
+                    mock_backend.estimate_fee.assert_called_with(expected_target)
+                except AssertionError as e:
+                    print(f"Assertion failed: {e}")
+                    # Check what it was actually called with
+                    if mock_backend.estimate_fee.call_args:
+                        print(f"Actually called with: {mock_backend.estimate_fee.call_args}")
+                    raise e

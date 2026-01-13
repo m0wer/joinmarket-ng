@@ -1172,6 +1172,7 @@ def send(
     settings = setup_cli(log_level)
 
     # Validate mutual exclusivity
+
     if fee_rate is not None and block_target is not None:
         logger.error("Cannot specify both --fee-rate and --block-target")
         raise typer.Exit(1)
@@ -1196,6 +1197,10 @@ def send(
         neutrino_url=neutrino_url,
         data_dir=data_dir,
     )
+
+    # Use configured default block target if not specified
+    if block_target is None and fee_rate is None:
+        block_target = settings.wallet.default_fee_block_target
 
     asyncio.run(
         _send_transaction(
