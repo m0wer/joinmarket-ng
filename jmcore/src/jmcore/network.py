@@ -508,13 +508,14 @@ class OnionPeer:
         )
 
         # Send handshake request
+        # Reference implementation uses {"type": 793, "line": "<json-string>"}
         handshake = create_handshake_request(
             nick=our_nick,
             location=our_location,
             network=network,
             directory=False,
         )
-        msg = json.dumps({"type": MessageType.HANDSHAKE.value, "data": handshake})
+        msg = json.dumps({"type": MessageType.HANDSHAKE.value, "line": json.dumps(handshake)})
         await self._connection.send(msg.encode("utf-8"))
 
         # Wait for handshake response
@@ -524,7 +525,12 @@ class OnionPeer:
         if response.get("type") != MessageType.HANDSHAKE.value:
             raise OnionPeerConnectionError(f"Expected HANDSHAKE, got type {response.get('type')}")
 
-        data = response.get("data", {})
+        # Reference implementation sends {"type": 793, "line": "<json-string>"}
+        line = response.get("line", "")
+        try:
+            data = json.loads(line) if line else {}
+        except json.JSONDecodeError as e:
+            raise OnionPeerConnectionError(f"Invalid handshake response: {line[:100]}") from e
 
         # Peer-to-peer handshake response format (different from directory response)
         # Validate the response fields

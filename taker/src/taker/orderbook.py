@@ -593,6 +593,7 @@ class OrderbookManager:
         n: int,
         honest_only: bool = False,
         min_nick_version: int | None = None,
+        exclude_nicks: set[str] | None = None,
     ) -> tuple[dict[str, Offer], int]:
         """
         Select makers for a CoinJoin.
@@ -602,6 +603,7 @@ class OrderbookManager:
             n: Number of makers
             honest_only: Only select from honest makers
             min_nick_version: Minimum required nick version (e.g., 6 for neutrino takers)
+            exclude_nicks: Additional nicks to exclude (e.g., current session makers)
 
         Returns:
             (selected offers dict, total fee)
@@ -611,12 +613,17 @@ class OrderbookManager:
         if honest_only:
             available_offers = [o for o in self.offers if o.counterparty in self.honest_makers]
 
+        # Combine ignored_makers with any additional excluded nicks
+        combined_ignored = self.ignored_makers.copy()
+        if exclude_nicks:
+            combined_ignored.update(exclude_nicks)
+
         return choose_orders(
             offers=available_offers,
             cj_amount=cj_amount,
             n=n,
             max_cj_fee=self.max_cj_fee,
-            ignored_makers=self.ignored_makers,
+            ignored_makers=combined_ignored,
             min_nick_version=min_nick_version,
             bondless_makers_allowance=self.bondless_makers_allowance,
             bondless_require_zero_fee=self.bondless_require_zero_fee,
@@ -629,6 +636,7 @@ class OrderbookManager:
         n: int,
         honest_only: bool = False,
         min_nick_version: int | None = None,
+        exclude_nicks: set[str] | None = None,
     ) -> tuple[dict[str, Offer], int, int]:
         """
         Select makers for a sweep CoinJoin.
@@ -639,6 +647,7 @@ class OrderbookManager:
             n: Number of makers
             honest_only: Only select from honest makers
             min_nick_version: Minimum required nick version (e.g., 6 for neutrino takers)
+            exclude_nicks: Additional nicks to exclude (e.g., current session makers)
 
         Returns:
             (selected offers dict, cj_amount, total fee)
@@ -648,13 +657,18 @@ class OrderbookManager:
         if honest_only:
             available_offers = [o for o in self.offers if o.counterparty in self.honest_makers]
 
+        # Combine ignored_makers with any additional excluded nicks
+        combined_ignored = self.ignored_makers.copy()
+        if exclude_nicks:
+            combined_ignored.update(exclude_nicks)
+
         return choose_sweep_orders(
             offers=available_offers,
             total_input_value=total_input_value,
             my_txfee=my_txfee,
             n=n,
             max_cj_fee=self.max_cj_fee,
-            ignored_makers=self.ignored_makers,
+            ignored_makers=combined_ignored,
             min_nick_version=min_nick_version,
             bondless_makers_allowance=self.bondless_makers_allowance,
             bondless_require_zero_fee=self.bondless_require_zero_fee,

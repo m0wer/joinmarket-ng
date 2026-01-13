@@ -223,20 +223,22 @@ class TestOnionPeerConnection:
         mock_connection = AsyncMock()
         mock_connection.is_connected.return_value = True
 
-        # Mock handshake response (peer-to-peer format)
+        # Mock handshake response (peer-to-peer format uses "line" with JSON-encoded string)
+        import json
+
+        handshake_data = {
+            "app-name": "joinmarket",
+            "proto-ver": 5,
+            "directory": False,
+            "features": {},
+            "location-string": "test.onion:5222",
+            "nick": "J5maker",
+            "network": "regtest",
+        }
         handshake_response = {
             "type": 793,  # HANDSHAKE
-            "data": {
-                "app-name": "joinmarket",
-                "proto-ver": 5,
-                "directory": False,
-                "features": {},
-                "location-string": "test.onion:5222",
-                "nick": "J5maker",
-                "network": "regtest",
-            },
+            "line": json.dumps(handshake_data),
         }
-        import json
 
         mock_connection.receive.return_value = json.dumps(handshake_response).encode()
 
@@ -266,19 +268,21 @@ class TestOnionPeerConnection:
         mock_connection.is_connected.return_value = True
 
         # Wrong app name
+        import json
+
+        handshake_data = {
+            "app-name": "wrongapp",
+            "proto-ver": 5,
+            "directory": False,
+            "features": {},
+            "location-string": "test.onion:5222",
+            "nick": "J5maker",
+            "network": "regtest",
+        }
         handshake_response = {
             "type": 793,
-            "data": {
-                "app-name": "wrongapp",
-                "proto-ver": 5,
-                "directory": False,
-                "features": {},
-                "location-string": "test.onion:5222",
-                "nick": "J5maker",
-                "network": "regtest",
-            },
+            "line": json.dumps(handshake_data),
         }
-        import json
 
         mock_connection.receive.return_value = json.dumps(handshake_response).encode()
 
@@ -304,19 +308,21 @@ class TestOnionPeerConnection:
         mock_connection.is_connected.return_value = True
 
         # Different network
+        import json
+
+        handshake_data = {
+            "app-name": "joinmarket",
+            "proto-ver": 5,
+            "directory": False,
+            "features": {},
+            "location-string": "test.onion:5222",
+            "nick": "J5maker",
+            "network": "mainnet",  # We expect regtest
+        }
         handshake_response = {
             "type": 793,
-            "data": {
-                "app-name": "joinmarket",
-                "proto-ver": 5,
-                "directory": False,
-                "features": {},
-                "location-string": "test.onion:5222",
-                "nick": "J5maker",
-                "network": "mainnet",  # We expect regtest
-            },
+            "line": json.dumps(handshake_data),
         }
-        import json
 
         mock_connection.receive.return_value = json.dumps(handshake_response).encode()
 

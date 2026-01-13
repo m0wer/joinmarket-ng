@@ -411,6 +411,59 @@ class TestOrderbookManager:
         # Only maker1 is honest
         assert len(orders) <= 1
 
+    def test_select_makers_exclude_nicks(
+        self, sample_offers: list[Offer], max_cj_fee: MaxCjFee
+    ) -> None:
+        """Test maker selection with explicit nick exclusion.
+
+        This tests the exclude_nicks parameter used during maker replacement
+        to avoid re-selecting makers that are already in the current session.
+        """
+        manager = OrderbookManager(max_cj_fee)
+        manager.update_offers(sample_offers)
+
+        # First, select some makers without exclusion
+        orders1, _ = manager.select_makers(cj_amount=100_000, n=2)
+        assert len(orders1) == 2
+
+        # Get the nicks of selected makers
+        selected_nicks = set(orders1.keys())
+
+        # Now select again, excluding the previously selected makers
+        orders2, _ = manager.select_makers(
+            cj_amount=100_000,
+            n=2,
+            exclude_nicks=selected_nicks,
+        )
+
+        # The newly selected makers should not overlap with the first selection
+        new_nicks = set(orders2.keys())
+        assert len(new_nicks & selected_nicks) == 0, "Should not re-select excluded makers"
+
+    def test_select_makers_exclude_nicks_combined_with_ignored(
+        self, sample_offers: list[Offer], max_cj_fee: MaxCjFee
+    ) -> None:
+        """Test that exclude_nicks works together with ignored_makers."""
+        manager = OrderbookManager(max_cj_fee)
+        manager.update_offers(sample_offers)
+
+        # Ignore maker1
+        manager.add_ignored_maker("maker1")
+
+        # Exclude maker2 via parameter
+        exclude = {"maker2"}
+
+        # Try to select makers (should not get maker1 or maker2)
+        orders, _ = manager.select_makers(
+            cj_amount=100_000,
+            n=2,
+            exclude_nicks=exclude,
+        )
+
+        # Verify neither excluded maker is in the result
+        assert "maker1" not in orders
+        assert "maker2" not in orders
+
 
 class TestFilterOffersByNickVersion:
     """Tests for filtering offers by nick version (reserved for future reference compat).
