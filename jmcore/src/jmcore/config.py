@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from jmcore.constants import DUST_THRESHOLD
 from jmcore.models import NetworkType
@@ -58,7 +58,7 @@ class TorControlConfig(BaseModel):
         default=None,
         description="Path to Tor cookie auth file (e.g., /var/lib/tor/control_auth_cookie)",
     )
-    password: str | None = Field(
+    password: SecretStr | None = Field(
         default=None,
         description="Password for HASHEDPASSWORD auth (not recommended, use cookie auth)",
     )
@@ -114,7 +114,7 @@ def create_tor_control_config_from_env() -> TorControlConfig:
         host=host,
         port=port,
         cookie_path=cookie_path,
-        password=password,
+        password=SecretStr(password) if password else None,
     )
 
 
@@ -148,8 +148,11 @@ class WalletConfig(BaseModel):
     """
 
     # Wallet seed
-    mnemonic: str = Field(..., description="BIP39 mnemonic phrase for wallet seed")
-    passphrase: str = Field(default="", description="BIP39 passphrase (13th/25th word)")
+    mnemonic: SecretStr = Field(..., description="BIP39 mnemonic phrase for wallet seed")
+    passphrase: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        description="BIP39 passphrase (13th/25th word)",
+    )
 
     # Network settings
     network: NetworkType = Field(

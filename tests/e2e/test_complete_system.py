@@ -291,7 +291,7 @@ async def test_wallet_multiple_mixdepths(funded_wallet: WalletService):
 async def test_maker_bot_initialization(bitcoin_backend, maker_config):
     """Test maker bot initialization"""
     wallet = WalletService(
-        mnemonic=maker_config.mnemonic,
+        mnemonic=maker_config.mnemonic.get_secret_value(),
         backend=bitcoin_backend,
         network="regtest",
     )
@@ -499,7 +499,7 @@ async def funded_maker2_wallet(bitcoin_backend):
 async def test_taker_initialization(bitcoin_backend, taker_config):
     """Test taker initialization and nick generation."""
     wallet = WalletService(
-        mnemonic=taker_config.mnemonic,
+        mnemonic=taker_config.mnemonic.get_secret_value(),
         backend=bitcoin_backend,
         network="regtest",
     )
@@ -522,7 +522,7 @@ async def test_taker_initialization(bitcoin_backend, taker_config):
 async def test_taker_connect_directory(bitcoin_backend, taker_config, directory_server):
     """Test taker connecting to directory server."""
     wallet = WalletService(
-        mnemonic=taker_config.mnemonic,
+        mnemonic=taker_config.mnemonic.get_secret_value(),
         backend=bitcoin_backend,
         network="regtest",
     )
@@ -554,7 +554,7 @@ async def test_taker_connect_directory(bitcoin_backend, taker_config, directory_
 async def test_taker_orderbook_fetch(bitcoin_backend, taker_config, directory_server):
     """Test taker fetching orderbook from directory."""
     wallet = WalletService(
-        mnemonic=taker_config.mnemonic,
+        mnemonic=taker_config.mnemonic.get_secret_value(),
         backend=bitcoin_backend,
         network="regtest",
     )

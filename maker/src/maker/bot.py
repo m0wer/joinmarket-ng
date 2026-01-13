@@ -346,7 +346,9 @@ class MakerBot:
                 control_host=self.config.tor_control.host,
                 control_port=self.config.tor_control.port,
                 cookie_path=self.config.tor_control.cookie_path,
-                password=self.config.tor_control.password,
+                password=self.config.tor_control.password.get_secret_value()
+                if self.config.tor_control.password
+                else None,
             )
 
             await self._tor_control.connect()

@@ -46,7 +46,7 @@ class TestNotificationConfig:
         )
 
         assert config.enabled is True
-        assert config.urls == ["gotify://host/token"]
+        assert [url.get_secret_value() for url in config.urls] == ["gotify://host/token"]
         assert config.title_prefix == "Test"
         assert config.include_amounts is False
 
@@ -84,7 +84,10 @@ class TestLoadNotificationConfig:
             config = load_notification_config()
 
         assert config.enabled is True
-        assert config.urls == ["gotify://host/token", "tgram://bot/chat"]
+        assert [url.get_secret_value() for url in config.urls] == [
+            "gotify://host/token",
+            "tgram://bot/chat",
+        ]
 
     def test_load_with_quoted_urls(self) -> None:
         """Test loading config with quoted NOTIFY_URLS (common from shell escaping)."""
@@ -105,9 +108,9 @@ class TestLoadNotificationConfig:
 
             assert config.enabled is True
             if isinstance(expected, list):
-                assert config.urls == expected
+                assert [url.get_secret_value() for url in config.urls] == expected
             else:
-                assert config.urls == [expected]
+                assert [url.get_secret_value() for url in config.urls] == [expected]
 
     def test_load_disabled_with_urls(self) -> None:
         """Test loading config with URLs but explicitly disabled."""
@@ -120,7 +123,7 @@ class TestLoadNotificationConfig:
             config = load_notification_config()
 
         assert config.enabled is False
-        assert config.urls == ["gotify://host/token"]
+        assert [url.get_secret_value() for url in config.urls] == ["gotify://host/token"]
 
     def test_load_privacy_settings(self) -> None:
         """Test loading privacy-related settings."""

@@ -174,7 +174,7 @@ class TestNeutrinoMaker:
         )
 
         wallet = WalletService(
-            mnemonic=config.mnemonic,
+            mnemonic=config.mnemonic.get_secret_value(),
             backend=neutrino_backend,
             network=NetworkType.REGTEST,
         )
@@ -209,7 +209,7 @@ class TestNeutrinoTaker:
         )
 
         wallet = WalletService(
-            mnemonic=config.mnemonic,
+            mnemonic=config.mnemonic.get_secret_value(),
             backend=neutrino_backend,
             network=NetworkType.REGTEST,
         )

@@ -222,7 +222,9 @@ def create_backend(config: TakerConfig) -> Any:
             network=bitcoin_network.value,
         )
     elif config.backend_type == "descriptor_wallet":
-        fingerprint = get_mnemonic_fingerprint(config.mnemonic, config.passphrase or "")
+        fingerprint = get_mnemonic_fingerprint(
+            config.mnemonic.get_secret_value(), config.passphrase.get_secret_value() or ""
+        )
         wallet_name = generate_wallet_name(fingerprint, bitcoin_network.value)
         return DescriptorWalletBackend(
             rpc_url=config.backend_config["rpc_url"],
@@ -439,9 +441,21 @@ def coinjoin(
     logger.info(f"Using backend: {config.backend_type}")
     logger.info(f"Tor SOCKS: {config.socks_host}:{config.socks_port}")
 
-    asyncio.run(
-        _run_coinjoin(config, amount, destination, mixdepth, config.counterparty_count, yes)
-    )
+    try:
+        asyncio.run(
+            _run_coinjoin(config, amount, destination, mixdepth, config.counterparty_count, yes)
+        )
+    except RuntimeError as e:
+        # Clean error for expected failures (e.g., connection failures)
+        logger.error(f"CoinJoin failed: {e}")
+        raise typer.Exit(1)
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user")
+        raise typer.Exit(130)
+    except Exception as e:
+        # Unexpected errors - show full traceback
+        logger.exception(f"Unexpected error: {e}")
+        raise typer.Exit(1)
 
 
 async def _run_coinjoin(
@@ -483,8 +497,8 @@ async def _run_coinjoin(
 
     # Create wallet
     wallet = WalletService(
-        mnemonic=config.mnemonic,
-        passphrase=config.passphrase,
+        mnemonic=config.mnemonic.get_secret_value(),
+        passphrase=config.passphrase.get_secret_value(),
         backend=backend,
         network=bitcoin_network.value,
         mixdepth_count=config.mixdepth_count,
@@ -686,7 +700,19 @@ def tumble(
     logger.info(f"Using network: {config.network.value}")
     logger.info(f"Using backend: {config.backend_type}")
 
-    asyncio.run(_run_tumble(config, schedule))
+    try:
+        asyncio.run(_run_tumble(config, schedule))
+    except RuntimeError as e:
+        # Clean error for expected failures (e.g., connection failures)
+        logger.error(f"Tumble failed: {e}")
+        raise typer.Exit(1)
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user")
+        raise typer.Exit(130)
+    except Exception as e:
+        # Unexpected errors - show full traceback
+        logger.exception(f"Unexpected error: {e}")
+        raise typer.Exit(1)
 
 
 async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
@@ -721,8 +747,8 @@ async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
 
     # Create wallet
     wallet = WalletService(
-        mnemonic=config.mnemonic,
-        passphrase=config.passphrase,
+        mnemonic=config.mnemonic.get_secret_value(),
+        passphrase=config.passphrase.get_secret_value(),
         backend=backend,
         network=bitcoin_network.value,
         mixdepth_count=config.mixdepth_count,

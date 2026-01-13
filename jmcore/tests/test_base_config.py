@@ -56,7 +56,7 @@ class TestTorControlConfig:
     def test_password_auth(self):
         config = TorControlConfig(enabled=True, password="secret")
         assert config.enabled is True
-        assert config.password == "secret"
+        assert config.password.get_secret_value() == "secret"
         assert config.cookie_path is None
 
 
@@ -81,7 +81,7 @@ class TestBackendConfig:
 class TestWalletConfig:
     def test_minimal_config(self):
         config = WalletConfig(mnemonic="abandon " * 11 + "about")
-        assert config.mnemonic == "abandon " * 11 + "about"
+        assert config.mnemonic.get_secret_value() == "abandon " * 11 + "about"
         assert config.network == NetworkType.MAINNET
         assert config.bitcoin_network == NetworkType.MAINNET  # Auto-set
 
@@ -197,7 +197,7 @@ class TestWalletConfigInheritance:
             custom_field: str = "custom"
 
         config = CustomConfig(mnemonic="test " * 12)
-        assert config.mnemonic == "test " * 12
+        assert config.mnemonic.get_secret_value() == "test " * 12
         assert config.network == NetworkType.MAINNET
         assert config.custom_field == "custom"
 

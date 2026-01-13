@@ -97,7 +97,7 @@ class TestTorControlConfig:
             password="mysecret",
         )
         assert config.enabled is True
-        assert config.password == "mysecret"
+        assert config.password.get_secret_value() == "mysecret"
 
 
 class TestMakerConfigTorControl:

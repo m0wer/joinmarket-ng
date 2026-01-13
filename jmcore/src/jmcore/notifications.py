@@ -41,7 +41,7 @@ from enum import Enum
 from typing import Any
 
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 
 class NotificationPriority(str, Enum):
@@ -65,7 +65,7 @@ class NotificationConfig(BaseModel):
         default=False,
         description="Master switch for notifications",
     )
-    urls: list[str] = Field(
+    urls: list[SecretStr] = Field(
         default_factory=list,
         description="List of Apprise notification URLs",
     )
@@ -130,7 +130,9 @@ def load_notification_config() -> NotificationConfig:
     """
     urls_str = os.environ.get("NOTIFY_URLS", "")
     # Strip whitespace and quotes from URLs (quotes may be present from shell escaping)
-    urls = [url.strip().strip('"').strip("'") for url in urls_str.split(",") if url.strip()]
+    urls_raw = [url.strip().strip('"').strip("'") for url in urls_str.split(",") if url.strip()]
+    # Wrap in SecretStr
+    urls = [SecretStr(url) for url in urls_raw]
 
     # Notifications are enabled if URLs are provided and not explicitly disabled
     enabled_str = os.environ.get("NOTIFY_ENABLED", "").lower()
@@ -238,7 +240,10 @@ class Notifier:
                 # Use longer timeout for Tor connections (default is 4s, too short for Tor)
                 # Tor circuit establishment can take 10-30 seconds
                 # Use Apprise's cto (connection timeout) and rto (read timeout) URL parameters
-                for url in self.config.urls:
+                for secret_url in self.config.urls:
+                    # Get the actual URL string from SecretStr
+                    url = secret_url.get_secret_value()
+
                     if self.config.use_tor:
                         # Append timeout parameters to URL for Tor connections
                         # cto = connection timeout, rto = read timeout (both in seconds)

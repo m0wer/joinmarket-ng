@@ -8,7 +8,7 @@ from enum import Enum
 
 from jmcore.config import WalletConfig
 from jmcore.models import OfferType
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, SecretStr, model_validator
 
 
 class BroadcastPolicy(str, Enum):
@@ -53,8 +53,9 @@ class TakerConfig(WalletConfig):
     """
 
     # CoinJoin settings
-    destination_address: str = Field(
-        default="", description="Target address for CJ output, empty = INTERNAL"
+    destination_address: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        description="Target address for CJ output, empty = INTERNAL",
     )
     amount: int = Field(default=0, ge=0, description="Amount in sats (0 = sweep)")
     mixdepth: int = Field(default=0, ge=0, description="Source mixdepth")

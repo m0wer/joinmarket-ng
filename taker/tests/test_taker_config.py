@@ -37,7 +37,7 @@ class TestTakerConfig:
     def test_minimal_config(self, sample_mnemonic: str) -> None:
         """Test minimal required configuration."""
         config = TakerConfig(mnemonic=sample_mnemonic)
-        assert config.mnemonic == sample_mnemonic
+        assert config.mnemonic.get_secret_value() == sample_mnemonic
         assert config.network.value == "mainnet"
         assert config.counterparty_count == 10
 

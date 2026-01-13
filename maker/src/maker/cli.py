@@ -280,7 +280,9 @@ def create_wallet_service(config: MakerConfig) -> WalletService:
     backend: BitcoinCoreBackend | DescriptorWalletBackend | NeutrinoBackend
     if backend_type == "descriptor_wallet":
         backend_cfg = config.backend_config
-        fingerprint = get_mnemonic_fingerprint(config.mnemonic, config.passphrase or "")
+        fingerprint = get_mnemonic_fingerprint(
+            config.mnemonic.get_secret_value(), config.passphrase.get_secret_value() or ""
+        )
         # Convert NetworkType enum to string value
         network_str = (
             bitcoin_network.value if hasattr(bitcoin_network, "value") else str(bitcoin_network)
@@ -311,12 +313,12 @@ def create_wallet_service(config: MakerConfig) -> WalletService:
         raise typer.BadParameter(f"Unsupported backend: {backend_type}")
 
     wallet = WalletService(
-        mnemonic=config.mnemonic,
+        mnemonic=config.mnemonic.get_secret_value(),
         backend=backend,
         network=bitcoin_network.value,
         mixdepth_count=config.mixdepth_count,
         gap_limit=config.gap_limit,
-        passphrase=config.passphrase,
+        passphrase=config.passphrase.get_secret_value(),
     )
     return wallet
 
