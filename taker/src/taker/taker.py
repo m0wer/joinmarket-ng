@@ -20,6 +20,7 @@ from enum import Enum
 from typing import Any
 
 from jmcore.bitcoin import calculate_sweep_amount
+from jmcore.bond_calc import calculate_timelocked_fidelity_bond_value
 from jmcore.commitment_blacklist import set_blacklist_path
 from jmcore.crypto import NickIdentity
 from jmcore.deduplication import ResponseDeduplicator
@@ -1087,6 +1088,92 @@ class Taker:
 
         logger.info("Directory connection status task stopped")
 
+    async def _update_offers_with_bond_values(self, offers: list[Offer]) -> None:
+        """
+        Verify fidelity bonds and calculate their values.
+
+        Fetches bond UTXO data from the backend and updates offer.fidelity_bond_value.
+        """
+        # Identify unique bond UTXOs
+        bond_utxos = set()
+        for offer in offers:
+            if offer.fidelity_bond_data and offer.fidelity_bond_value == 0:
+                txid = offer.fidelity_bond_data["utxo_txid"]
+                vout = offer.fidelity_bond_data["utxo_vout"]
+                bond_utxos.add((txid, vout))
+
+        if not bond_utxos:
+            return
+
+        logger.info(f"Verifying {len(bond_utxos)} fidelity bonds...")
+
+        # Get current block height and time once
+        try:
+            current_height = await self.backend.get_block_height()
+            current_time = int(time.time())
+        except Exception as e:
+            logger.warning(f"Failed to get blockchain info for bond verification: {e}")
+            return
+
+        # Fetch UTXOs in parallel
+        semaphore = asyncio.Semaphore(10)
+
+        async def process_bond(txid: str, vout: int) -> tuple[str, int, tuple[int, int] | None]:
+            async with semaphore:
+                try:
+                    utxo = await self.backend.get_utxo(txid, vout)
+                    if not utxo or utxo.confirmations <= 0:
+                        return (txid, vout, None)
+
+                    # Calculate confirmation time
+                    # Use block height to estimate time if exact block time unavailable
+                    conf_height = current_height - utxo.confirmations + 1
+                    try:
+                        conf_time = await self.backend.get_block_time(conf_height)
+                    except Exception:
+                        # Fallback if block time fetch fails
+                        # Estimate: current_time - (confirmations * 10 mins)
+                        conf_time = current_time - (utxo.confirmations * 600)
+
+                    return (txid, vout, (utxo.value, conf_time))
+                except Exception as e:
+                    logger.debug(f"Failed to verify bond {txid}:{vout}: {e}")
+                    return (txid, vout, None)
+
+        tasks = [process_bond(txid, vout) for txid, vout in bond_utxos]
+        results = await asyncio.gather(*tasks)
+
+        # Build map of (txid, vout) -> (value, conf_time)
+        bond_info = {}
+        for txid, vout, info in results:
+            if info:
+                bond_info[(txid, vout)] = info
+
+        # Update offers
+        updated_count = 0
+
+        for offer in offers:
+            if offer.fidelity_bond_data and offer.fidelity_bond_value == 0:
+                txid = offer.fidelity_bond_data["utxo_txid"]
+                vout = offer.fidelity_bond_data["utxo_vout"]
+                locktime = offer.fidelity_bond_data["locktime"]
+
+                if (txid, vout) in bond_info:
+                    utxo_value, conf_time = bond_info[(txid, vout)]
+
+                    bond_value = calculate_timelocked_fidelity_bond_value(
+                        utxo_value=utxo_value,
+                        confirmation_time=conf_time,
+                        locktime=locktime,
+                        current_time=current_time,
+                    )
+
+                    if bond_value > 0:
+                        offer.fidelity_bond_value = bond_value
+                        updated_count += 1
+
+        logger.info(f"Updated {updated_count} offers with verified fidelity bond values")
+
     async def do_coinjoin(
         self,
         amount: int,
@@ -1129,6 +1216,10 @@ class Taker:
             # Fetch orderbook
             logger.info("Fetching orderbook...")
             offers = await self.directory_client.fetch_orderbook(self.config.order_wait_time)
+
+            # Verify and calculate fidelity bond values
+            await self._update_offers_with_bond_values(offers)
+
             self.orderbook_manager.update_offers(offers)
 
             if len(offers) < n_makers:
