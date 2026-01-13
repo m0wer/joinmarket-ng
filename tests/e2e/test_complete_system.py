@@ -231,7 +231,7 @@ def taker_config():
         counterparty_count=2,
         minimum_makers=2,
         maker_timeout_sec=30,
-        order_wait_time=10.0,
+        order_wait_time=120.0,
     )
 
 

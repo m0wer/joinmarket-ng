@@ -112,7 +112,13 @@ class TakerConfig(WalletConfig):
     # Timeouts
     maker_timeout_sec: int = Field(default=60, ge=10, description="Timeout for maker responses")
     order_wait_time: float = Field(
-        default=10.0, ge=1.0, description="Seconds to wait for orderbook"
+        default=120.0,
+        ge=1.0,
+        description=(
+            "Seconds to wait for orderbook responses. Empirical testing shows 95th "
+            "percentile response time over Tor is ~101s. Default 120s (with 20% buffer) "
+            "captures ~95% of offers."
+        ),
     )
 
     # Broadcast policy (privacy vs reliability tradeoff)
