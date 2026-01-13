@@ -1491,9 +1491,32 @@ async def _send_transaction(
             key = wallet.get_key_for_address(utxo.address)
             if not key:
                 logger.error(f"Missing key for address {utxo.address}")
+                logger.error(f"Address cache has {len(wallet.address_cache)} entries")
                 raise typer.Exit(1)
 
             pubkey_bytes = key.get_public_key_bytes(compressed=True)
+
+            # DEBUG: Verify scriptPubKey consistency
+            from jmcore.bitcoin import pubkey_to_p2wpkh_script
+
+            derived_script = pubkey_to_p2wpkh_script(pubkey_bytes)
+            utxo_script = bytes.fromhex(utxo.scriptpubkey) if utxo.scriptpubkey else b""
+            derived_address = key.get_address(wallet.network)
+
+            logger.debug(f"UTXO {i}: {utxo.txid}:{utxo.vout}")
+            logger.debug(f"  UTXO address:    {utxo.address}")
+            logger.debug(f"  Derived address: {derived_address}")
+            logger.debug(f"  UTXO script:     {utxo.scriptpubkey}")
+            logger.debug(f"  Derived script:  {derived_script.hex()}")
+            logger.debug(f"  Scripts match:   {derived_script == utxo_script}")
+
+            if derived_script != utxo_script and utxo_script and not utxo.is_timelocked:
+                logger.error(
+                    f"ScriptPubKey mismatch! UTXO script {utxo.scriptpubkey} != "
+                    f"derived script {derived_script.hex()}"
+                )
+                logger.error("This indicates the wrong key is being used for signing")
+                raise typer.Exit(1)
 
             # Check if this is a timelocked (fidelity bond) UTXO
             if utxo.is_timelocked and utxo.locktime is not None:
@@ -1521,6 +1544,10 @@ async def _send_transaction(
             else:
                 # P2WPKH signing for regular UTXOs
                 script_code = create_p2wpkh_script_code(pubkey_bytes)
+                logger.debug("  P2WPKH signing:")
+                logger.debug(f"    script_code: {script_code.hex()}")
+                logger.debug(f"    value: {utxo.value}")
+                logger.debug(f"    pubkey: {pubkey_bytes.hex()}")
                 signature = sign_p2wpkh_input(
                     tx=tx,
                     input_index=i,
@@ -1528,6 +1555,7 @@ async def _send_transaction(
                     value=utxo.value,
                     private_key=key.private_key,
                 )
+                logger.debug(f"    signature: {signature.hex()}")
                 witnesses.append([signature, pubkey_bytes])
 
         # Build signed transaction with witness
