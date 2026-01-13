@@ -739,11 +739,21 @@ class DirectoryClient:
         for response in messages:
             try:
                 msg_type = response.get("type")
+                line = response["line"]
+
+                # Handle PEERLIST messages to keep peer features and active peers updated
+                if msg_type == MessageType.PEERLIST.value:
+                    try:
+                        self._handle_peerlist_response(line)
+                        logger.debug("Processed PEERLIST during orderbook fetch")
+                    except Exception as e:
+                        logger.debug(f"Failed to process PEERLIST: {e}")
+                    continue
+
                 if msg_type not in (MessageType.PUBMSG.value, MessageType.PRIVMSG.value):
                     logger.debug(f"Skipping message type {msg_type}")
                     continue
 
-                line = response["line"]
                 logger.debug(f"Processing message type {msg_type}: {line[:100]}...")
 
                 parts = line.split(COMMAND_PREFIX)
