@@ -208,7 +208,7 @@ class TestTakerSigning:
         config.counterparty_count = 4
         config.minimum_makers = 2
         config.maker_timeout_sec = 60
-        config.order_wait_time = 10
+        config.order_wait_time = 120
         config.taker_utxo_age = 5
         config.taker_utxo_amtpercent = 20
         config.tx_fee_factor = 1.0
@@ -534,7 +534,7 @@ def mock_config() -> MagicMock:
     config.counterparty_count = 4
     config.minimum_makers = 2
     config.maker_timeout_sec = 60
-    config.order_wait_time = 10
+    config.order_wait_time = 120
     config.taker_utxo_age = 5
     config.taker_utxo_amtpercent = 20
     config.tx_fee_factor = 1.0

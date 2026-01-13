@@ -383,13 +383,20 @@ class MultiDirectoryClient:
                 logger.warning(f"Error closing connection to {server}: {e}")
         self.clients.clear()
 
-    async def fetch_orderbook(self, timeout: float = 10.0) -> list[Offer]:
+    async def fetch_orderbook(self, timeout: float = 120.0) -> list[Offer]:
         """
         Fetch orderbook from all connected directory servers in parallel.
 
         Trusts the directory's orderbook as authoritative - if a maker has an offer
         in the directory, they are considered online. This avoids incorrectly filtering
         offers as "stale" based on slow peerlist responses.
+
+        Args:
+            timeout: Timeout in seconds (default: 120s). Note: The actual timeout is
+                    controlled by DirectoryClient.fetch_orderbooks() which uses 120s
+                    to capture ~95% of offers based on empirical testing over Tor.
+                    The 95th percentile response time is ~101s, so 120s provides a
+                    20% safety buffer.
         """
         all_offers: list[Offer] = []
         seen_offers: set[tuple[str, int]] = set()
