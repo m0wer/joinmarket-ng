@@ -137,7 +137,13 @@ def build_taker_config(
         max_rel_fee if max_rel_fee is not None else settings.taker.max_cj_fee_rel
     )
     effective_block_target = (
-        block_target if block_target is not None else settings.taker.fee_block_target
+        block_target
+        if block_target is not None
+        else (
+            settings.taker.fee_block_target
+            if settings.taker.fee_block_target is not None
+            else settings.wallet.default_fee_block_target
+        )
     )
     effective_bondless = (
         bondless_makers_allowance
