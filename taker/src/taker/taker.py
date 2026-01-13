@@ -1406,9 +1406,12 @@ class Taker:
                     )
 
                     # Select replacement makers from orderbook
+                    # Exclude makers already in current session to avoid reusing them
+                    current_session_nicks = set(self.maker_sessions.keys())
                     replacement_offers, _ = self.orderbook_manager.select_makers(
                         cj_amount=self.cj_amount,
                         n=needed,
+                        exclude_nicks=current_session_nicks,
                     )
 
                     if len(replacement_offers) < needed:
@@ -1465,9 +1468,12 @@ class Taker:
                     )
 
                     # Select replacement makers
+                    # Exclude makers already in current session to avoid reusing them
+                    current_session_nicks = set(self.maker_sessions.keys())
                     replacement_offers, _ = self.orderbook_manager.select_makers(
                         cj_amount=self.cj_amount,
                         n=needed,
+                        exclude_nicks=current_session_nicks,
                     )
 
                     if len(replacement_offers) < needed:
