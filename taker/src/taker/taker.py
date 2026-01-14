@@ -107,7 +107,6 @@ class MultiDirectoryClient:
         self.socks_port = socks_port
         self.neutrino_compat = neutrino_compat
         self.clients: dict[str, DirectoryClient] = {}
-        self._response_queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
         self.on_nick_leave = on_nick_leave
 
         # Direct peer connection settings
@@ -117,6 +116,10 @@ class MultiDirectoryClient:
         self._peer_connections: dict[str, OnionPeer] = {}
         # Background tasks for pending connections
         self._pending_connect_tasks: dict[str, asyncio.Task[bool]] = {}
+
+        # Unified message queue for direct peer messages
+        # Messages from direct peers are queued here and consumed by wait_for_responses
+        self._direct_message_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
         # Multi-directory nick tracking
         # Format: active_nicks[nick] = {server1: True, server2: True, ...}
@@ -250,8 +253,9 @@ class MultiDirectoryClient:
         """
         Handle message received from a direct peer connection.
 
-        Messages are forwarded to the response queues for processing
-        by wait_for_responses().
+        Messages are forwarded to the unified direct message queue for processing
+        by wait_for_responses(). The message is enriched with the sender's nick
+        to match the format expected by the response processing logic.
         """
         try:
             import json
@@ -259,10 +263,12 @@ class MultiDirectoryClient:
             msg = json.loads(data.decode("utf-8"))
             logger.debug(f"Received direct message from {nick}: type={msg.get('type')}")
 
+            # Enrich message with sender nick for wait_for_responses to identify
+            msg["from_nick"] = nick
+            msg["from_direct"] = True
+
             # Queue for processing by wait_for_responses
-            # Format matches what directory client returns
-            for queue in self._response_queues.values():
-                await queue.put(msg)
+            await self._direct_message_queue.put(msg)
         except Exception as e:
             logger.warning(f"Error processing peer message from {nick}: {e}")
 
@@ -429,104 +435,141 @@ class MultiDirectoryClient:
         return all_offers
 
     async def send_privmsg(
-        self, recipient: str, command: str, data: str, log_routing: bool = False
-    ) -> None:
-        """Send a private message, preferring direct connection if available.
+        self,
+        recipient: str,
+        command: str,
+        data: str,
+        log_routing: bool = False,
+        force_channel: str | None = None,
+    ) -> str:
+        """Send a private message, respecting channel consistency for CoinJoin sessions.
 
-        Message routing priority:
+        CRITICAL: Within a single CoinJoin session, all messages to a maker MUST use the
+        same communication channel (either direct or a specific directory). Mixing channels
+        causes the maker to reject messages as they appear to be from different sessions.
+
+        Message routing priority (when force_channel is None):
         1. Direct peer connection (if connected and prefer_direct_connections=True)
         2. Directory relay (fallback)
-
-        When using directory relay, we prioritize sending via a single directory
-        where the recipient is known to be active. This prevents race conditions
-        where the recipient receives multiple copies of the message (e.g., !fill)
-        and resets their session state multiple times, causing key mismatches.
 
         Args:
             recipient: Target maker nick
             command: Command name (without ! prefix)
             data: Command arguments
             log_routing: If True, log detailed routing information
+            force_channel: If set, only use this channel:
+                - "direct" = peer-to-peer onion connection
+                - "directory:<host>:<port>" = relay through specific directory
+
+        Returns:
+            Channel used: "direct" or "directory:<host>:<port>"
         """
         # Get maker's direct onion location if available
         maker_location = self._get_peer_location(recipient)
 
+        # If force_channel is set, use only that channel
+        if force_channel:
+            if force_channel == "direct":
+                peer = self._get_connected_peer(recipient)
+                if not peer:
+                    raise RuntimeError(
+                        f"Forced to use direct channel but no connection to {recipient}"
+                    )
+                success = await peer.send_privmsg(self.nick, command, data)
+                if not success:
+                    raise RuntimeError(f"Failed to send to {recipient} via direct connection")
+                if log_routing:
+                    logger.debug(
+                        f"Sent !{command} to {recipient} via DIRECT connection "
+                        f"(onion: {maker_location})"
+                    )
+                return "direct"
+            elif force_channel.startswith("directory:"):
+                # Extract host:port from "directory:host:port"
+                server = force_channel[10:]  # Skip "directory:"
+                client = self.clients.get(server)
+                if not client:
+                    raise RuntimeError(f"Forced to use directory {server} but not connected")
+                await client.send_private_message(recipient, command, data)
+                if log_routing:
+                    logger.debug(
+                        f"Sent !{command} to {recipient} via directory {server} "
+                        f"(maker onion: {maker_location}, using relay)"
+                    )
+                return force_channel
+            else:
+                raise ValueError(f"Invalid force_channel: {force_channel}")
+
+        # No forced channel - choose best available
         # Try direct connection first if available
-        sent_direct = False
         if self.prefer_direct_connections:
             peer = self._get_connected_peer(recipient)
             if peer:
                 try:
                     success = await peer.send_privmsg(self.nick, command, data)
                     if success:
-                        sent_direct = True
                         if log_routing:
                             logger.debug(
                                 f"Sent !{command} to {recipient} via DIRECT connection "
                                 f"(onion: {maker_location})"
                             )
+                        return "direct"
                 except Exception as e:
                     logger.debug(f"Direct send to {recipient} failed: {e}")
 
         # Fall back to directory relay
-        if not sent_direct:
-            # Opportunistically start direct connection for future messages
-            if self.prefer_direct_connections and maker_location:
-                self._try_direct_connect(recipient)
+        # Opportunistically start direct connection for future messages
+        if self.prefer_direct_connections and maker_location:
+            self._try_direct_connect(recipient)
 
-            # Identify valid directories for this recipient
-            target_directories = []
+        # Identify valid directories for this recipient
+        target_directories = []
 
-            # Check active nicks tracking first
-            if recipient in self._active_nicks:
-                for server, is_active in self._active_nicks[recipient].items():
-                    if is_active and server in self.clients:
-                        target_directories.append(server)
+        # Check active nicks tracking first
+        if recipient in self._active_nicks:
+            for server, is_active in self._active_nicks[recipient].items():
+                if is_active and server in self.clients:
+                    target_directories.append(server)
 
-            # If not found in tracking (e.g. startup race), try all clients that list the peer
-            if not target_directories:
-                for server, client in self.clients.items():
-                    if recipient in client._active_peers:
-                        target_directories.append(server)
+        # If not found in tracking (e.g. startup race), try all clients that list the peer
+        if not target_directories:
+            for server, client in self.clients.items():
+                if recipient in client._active_peers:
+                    target_directories.append(server)
 
-            # If still not found, fall back to all connected clients (broadcast)
-            if not target_directories:
-                target_directories = list(self.clients.keys())
+        # If still not found, fall back to all connected clients (broadcast)
+        if not target_directories:
+            target_directories = list(self.clients.keys())
 
-            # Shuffle to load balance
-            import random
+        # Shuffle to load balance
+        import random
 
-            random.shuffle(target_directories)
+        random.shuffle(target_directories)
 
-            # Send via the first working directory
-            # We strictly send to ONE directory to avoid message duplication
-            sent_via_directory = False
-            for server in target_directories:
-                client = self.clients.get(server)
-                if not client:
-                    continue
+        # Send via the first working directory
+        # We strictly send to ONE directory to avoid message duplication
+        for server in target_directories:
+            client = self.clients.get(server)
+            if not client:
+                continue
 
-                try:
-                    await client.send_private_message(recipient, command, data)
-                    sent_via_directory = True
-                    if log_routing:
-                        directory = f"{client.host}:{client.port}"
-                        if maker_location:
-                            logger.debug(
-                                f"Sent !{command} to {recipient} via directory {directory} "
-                                f"(maker onion: {maker_location}, using relay)"
-                            )
-                        else:
-                            logger.debug(
-                                f"Sent !{command} to {recipient} via directory {directory}"
-                            )
-                    # Success - stop after sending to one directory
-                    break
-                except Exception as e:
-                    logger.warning(f"Failed to send privmsg via {server}: {e}")
+            try:
+                await client.send_private_message(recipient, command, data)
+                if log_routing:
+                    directory = f"{client.host}:{client.port}"
+                    if maker_location:
+                        logger.debug(
+                            f"Sent !{command} to {recipient} via directory {directory} "
+                            f"(maker onion: {maker_location}, using relay)"
+                        )
+                    else:
+                        logger.debug(f"Sent !{command} to {recipient} via directory {directory}")
+                # Success - return the channel used
+                return f"directory:{server}"
+            except Exception as e:
+                logger.warning(f"Failed to send privmsg via {server}: {e}")
 
-            if not sent_via_directory:
-                logger.error(f"Failed to send !{command} to {recipient} via any directory")
+        raise RuntimeError(f"Failed to send !{command} to {recipient} via any directory")
 
     async def wait_for_responses(
         self,
@@ -535,6 +578,10 @@ class MultiDirectoryClient:
         timeout: float = 60.0,
     ) -> dict[str, dict[str, Any]]:
         """Wait for responses from multiple makers at once.
+
+        Listens for responses from BOTH:
+        - Directory server message streams (via client.listen_for_messages())
+        - Direct peer connections (via self._direct_message_queue)
 
         Returns a dict of nick -> response data for all makers that responded.
         Responses can include:
@@ -564,6 +611,68 @@ class MultiDirectoryClient:
         deduplicator = ResponseDeduplicator()
         start_time = asyncio.get_event_loop().time()
 
+        def process_message(msg: dict[str, Any], source: str) -> None:
+            """Process a single message from any source (directory or direct)."""
+            nonlocal responses, remaining_nicks
+
+            line = msg.get("line", "")
+            if not line:
+                return
+
+            # Check for !error messages from any of our expected nicks
+            if "!error" in line:
+                for nick in list(remaining_nicks):
+                    if nick in line:
+                        # Deduplicate error responses too
+                        if not deduplicator.add_response(nick, "error", line, source):
+                            logger.debug(f"Duplicate !error from {nick} via {source}")
+                            break
+                        # Extract error message after !error
+                        parts = line.split("!error", 1)
+                        error_msg = parts[1].strip() if len(parts) > 1 else "Unknown error"
+                        responses[nick] = {"error": True, "data": error_msg}
+                        remaining_nicks.discard(nick)
+                        logger.warning(f"Received !error from {nick}: {error_msg}")
+                        break
+                return
+
+            # Parse the message to find sender and command
+            if expected_command not in line:
+                return
+
+            # Match against expected nicks (not just remaining)
+            for nick in expected_nicks:
+                if nick in line:
+                    # For accumulating responses (like !sig), skip deduplication
+                    # since we expect multiple messages from the same maker
+                    if not accumulate_responses:
+                        # Check for duplicate response from another directory
+                        if not deduplicator.add_response(nick, expected_command, line, source):
+                            logger.debug(f"Duplicate {expected_command} from {nick} via {source}")
+                            break
+
+                    # Extract data after the command
+                    parts = line.split(expected_command, 1)
+                    if len(parts) > 1:
+                        data = parts[1].strip()
+                        if accumulate_responses:
+                            # Accumulate multiple !sig messages
+                            if nick not in responses:
+                                responses[nick] = {"data": []}
+                                remaining_nicks.discard(nick)
+                            responses[nick]["data"].append(data)
+                            logger.debug(
+                                f"Received {expected_command} "
+                                f"#{len(responses[nick]['data'])} "
+                                f"from {nick} via {source}"
+                            )
+                        else:
+                            # Single response (original behavior)
+                            responses[nick] = {"data": data}
+                            remaining_nicks.discard(nick)
+                            logger.debug(f"Received {expected_command} from {nick} via {source}")
+                    break
+
         while remaining_nicks or (accumulate_responses and responses):
             elapsed = asyncio.get_event_loop().time() - start_time
             if elapsed >= timeout:
@@ -575,71 +684,24 @@ class MultiDirectoryClient:
 
             remaining_time = min(5.0, timeout - elapsed)  # Listen in 5s chunks
 
+            # First, drain any pending direct peer messages (non-blocking)
+            while True:
+                try:
+                    msg = self._direct_message_queue.get_nowait()
+                    process_message(msg, "direct")
+                except asyncio.QueueEmpty:
+                    break
+
+            # For non-accumulating commands, check if we got all responses
+            if not accumulate_responses and not remaining_nicks:
+                break
+
+            # Then listen to directory clients for the remaining time
             for server, client in self.clients.items():
                 try:
                     messages = await client.listen_for_messages(duration=remaining_time)
                     for msg in messages:
-                        line = msg.get("line", "")
-
-                        # Check for !error messages from any of our expected nicks
-                        if "!error" in line:
-                            for nick in list(remaining_nicks):
-                                if nick in line:
-                                    # Deduplicate error responses too
-                                    if not deduplicator.add_response(nick, "error", line, server):
-                                        logger.debug(f"Duplicate !error from {nick} via {server}")
-                                        break
-                                    # Extract error message after !error
-                                    parts = line.split("!error", 1)
-                                    error_msg = (
-                                        parts[1].strip() if len(parts) > 1 else "Unknown error"
-                                    )
-                                    responses[nick] = {"error": True, "data": error_msg}
-                                    remaining_nicks.discard(nick)
-                                    logger.warning(f"Received !error from {nick}: {error_msg}")
-                                    break
-                            continue
-
-                        # Parse the message to find sender and command
-                        if expected_command not in line:
-                            continue
-
-                        # Match against expected nicks (not just remaining)
-                        for nick in expected_nicks:
-                            if nick in line:
-                                # For accumulating responses (like !sig), skip deduplication
-                                # since we expect multiple messages from the same maker
-                                if not accumulate_responses:
-                                    # Check for duplicate response from another directory
-                                    if not deduplicator.add_response(
-                                        nick, expected_command, line, server
-                                    ):
-                                        logger.debug(
-                                            f"Duplicate {expected_command} from {nick} via {server}"
-                                        )
-                                        break
-
-                                # Extract data after the command
-                                parts = line.split(expected_command, 1)
-                                if len(parts) > 1:
-                                    data = parts[1].strip()
-                                    if accumulate_responses:
-                                        # Accumulate multiple !sig messages
-                                        if nick not in responses:
-                                            responses[nick] = {"data": []}
-                                            remaining_nicks.discard(nick)
-                                        responses[nick]["data"].append(data)
-                                        logger.debug(
-                                            f"Received {expected_command} "
-                                            f"#{len(responses[nick]['data'])} "
-                                            f"from {nick}"
-                                        )
-                                    else:
-                                        # Single response (original behavior)
-                                        responses[nick] = {"data": data}
-                                        remaining_nicks.discard(nick)
-                                        logger.debug(f"Received {expected_command} from {nick}")
-                                break
+                        process_message(msg, f"directory:{server}")
                 except Exception as e:
                     logger.debug(f"Error waiting for responses: {e}")
 
@@ -702,6 +764,10 @@ class MakerSession:
     responded_auth: bool = False
     responded_sig: bool = False
     supports_neutrino_compat: bool = False  # Supports extended UTXO metadata for Neutrino
+    # Communication channel used for this session (must be consistent throughout)
+    # "direct" = peer-to-peer onion connection
+    # "directory:<host>:<port>" = relayed through specific directory
+    comm_channel: str = ""
 
 
 @dataclass
@@ -1260,6 +1326,7 @@ class Taker:
             # Interactive UTXO selection if requested
             manually_selected_utxos: list[UTXOInfo] | None = None
             if self.config.select_utxos:
+                from jmwallet.history import get_utxo_label
                 from jmwallet.utxo_selector import select_utxos_interactive
 
                 try:
@@ -1271,6 +1338,10 @@ class Taker:
                         logger.error(f"No eligible UTXOs in mixdepth {mixdepth}")
                         self.state = TakerState.FAILED
                         return None
+
+                    # Populate labels for each UTXO based on history
+                    for utxo in available_utxos:
+                        utxo.label = get_utxo_label(utxo.address, self.config.data_dir)
 
                     logger.info(
                         f"Launching interactive UTXO selector ({len(available_utxos)} available)..."
@@ -1694,13 +1765,53 @@ class Taker:
 
                     commitment_hex = self.podle_commitment.to_commitment_str()
                     taker_pubkey = self.crypto_session.get_pubkey_hex()
+
+                    # Establish communication channels for replacement makers
+                    # (Same logic as in _phase_fill)
+                    for nick in new_maker_nicks:
+                        peer = self.directory_client._get_connected_peer(nick)
+                        session = self.maker_sessions[nick]
+                        if peer and self.directory_client.prefer_direct_connections:
+                            session.comm_channel = "direct"
+                            logger.debug(f"Will use DIRECT connection for replacement maker {nick}")
+                        else:
+                            # Use directory relay
+                            target_directories = []
+
+                            if nick in self.directory_client._active_nicks:
+                                active_nicks_dict = self.directory_client._active_nicks[nick]
+                                for server, is_active in active_nicks_dict.items():
+                                    if is_active and server in self.directory_client.clients:
+                                        target_directories.append(server)
+
+                            if not target_directories:
+                                for server, client in self.directory_client.clients.items():
+                                    if nick in client._active_peers:
+                                        target_directories.append(server)
+
+                            if not target_directories:
+                                target_directories = list(self.directory_client.clients.keys())
+
+                            if target_directories:
+                                chosen_dir = target_directories[0]
+                                session.comm_channel = f"directory:{chosen_dir}"
+                                logger.debug(
+                                    f"Will use DIRECTORY relay {chosen_dir} "
+                                    f"for replacement maker {nick}"
+                                )
+
+                    # Send !fill to replacement makers using their designated channels
                     for nick in new_maker_nicks:
                         session = self.maker_sessions[nick]
                         fill_data = (
                             f"{session.offer.oid} {self.cj_amount} {taker_pubkey} {commitment_hex}"
                         )
                         await self.directory_client.send_privmsg(
-                            nick, "fill", fill_data, log_routing=True
+                            nick,
+                            "fill",
+                            fill_data,
+                            log_routing=True,
+                            force_channel=session.comm_channel,
                         )
 
                     # Wait for !pubkey responses from new makers
@@ -1923,9 +2034,25 @@ class Taker:
         taker_pubkey = self.crypto_session.get_pubkey_hex()
         commitment_hex = self.podle_commitment.to_commitment_str()
 
-        # Opportunistically wait for direct connections to complete before sending !fill
-        # This improves privacy by sending all messages directly instead of via directory relay
-        # Timeout is short (3s) to avoid adding significant latency
+        # CRITICAL: Establish communication channels BEFORE sending !fill
+        # We must use the SAME channel for ALL messages to each maker in this session
+        # Mixing channels (e.g., !fill via directory, !auth via direct) causes makers to reject
+        #
+        # Strategy:
+        # 1. Try to establish direct connections (with reasonable timeout)
+        # 2. Choose ONE channel per maker (direct OR specific directory)
+        # 3. Record the channel in maker_session.comm_channel
+        # 4. Use only that channel for all subsequent messages
+
+        # Start direct connection attempts for all makers
+        if self.directory_client.prefer_direct_connections:
+            for nick in self.maker_sessions.keys():
+                maker_location = self.directory_client._get_peer_location(nick)
+                if maker_location:
+                    self.directory_client._try_direct_connect(nick)
+
+        # Wait up to 5 seconds for direct connections to establish
+        # This timeout balances privacy (prefer direct) vs latency (don't wait too long)
         if self.directory_client.prefer_direct_connections:
             pending_tasks = []
             for nick in self.maker_sessions.keys():
@@ -1935,22 +2062,67 @@ class Taker:
                         pending_tasks.append(task)
 
             if pending_tasks:
-                logger.debug(f"Waiting up to 3s for {len(pending_tasks)} direct connections...")
+                logger.info(
+                    f"Waiting up to 5s for direct connections to {len(pending_tasks)} makers..."
+                )
                 done, pending = await asyncio.wait(
-                    pending_tasks, timeout=3.0, return_when=asyncio.ALL_COMPLETED
+                    pending_tasks, timeout=5.0, return_when=asyncio.ALL_COMPLETED
                 )
                 connected_count = len([t for t in done if not t.exception()])
                 if connected_count > 0:
-                    logger.debug(
-                        f"Established {connected_count}/{len(pending_tasks)} direct connections "
-                        f"(will use for !fill)"
+                    logger.info(
+                        f"Established {connected_count}/{len(pending_tasks)} direct connections"
                     )
 
-        # Send !fill to all makers
+        # Determine and record communication channel for each maker
+        for nick, session in self.maker_sessions.items():
+            # Check if direct connection is available
+            peer = self.directory_client._get_connected_peer(nick)
+            if peer and self.directory_client.prefer_direct_connections:
+                session.comm_channel = "direct"
+                logger.debug(f"Will use DIRECT connection for {nick}")
+            else:
+                # Use directory relay - pick one directory for this maker
+                maker_location = self.directory_client._get_peer_location(nick)
+                target_directories = []
+
+                # Check active nicks tracking first
+                if nick in self.directory_client._active_nicks:
+                    for server, is_active in self.directory_client._active_nicks[nick].items():
+                        if is_active and server in self.directory_client.clients:
+                            target_directories.append(server)
+
+                # If not found, try all clients that list the peer
+                if not target_directories:
+                    for server, client in self.directory_client.clients.items():
+                        if nick in client._active_peers:
+                            target_directories.append(server)
+
+                # If still not found, use all connected clients
+                if not target_directories:
+                    target_directories = list(self.directory_client.clients.keys())
+
+                # Pick first directory (already shuffled during orderbook fetch)
+                if target_directories:
+                    chosen_dir = target_directories[0]
+                    session.comm_channel = f"directory:{chosen_dir}"
+                    logger.debug(
+                        f"Will use DIRECTORY relay {chosen_dir} for {nick} "
+                        f"(onion: {maker_location or 'unknown'})"
+                    )
+                else:
+                    # This should never happen if we're connected to directories
+                    raise RuntimeError(f"No communication channel available for {nick}")
+
+        # Send !fill to all makers using their designated channels
         # Format: fill <oid> <amount> <taker_pubkey> <commitment>
         for nick, session in self.maker_sessions.items():
             fill_data = f"{session.offer.oid} {self.cj_amount} {taker_pubkey} {commitment_hex}"
-            await self.directory_client.send_privmsg(nick, "fill", fill_data, log_routing=True)
+            channel = await self.directory_client.send_privmsg(
+                nick, "fill", fill_data, log_routing=True, force_channel=session.comm_channel
+            )
+            # Verify the channel used matches what we recorded
+            assert channel == session.comm_channel, f"Channel mismatch for {nick}"
 
         # Wait for all !pubkey responses at once
         timeout = self.config.maker_timeout_sec
@@ -2112,10 +2284,14 @@ class Taker:
             else:
                 logger.debug(f"Sending legacy UTXO format to maker {nick}")
 
-            # Encrypt and send
+            # Encrypt and send (using same channel as !fill)
             encrypted_revelation = session.crypto.encrypt(revelation_str)
             await self.directory_client.send_privmsg(
-                nick, "auth", encrypted_revelation, log_routing=True
+                nick,
+                "auth",
+                encrypted_revelation,
+                log_routing=True,
+                force_channel=session.comm_channel,
             )
 
         # Track makers filtered due to incompatibility (not the same as failed)
@@ -2654,7 +2830,9 @@ class Taker:
                 continue
 
             encrypted_tx = session.crypto.encrypt(tx_b64)
-            await self.directory_client.send_privmsg(nick, "tx", encrypted_tx, log_routing=True)
+            await self.directory_client.send_privmsg(
+                nick, "tx", encrypted_tx, log_routing=True, force_channel=session.comm_channel
+            )
 
         # Wait for all !sig responses at once
         timeout = self.config.maker_timeout_sec
@@ -3009,7 +3187,12 @@ class Taker:
         async def send_push(nick: str) -> bool:
             """Send !push to a single maker, return True if no exception."""
             try:
-                await self.directory_client.send_privmsg(nick, "push", tx_b64, log_routing=True)
+                # Get the comm_channel from maker_sessions if available
+                session = self.maker_sessions.get(nick)
+                force_channel = session.comm_channel if session else None
+                await self.directory_client.send_privmsg(
+                    nick, "push", tx_b64, log_routing=True, force_channel=force_channel
+                )
                 return True
             except Exception as e:
                 logger.warning(f"Failed to send !push to {nick}: {e}")
@@ -3056,7 +3239,12 @@ class Taker:
             logger.info(f"Requesting broadcast via maker: {maker_nick}")
 
             # Send !push to the maker (unencrypted, like reference implementation)
-            await self.directory_client.send_privmsg(maker_nick, "push", tx_b64, log_routing=True)
+            # Use the same comm_channel as the rest of the session
+            session = self.maker_sessions.get(maker_nick)
+            force_channel = session.comm_channel if session else None
+            await self.directory_client.send_privmsg(
+                maker_nick, "push", tx_b64, log_routing=True, force_channel=force_channel
+            )
 
             # Wait and check if the transaction was broadcast
             await asyncio.sleep(2)  # Give maker time to broadcast
