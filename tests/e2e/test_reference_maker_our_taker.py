@@ -905,5 +905,145 @@ async def test_yieldgenerator_starts_and_announces_offers(
         stop_yieldgenerator(process, maker["maker_id"], maker["wallet_name"])
 
 
+@pytest.mark.asyncio
+@pytest.mark.timeout(600)
+async def test_our_taker_uses_direct_connections_with_reference_makers(
+    reference_maker_services, running_yieldgenerators
+):
+    """
+    Execute a CoinJoin and verify direct Tor connections are established.
+
+    This test runs the same scenario as test_our_taker_with_reference_makers
+    but explicitly verifies that the taker establishes direct P2P connections
+    with the makers, bypassing the directory server for private messages.
+    """
+    compose_file = reference_maker_services["compose_file"]
+
+    # Ensure miner wallet is ready
+    if not ensure_miner_wallet():
+        pytest.skip("Failed to setup miner wallet")
+
+    # Ensure bitcoin nodes are synced
+    logger.info("Checking bitcoin node sync...")
+    if not _wait_for_node_sync(max_attempts=30):
+        pytest.fail("Bitcoin nodes failed to sync")
+
+    # Fund the taker wallet
+    taker_address = "bcrt1q6rz28mcfaxtmd6v789l9rrlrusdprr9pz3cppk"
+    logger.info(f"Funding taker wallet at {taker_address}...")
+    funded = fund_jam_maker_wallet(taker_address, 3.0)
+    if not funded:
+        pytest.fail("Failed to fund taker wallet")
+
+    # Wait for confirmations
+    await asyncio.sleep(5)
+
+    # Get a destination address from bitcoin node
+    logger.info("Running our taker to execute CoinJoin with direct connections...")
+    result = run_bitcoin_cmd(["-rpcwallet=miner", "getnewaddress", "", "bech32"])
+    if result.returncode != 0:
+        pytest.fail(f"Failed to get destination address: {result.stderr}")
+    dest_address = result.stdout.strip()
+
+    # Run the taker container
+    cmd = [
+        "docker",
+        "compose",
+        "-f",
+        str(compose_file),
+        "run",
+        "--rm",
+        "-e",
+        "COINJOIN_AMOUNT=10000000",
+        "-e",
+        "MIN_MAKERS=2",
+        "-e",
+        "MAX_CJ_FEE_REL=0.01",
+        "-e",
+        "MAX_CJ_FEE_ABS=100000",
+        "-e",
+        "LOG_LEVEL=DEBUG",
+        "taker",
+        "jm-taker",
+        "coinjoin",
+        "--amount",
+        "10000000",
+        "--destination",
+        dest_address,
+        "--counterparties",
+        "2",
+        "--mixdepth",
+        "0",
+        "--network",
+        "testnet",
+        "--bitcoin-network",
+        "regtest",
+        "--backend",
+        "full_node",
+        "--max-abs-fee",
+        "100000",
+        "--max-rel-fee",
+        "0.01",
+        "--log-level",
+        "DEBUG",
+        "--yes",
+    ]
+
+    logger.info(f"Taker command: {' '.join(cmd)}")
+
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=COINJOIN_TIMEOUT, check=False
+    )
+
+    logger.info(f"Taker stdout:\n{result.stdout}")
+    if result.stderr:
+        logger.info(f"Taker stderr:\n{result.stderr}")
+
+    # Analyze results
+    output_combined = result.stdout + result.stderr
+    output_lower = output_combined.lower()
+
+    # Success indicators
+    success_indicators = [
+        "coinjoin completed",
+        "transaction broadcast",
+        "txid:",
+        "successfully",
+    ]
+    has_success = any(ind in output_lower for ind in success_indicators)
+
+    # Direct connection indicators
+    # "Direct connection established with {nick}" is the log message
+    direct_conn_indicators = [
+        "direct connection established",
+    ]
+    has_direct_conn = any(ind in output_lower for ind in direct_conn_indicators)
+
+    if has_direct_conn:
+        logger.info("SUCCESS: Direct connection established detected in logs!")
+    else:
+        logger.warning("No direct connection logs found.")
+
+    if has_success:
+        logger.info("CoinJoin completed successfully!")
+
+    # Verify both success and direct connection usage
+    # We allow the test to pass if at least one direct connection was established
+    # even if the full CoinJoin didn't complete (due to test env flakiness),
+    # but strictly we want both.
+
+    assert has_success, (
+        f"CoinJoin failed.\n"
+        f"Exit code: {result.returncode}\n"
+        f"Output: {output_combined[-3000:]}"
+    )
+
+    assert has_direct_conn, (
+        f"Taker did not establish direct connections.\n"
+        f"Direct connections are enabled by default and should occur.\n"
+        f"Output: {output_combined[-3000:]}"
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s", "--timeout=900"])

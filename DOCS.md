@@ -489,56 +489,52 @@ For private messages, the format includes routing information:
 
 JoinMarket supports two routing modes for private messages:
 
-#### Directory Relay (Current Implementation)
+#### Direct Peer Connections (Preferred)
 
-All private messages (`PRIVMSG`) are routed through directory servers:
+Our implementation opportunistically establishes direct Tor connections to makers, bypassing directory servers for private message exchange. This is the default behavior (`prefer_direct_connections=True`).
+
+1. Taker receives maker onion addresses from directory (`!peerlist` or handshake)
+2. When taker wants to message a maker:
+   - Check if direct connection exists
+   - If not, **try to connect directly** to maker's onion address (async)
+   - Fall back to directory relay if direct connection fails
+3. Once connected, future messages sent directly peer-to-peer
+
+**Protocol Details**:
+- **Handshake**: Direct connections use a specific handshake format matching the reference implementation: `{"type": 793, "line": "<json>"}`.
+- **Signing**: Messages sent via direct connection must include a signature where the `hostid` is set to `onion-network`. This differs from directory routing where `hostid` is the directory's onion address.
+- **Identity**: The `nick_identity` parameter is used to verify the peer's identity matches their public key.
+
+**Advantages**:
+- **Privacy**: Directory server cannot observe message metadata (timing, frequency, recipients).
+- **Performance**: Lower latency for subsequent messages (no relay hop).
+- **Scalability**: Reduces load on directory servers.
+
+**Tradeoffs**:
+- Requires Tor circuit establishment (initial latency).
+- Requires makers to have reachable onion services.
+
+#### Directory Relay (Fallback)
+
+If direct connections cannot be established (e.g., maker behind firewall, Tor issues), messages are automatically routed through directory servers:
 
 1. Taker sends `PRIVMSG` to directory: `{taker_nick}!{maker_nick}!fill ...`
 2. Directory forwards to maker (if connected to same directory)
 3. Maker responds via `PRIVMSG` through directory
 
 **Advantages**:
-- Simple, reliable routing
-- Works even if peers cannot directly reach each other
-- No NAT traversal needed
-- Compatible with all network setups
+- **Reliability**: Works even if peers cannot directly reach each other (e.g. restrictive firewalls).
+- **Simplicity**: No NAT traversal or hidden service management needed on client side.
 
 **Tradeoffs**:
-- Directory knows all message recipients (but not encrypted contents)
-- Slightly higher latency
-- Messages duplicated to all directories (taker doesn't know which directory serves each maker)
-
-#### Direct Peer Connections (Reference Implementation)
-
-The reference implementation opportunistically establishes direct Tor connections:
-
-1. Directory sends `!peerlist` with maker onion addresses
-2. When taker wants to message a maker:
-   - Check if direct connection exists
-   - If not, **try to connect directly** to maker's onion address (async)
-   - Fall back to directory relay if direct connection unavailable
-3. Once connected, future messages sent directly peer-to-peer
-
-**Advantages**:
-- Lower latency for subsequent messages
-- Directory doesn't see individual message recipients (only that peers are connected)
-- Reduces directory load
-
-**Tradeoffs**:
-- More complex connection management
-- Requires handling connection failures gracefully
-- Tor circuit establishment adds initial latency
-- May fail if maker's onion service is unreachable
+- Directory sees message metadata (sender, recipient, timing).
+- Higher latency (extra hop).
+- Messages duplicated to all directories in multi-directory setup.
 
 **Implementation Status**:
-- Reference implementation: Uses direct connections opportunistically (lines 801-830 in `onionmc.py`)
-- Our implementation: Supports direct connections (enabled by default in `MultiDirectoryClient`)
-  - First message sent via directory relay (opportunistic connection starts in background)
-  - Subsequent messages use direct connection if available
-  - Automatic fallback to directory relay on connection failure
-  - Configurable via `prefer_direct_connections` parameter
+- **Direct Connections**: Enabled by default in `MultiDirectoryClient`. Automatic fallback to directory relay.
+- **Directory Relay**: Used for initial messages and as reliable fallback.
 
-**Note**: In both modes, encrypted message contents (`!auth`, `!ioauth`, `!tx`, `!sig`) are end-to-end encrypted with NaCl, so directories and network observers cannot read them.
 
 #### Multi-part Messages
 

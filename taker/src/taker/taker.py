@@ -435,16 +435,18 @@ class MultiDirectoryClient:
 
         Message routing priority:
         1. Direct peer connection (if connected and prefer_direct_connections=True)
-        2. Directory relay (always used as fallback)
+        2. Directory relay (fallback)
 
-        When using directory relay, opportunistically starts a direct connection
-        in the background for future messages.
+        When using directory relay, we prioritize sending via a single directory
+        where the recipient is known to be active. This prevents race conditions
+        where the recipient receives multiple copies of the message (e.g., !fill)
+        and resets their session state multiple times, causing key mismatches.
 
         Args:
             recipient: Target maker nick
             command: Command name (without ! prefix)
             data: Command arguments
-            log_routing: If True, log detailed routing information for each directory
+            log_routing: If True, log detailed routing information
         """
         # Get maker's direct onion location if available
         maker_location = self._get_peer_location(recipient)
@@ -472,10 +474,41 @@ class MultiDirectoryClient:
             if self.prefer_direct_connections and maker_location:
                 self._try_direct_connect(recipient)
 
-            # Send via directory servers
-            for client in self.clients.values():
+            # Identify valid directories for this recipient
+            target_directories = []
+
+            # Check active nicks tracking first
+            if recipient in self._active_nicks:
+                for server, is_active in self._active_nicks[recipient].items():
+                    if is_active and server in self.clients:
+                        target_directories.append(server)
+
+            # If not found in tracking (e.g. startup race), try all clients that list the peer
+            if not target_directories:
+                for server, client in self.clients.items():
+                    if recipient in client._active_peers:
+                        target_directories.append(server)
+
+            # If still not found, fall back to all connected clients (broadcast)
+            if not target_directories:
+                target_directories = list(self.clients.keys())
+
+            # Shuffle to load balance
+            import random
+
+            random.shuffle(target_directories)
+
+            # Send via the first working directory
+            # We strictly send to ONE directory to avoid message duplication
+            sent_via_directory = False
+            for server in target_directories:
+                client = self.clients.get(server)
+                if not client:
+                    continue
+
                 try:
                     await client.send_private_message(recipient, command, data)
+                    sent_via_directory = True
                     if log_routing:
                         directory = f"{client.host}:{client.port}"
                         if maker_location:
@@ -487,8 +520,13 @@ class MultiDirectoryClient:
                             logger.debug(
                                 f"Sent !{command} to {recipient} via directory {directory}"
                             )
+                    # Success - stop after sending to one directory
+                    break
                 except Exception as e:
-                    logger.warning(f"Failed to send privmsg: {e}")
+                    logger.warning(f"Failed to send privmsg via {server}: {e}")
+
+            if not sent_via_directory:
+                logger.error(f"Failed to send !{command} to {recipient} via any directory")
 
     async def wait_for_responses(
         self,
@@ -1475,9 +1513,14 @@ class Taker:
                 f"Routing via {directory_count} director{'y' if directory_count == 1 else 'ies'}: "
                 f"{', '.join(directories)}"
             )
-            logger.debug(
-                "All messages will be relayed through directory servers (no direct connections)"
-            )
+            if self.directory_client.prefer_direct_connections:
+                logger.debug(
+                    "Direct connections preferred - will attempt to connect directly to makers"
+                )
+            else:
+                logger.debug(
+                    "Direct connections disabled - all messages relayed through directories"
+                )
 
             # Fire-and-forget notification for CoinJoin start
             asyncio.create_task(
@@ -1879,6 +1922,29 @@ class Taker:
         self.crypto_session = CryptoSession()
         taker_pubkey = self.crypto_session.get_pubkey_hex()
         commitment_hex = self.podle_commitment.to_commitment_str()
+
+        # Opportunistically wait for direct connections to complete before sending !fill
+        # This improves privacy by sending all messages directly instead of via directory relay
+        # Timeout is short (3s) to avoid adding significant latency
+        if self.directory_client.prefer_direct_connections:
+            pending_tasks = []
+            for nick in self.maker_sessions.keys():
+                if nick in self.directory_client._pending_connect_tasks:
+                    task = self.directory_client._pending_connect_tasks[nick]
+                    if not task.done():
+                        pending_tasks.append(task)
+
+            if pending_tasks:
+                logger.debug(f"Waiting up to 3s for {len(pending_tasks)} direct connections...")
+                done, pending = await asyncio.wait(
+                    pending_tasks, timeout=3.0, return_when=asyncio.ALL_COMPLETED
+                )
+                connected_count = len([t for t in done if not t.exception()])
+                if connected_count > 0:
+                    logger.debug(
+                        f"Established {connected_count}/{len(pending_tasks)} direct connections "
+                        f"(will use for !fill)"
+                    )
 
         # Send !fill to all makers
         # Format: fill <oid> <amount> <taker_pubkey> <commitment>

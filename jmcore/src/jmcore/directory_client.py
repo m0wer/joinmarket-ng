@@ -26,7 +26,7 @@ from loguru import logger
 from jmcore.btc_script import mk_freeze_script, redeem_script_to_p2wsh_script
 from jmcore.crypto import NickIdentity, verify_fidelity_bond_proof
 from jmcore.models import FidelityBond, Offer, OfferType
-from jmcore.network import TCPConnection, connect_direct, connect_via_tor
+from jmcore.network import ONION_HOSTID, TCPConnection, connect_direct, connect_via_tor
 from jmcore.protocol import (
     COMMAND_PREFIX,
     FEATURE_NEUTRINO_COMPAT,
@@ -181,9 +181,9 @@ class DirectoryClient:
         self.connection: TCPConnection | None = None
         self.nick_identity = nick_identity or NickIdentity(JM_VERSION)
         self.nick = self.nick_identity.nick
-        # hostid is used for message signing to prevent replay attacks
-        # For onion-based networks, this is always "onion-network"
-        self.hostid = "onion-network"
+        # hostid retained for possible future use (e.g., logging, debugging)
+        # Note: NOT used for message signing - always use ONION_HOSTID constant instead
+        self.hostid = host
         # Offers indexed by (counterparty, oid) with timestamp metadata
         self.offers: dict[tuple[str, int], OfferWithTimestamp] = {}
         # Bonds indexed by UTXO key (txid:vout)
@@ -932,7 +932,10 @@ class DirectoryClient:
         # Reference: rawmessage = ' '.join(message[1:].split(' ')[1:-2])
         # This means they extract [1:-2] which is the args, not the command
         # So we sign: data + hostid
-        signed_data = self.nick_identity.sign_message(data, self.hostid)
+        # IMPORTANT: Always use ONION_HOSTID ("onion-network"), NOT the directory hostname.
+        # The reference implementation uses a fixed hostid for ALL onion message channels
+        # (see jmdaemon/onionmc.py line 635: self.hostid = "onion-network")
+        signed_data = self.nick_identity.sign_message(data, ONION_HOSTID)
 
         # JoinMarket message format: from_nick!to_nick!command <args>
         # The COMMAND_PREFIX ("!") is used ONLY as a field separator between
