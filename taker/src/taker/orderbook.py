@@ -111,7 +111,7 @@ def filter_offers(
     for offer in offers:
         # Filter by maker
         if offer.counterparty in ignored_makers:
-            logger.debug(f"Ignoring offer from {offer.counterparty} (in ignored list)")
+            logger.info(f"Ignoring offer from {offer.counterparty} (in ignored list)")
             continue
 
         # Filter by nick version (reserved for potential future reference compatibility)
@@ -135,7 +135,7 @@ def filter_offers(
 
         # Filter by amount range
         if cj_amount < offer.minsize:
-            logger.debug(
+            logger.trace(
                 f"Ignoring offer from {offer.counterparty}: "
                 f"amount {cj_amount} < minsize {offer.minsize}"
             )

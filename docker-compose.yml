@@ -286,6 +286,55 @@ services:
     profiles:
       - taker
 
+  # Taker with Tor for reference-maker tests (direct connections to JAM makers)
+  # This taker has access to Tor SOCKS proxy to establish direct P2P connections
+  # with reference JAM makers, bypassing the directory server for private messages.
+  taker-reference:
+    image: ${TAKER_IMAGE:-}
+    build:
+      context: .
+      dockerfile: taker/Dockerfile
+    container_name: jm-taker-reference
+    restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    environment:
+      - MNEMONIC=${TAKER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}
+      - NETWORK_CONFIG__NETWORK=testnet
+      - NETWORK_CONFIG__BITCOIN_NETWORK=regtest
+      - BITCOIN__BACKEND_TYPE=descriptor_wallet
+      - BITCOIN__RPC_URL=http://jm-bitcoin:18443
+      - BITCOIN__RPC_USER=test
+      - BITCOIN__RPC_PASSWORD=test
+      - DIRECTORY_SERVERS=jm-directory:5222,jm-directory2:5223
+      - LOGGING__LEVEL=DEBUG
+      - COINJOIN_AMOUNT=1000000
+      - TAKER__MINIMUM_MAKERS=2
+      - TAKER__MAX_CJ_FEE_REL=0.01
+      - TAKER__MAX_CJ_FEE_ABS=100000
+      # Tor configuration for direct connections to makers
+      - TOR_SOCKS_HOST=jm-tor
+      - TOR_SOCKS_PORT=9050
+    volumes:
+      - taker-reference-data:/home/jm/.joinmarket-ng
+    networks:
+      - jm-network
+    depends_on:
+      bitcoin:
+        condition: service_healthy
+      directory:
+        condition: service_healthy
+      directory2:
+        condition: service_healthy
+      tor:
+        condition: service_healthy
+    profiles:
+      - reference-maker
+      - all
+
   # ============================================================================
   # E2E Test Setup (profile: e2e)
   # Two makers + infrastructure for automated testing
@@ -977,6 +1026,7 @@ volumes:
   maker3-data:
   maker-neutrino-data:
   taker-data:
+  taker-reference-data:
   taker-neutrino-data:
   tor-data:
 
