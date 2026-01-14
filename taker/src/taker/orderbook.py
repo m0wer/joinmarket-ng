@@ -286,17 +286,25 @@ def fidelity_bond_weighted_choose(
     cj_amount: int = 0,
 ) -> list[Offer]:
     """
-    Choose n offers with fidelity bond weighting.
+    Choose n offers with mixed fidelity bond and random selection.
 
-    With probability `bondless_makers_allowance`, falls back to random selection.
-    Otherwise, weights by fidelity bond value.
+    Strategy:
+    1. Calculate proportion of bonded slots: round(n * (1 - bondless_makers_allowance))
+    2. Fill bonded slots using weighted selection by bond value
+    3. Fill remaining slots randomly from ALL remaining offers (bonded or bondless)
+
+    "Bondless" means bond-agnostic (equal probability), not anti-bond. The bondless
+    slots give all remaining makers equal opportunity regardless of their bond status.
+
+    This ensures high-bond makers are prioritized while still allowing new/bondless
+    makers to participate in a predictable proportion.
 
     Args:
         offers: Eligible offers
         n: Number of offers to choose
-        bondless_makers_allowance: Probability of using random selection
-        bondless_require_zero_fee: If True, bondless spots only select zero absolute fee offers
-        cj_amount: CoinJoin amount for fee filtering
+        bondless_makers_allowance: Proportion of slots for random selection (0.0-1.0)
+        bondless_require_zero_fee: If True, bondless spots only select zero-fee offers
+        cj_amount: CoinJoin amount for fee filtering (unused currently)
 
     Returns:
         Selected offers
@@ -304,78 +312,109 @@ def fidelity_bond_weighted_choose(
     if len(offers) <= n:
         return offers[:]
 
-    # With some probability, use random selection (allows makers without bonds)
-    if random.random() < bondless_makers_allowance:
-        logger.debug("Using random selection (bondless makers allowance)")
+    # Log bonded offers for debugging
+    bonded_offers = [o for o in offers if o.fidelity_bond_value > 0]
+    logger.debug(
+        f"Found {len(bonded_offers)} offers with fidelity bond: "
+        f"{[o.counterparty for o in bonded_offers]}"
+    )
 
-        # If require_zero_fee is enabled, filter to only zero absolute fee offers
+    # Calculate split: prioritize bonded makers, fill remainder with random
+    # Use round() for fair rounding instead of floor
+    num_bonded = round(n * (1 - bondless_makers_allowance))
+    num_bondless = n - num_bonded
+
+    logger.debug(
+        f"Selection split: {num_bonded} bonded, {num_bondless} bondless "
+        f"(allowance={bondless_makers_allowance})"
+    )
+
+    selected: list[Offer] = []
+    remaining_offers = offers[:]  # Copy to modify
+
+    # 1. Select Bonded Makers (weighted by bond value)
+    if num_bonded > 0:
+        # Build pool of (offer, bond_value) pairs
+        pool = [(o, o.fidelity_bond_value) for o in remaining_offers]
+        # Remove zero-bond offers from bonded pool
+        bonded_pool = [(o, w) for o, w in pool if w > 0]
+
+        total_bond = sum(w for _, w in bonded_pool)
+
+        if total_bond == 0 or len(bonded_pool) == 0:
+            logger.debug(
+                f"No fidelity bonds found for {num_bonded} bonded slots, "
+                "will fill from bondless pool"
+            )
+            # Don't increment num_bondless here, we'll handle shortage at the end
+        else:
+            # Weighted selection without replacement
+            for _ in range(min(num_bonded, len(bonded_pool))):
+                if not bonded_pool:
+                    break
+
+                current_total = sum(w for _, w in bonded_pool)
+                r = random.uniform(0, current_total)
+                cumulative = 0
+
+                for i, (offer, weight) in enumerate(bonded_pool):
+                    cumulative += weight
+                    if r <= cumulative:
+                        selected.append(offer)
+                        remaining_offers.remove(offer)
+                        bonded_pool.pop(i)
+                        break
+
+    # 2. Fill remaining slots (bondless selection - uniform random from all remaining)
+    slots_remaining = n - len(selected)
+    if slots_remaining > 0:
+        if not remaining_offers:
+            logger.warning(
+                f"Not enough offers to fill {slots_remaining} remaining slots "
+                f"(selected {len(selected)}/{n})"
+            )
+            return selected
+
+        # For bondless slots: select uniformly from all remaining offers
+        # (both bonded and bondless makers have equal probability)
+        candidates = remaining_offers
+
+        # Optionally filter to zero-fee offers only
         if bondless_require_zero_fee:
-            zero_fee_offers = [
+            zero_fee_candidates = [
                 o
-                for o in offers
-                if o.ordertype in (OfferType.SW0_ABSOLUTE, OfferType.SWA_ABSOLUTE)
-                and int(o.cjfee) == 0
-            ]
-            # Include relative fee offers (they don't have absolute fee)
-            relative_fee_offers = [
-                o
-                for o in offers
-                if o.ordertype not in (OfferType.SW0_ABSOLUTE, OfferType.SWA_ABSOLUTE)
-            ]
-            eligible_offers = zero_fee_offers + relative_fee_offers
-
-            if len(eligible_offers) >= n:
-                logger.debug(
-                    f"Bondless selection: filtered to {len(eligible_offers)} offers "
-                    f"with zero absolute fee (or relative fee)"
+                for o in candidates
+                if (
+                    o.ordertype in (OfferType.SW0_ABSOLUTE, OfferType.SWA_ABSOLUTE)
+                    and int(o.cjfee) == 0
                 )
-                return random_order_choose(eligible_offers, n)
+                or (
+                    o.ordertype not in (OfferType.SW0_ABSOLUTE, OfferType.SWA_ABSOLUTE)
+                    # For relative offers, we can't strictly say fee is 0 without amount,
+                    # but usually 'zero fee' implies 0 absolute.
+                    # The original logic included relative fee offers in the eligible list.
+                    # We'll stick to that.
+                )
+            ]
+
+            if len(zero_fee_candidates) >= slots_remaining:
+                candidates = zero_fee_candidates
+                logger.debug(
+                    f"Bondless slots: filtered to {len(candidates)} zero-fee offers "
+                    f"(bonded + bondless)"
+                )
             else:
                 logger.warning(
                     f"Not enough zero-fee offers for bondless selection "
-                    f"({len(eligible_offers)} < {n}), falling back to all offers"
+                    f"({len(zero_fee_candidates)} < {slots_remaining}), "
+                    "using all remaining offers"
                 )
-                return random_order_choose(offers, n)
-        else:
-            return random_order_choose(offers, n)
 
-    # Weight by fidelity bond value
-    bond_values = [o.fidelity_bond_value for o in offers]
+        # Uniform random selection for remaining slots
+        picked = random_order_choose(candidates, slots_remaining)
+        selected.extend(picked)
 
-    # If no bonds, fall back to random
-    if sum(bond_values) == 0:
-        logger.debug("No fidelity bonds found, using random selection")
-        return random_order_choose(offers, n)
-
-    # Weighted selection
-    selected = []
-    remaining_offers = list(enumerate(offers))
-    remaining_weights = list(bond_values)
-
-    for _ in range(n):
-        if not remaining_offers:
-            break
-
-        total = sum(remaining_weights)
-        if total == 0:
-            # Pick randomly from remaining
-            idx = random.randrange(len(remaining_offers))
-            selected.append(remaining_offers[idx][1])
-            remaining_offers.pop(idx)
-            remaining_weights.pop(idx)
-            continue
-
-        r = random.uniform(0, total)
-        cumulative = 0
-
-        for i, (idx, offer) in enumerate(remaining_offers):
-            cumulative += remaining_weights[i]
-            if r <= cumulative:
-                selected.append(offer)
-                remaining_offers.pop(i)
-                remaining_weights.pop(i)
-                break
-
+    logger.debug(f"Final selection: {len(selected)} makers chosen")
     return selected
 
 

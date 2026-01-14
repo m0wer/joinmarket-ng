@@ -945,7 +945,7 @@ After collecting offers, the taker selects makers through three phases:
 
 | Algorithm | Behavior |
 |-----------|----------|
-| `fidelity_bond_weighted` (default) | Weighted by fidelity bond value (12.5% random fallback) |
+| `fidelity_bond_weighted` (default) | Mixed strategy: round(n × 87.5%) slots filled by bond-weighted selection, remaining slots filled randomly from all offers (bonded or bondless). "Bondless" means bond-agnostic, giving equal opportunity to all makers regardless of bond status. |
 | `cheapest` | Lowest fee first |
 | `weighted` | Exponentially weighted by inverse fee |
 | `random` | Uniform random selection |

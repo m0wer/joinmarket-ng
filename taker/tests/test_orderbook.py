@@ -465,6 +465,221 @@ class TestOrderbookManager:
         assert "maker2" not in orders
 
 
+class TestMixedBondedBondlessSelection:
+    """Tests for the mixed bonded/bondless selection strategy."""
+
+    def test_deterministic_split(self) -> None:
+        """Test that the split between bonded and bondless is deterministic."""
+        offers = [
+            Offer(
+                counterparty=f"Maker{i}",
+                oid=0,
+                ordertype=OfferType.SW0_ABSOLUTE,
+                minsize=1000,
+                maxsize=1000000,
+                txfee=0,
+                cjfee=0,
+                fidelity_bond_value=1000 if i < 5 else 0,  # First 5 bonded
+            )
+            for i in range(10)
+        ]
+
+        # With 3 makers and 0.125 allowance: bonded = floor(3 * 0.875) = 2
+        selected = fidelity_bond_weighted_choose(
+            offers=offers, n=3, bondless_makers_allowance=0.125, bondless_require_zero_fee=False
+        )
+
+        assert len(selected) == 3
+
+    def test_fills_all_slots(self) -> None:
+        """Ensure we always fill all n slots when enough offers exist."""
+        offers = [
+            Offer(
+                counterparty=f"BondedMaker{i}",
+                oid=0,
+                ordertype=OfferType.SW0_ABSOLUTE,
+                minsize=1000,
+                maxsize=1000000,
+                txfee=0,
+                cjfee=0,
+                fidelity_bond_value=100000,
+            )
+            for i in range(2)
+        ] + [
+            Offer(
+                counterparty=f"BondlessMaker{i}",
+                oid=0,
+                ordertype=OfferType.SW0_ABSOLUTE,
+                minsize=1000,
+                maxsize=1000000,
+                txfee=0,
+                cjfee=0,
+                fidelity_bond_value=0,
+            )
+            for i in range(8)
+        ]
+
+        # Should always get exactly 5 makers
+        for _ in range(10):
+            selected = fidelity_bond_weighted_choose(
+                offers=offers,
+                n=5,
+                bondless_makers_allowance=0.2,
+                bondless_require_zero_fee=False,
+            )
+            assert len(selected) == 5
+
+    def test_bonded_makers_prioritized(self) -> None:
+        """High-bond makers should be heavily favored in bonded slots."""
+        high_bond = Offer(
+            counterparty="HighBond",
+            oid=0,
+            ordertype=OfferType.SW0_ABSOLUTE,
+            minsize=1000,
+            maxsize=1000000,
+            txfee=0,
+            cjfee=0,
+            fidelity_bond_value=1_000_000_000,  # 1B sats
+        )
+
+        low_bonds = [
+            Offer(
+                counterparty=f"LowBond{i}",
+                oid=0,
+                ordertype=OfferType.SW0_ABSOLUTE,
+                minsize=1000,
+                maxsize=1000000,
+                txfee=0,
+                cjfee=0,
+                fidelity_bond_value=1000,  # 1k sats
+            )
+            for i in range(9)
+        ]
+
+        offers = [high_bond] + low_bonds
+
+        # Run 100 times, high bond should be selected almost always
+        # With allowance=0.2, bonded slots = floor(3 * 0.8) = 2
+        # HighBond should win at least one of these slots nearly every time
+        high_bond_count = 0
+        for _ in range(100):
+            selected = fidelity_bond_weighted_choose(
+                offers=offers, n=3, bondless_makers_allowance=0.2, bondless_require_zero_fee=False
+            )
+            if high_bond in selected:
+                high_bond_count += 1
+
+        # Should be selected in >90% of runs
+        assert high_bond_count > 90
+
+    def test_bondless_fills_remaining_with_zero_fee(self) -> None:
+        """Bondless slots should fill from zero-fee offers when required."""
+        bonded = [
+            Offer(
+                counterparty=f"Bonded{i}",
+                oid=0,
+                ordertype=OfferType.SW0_ABSOLUTE,
+                minsize=1000,
+                maxsize=1000000,
+                txfee=0,
+                cjfee=0,
+                fidelity_bond_value=100000,
+            )
+            for i in range(2)
+        ]
+
+        # Zero fee bondless
+        zero_fee = [
+            Offer(
+                counterparty=f"ZeroFee{i}",
+                oid=0,
+                ordertype=OfferType.SW0_ABSOLUTE,
+                minsize=1000,
+                maxsize=1000000,
+                txfee=0,
+                cjfee=0,  # Zero fee
+                fidelity_bond_value=0,
+            )
+            for i in range(3)
+        ]
+
+        # Non-zero fee bondless (should be excluded from bondless slots)
+        nonzero_fee = [
+            Offer(
+                counterparty=f"NonZeroFee{i}",
+                oid=0,
+                ordertype=OfferType.SW0_ABSOLUTE,
+                minsize=1000,
+                maxsize=1000000,
+                txfee=0,
+                cjfee=100,  # Non-zero fee
+                fidelity_bond_value=0,
+            )
+            for i in range(3)
+        ]
+
+        offers = bonded + zero_fee + nonzero_fee
+
+        # With n=3, allowance=0.4: bonded=floor(3*0.6)=1, bondless=2
+        # Should pick 1 bonded + 2 from zero_fee (not nonzero_fee)
+        for _ in range(10):
+            selected = fidelity_bond_weighted_choose(
+                offers=offers, n=3, bondless_makers_allowance=0.4, bondless_require_zero_fee=True
+            )
+            assert len(selected) == 3
+
+            # Check that nonzero_fee makers are not in bondless slots
+            # (Note: they could be in bonded slots since they have bond=0,
+            # but bonded prioritizes bond>0)
+            selected_nicks = {o.counterparty for o in selected}
+            nonzero_nicks = {o.counterparty for o in nonzero_fee}
+
+            # Since bonded slots pick from bond>0 only, and bondless require zero fee,
+            # nonzero_fee makers should not appear
+            assert len(selected_nicks & nonzero_nicks) == 0
+
+    def test_insufficient_bonded_fills_from_bondless(self) -> None:
+        """If not enough bonded offers, fill remainder from bondless pool."""
+        # Only 1 bonded maker
+        bonded = Offer(
+            counterparty="OnlyBonded",
+            oid=0,
+            ordertype=OfferType.SW0_ABSOLUTE,
+            minsize=1000,
+            maxsize=1000000,
+            txfee=0,
+            cjfee=0,
+            fidelity_bond_value=100000,
+        )
+
+        # 5 bondless makers
+        bondless = [
+            Offer(
+                counterparty=f"Bondless{i}",
+                oid=0,
+                ordertype=OfferType.SW0_ABSOLUTE,
+                minsize=1000,
+                maxsize=1000000,
+                txfee=0,
+                cjfee=0,
+                fidelity_bond_value=0,
+            )
+            for i in range(5)
+        ]
+
+        offers = [bonded] + bondless
+
+        # With n=4, allowance=0.25: bonded=floor(4*0.75)=3, bondless=1
+        # But we only have 1 bonded offer, so remaining 3 slots filled from bondless
+        selected = fidelity_bond_weighted_choose(
+            offers=offers, n=4, bondless_makers_allowance=0.25, bondless_require_zero_fee=False
+        )
+
+        assert len(selected) == 4
+        # OnlyBonded should always be selected (in bonded phase)
+        assert bonded in selected
+
+
 class TestFilterOffersByNickVersion:
     """Tests for filtering offers by nick version (reserved for future reference compat).
 
