@@ -380,7 +380,7 @@ class TakerSettings(BaseModel):
         description="Number of peers for multiple-peers broadcast",
     )
     minimum_makers: int = Field(
-        default=2,
+        default=1,
         ge=1,
         description="Minimum number of makers required",
     )

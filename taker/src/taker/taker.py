@@ -1233,8 +1233,6 @@ class Taker:
             Transaction ID if successful, None otherwise
         """
         try:
-            self.state = TakerState.FETCHING_ORDERBOOK
-
             n_makers = counterparty_count or self.config.counterparty_count
 
             # Determine destination address
@@ -1252,24 +1250,10 @@ class Taker:
                 self.state = TakerState.FAILED
                 return None
 
-            # Fetch orderbook
-            logger.info("Fetching orderbook...")
-            offers = await self.directory_client.fetch_orderbook(self.config.order_wait_time)
-
-            # Verify and calculate fidelity bond values
-            await self._update_offers_with_bond_values(offers)
-
-            self.orderbook_manager.update_offers(offers)
-
-            if len(offers) < n_makers:
-                logger.error(f"Not enough offers: need {n_makers}, found {len(offers)}")
-                self.state = TakerState.FAILED
-                return None
-
             # Track if this is a sweep (no change) transaction
             self.is_sweep = amount == 0
 
-            # Select UTXOs from wallet
+            # Select UTXOs from wallet BEFORE fetching orderbook to avoid wasting user's time
             logger.info(f"Selecting UTXOs from mixdepth {mixdepth}...")
 
             # Interactive UTXO selection if requested
@@ -1305,6 +1289,21 @@ class Taker:
                     logger.error(f"Interactive UTXO selection failed: {e}")
                     self.state = TakerState.FAILED
                     return None
+
+            # Now fetch orderbook after UTXO selection is done
+            self.state = TakerState.FETCHING_ORDERBOOK
+            logger.info("Fetching orderbook...")
+            offers = await self.directory_client.fetch_orderbook(self.config.order_wait_time)
+
+            # Verify and calculate fidelity bond values
+            await self._update_offers_with_bond_values(offers)
+
+            self.orderbook_manager.update_offers(offers)
+
+            if len(offers) < n_makers:
+                logger.error(f"Not enough offers: need {n_makers}, found {len(offers)}")
+                self.state = TakerState.FAILED
+                return None
 
             # NOTE: Neutrino takers require makers that support extended UTXO metadata
             # (scriptPubKey + blockheight). This is negotiated during the CoinJoin handshake

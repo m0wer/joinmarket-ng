@@ -100,6 +100,11 @@ def filter_offers(
     if allowed_types is None:
         allowed_types = {OfferType.SW0_RELATIVE, OfferType.SW0_ABSOLUTE}
 
+    if ignored_makers:
+        logger.debug(
+            f"Filtering offers: {len(ignored_makers)} makers in ignored list: {ignored_makers}"
+        )
+
     eligible = []
 
     for offer in offers:
@@ -145,7 +150,7 @@ def filter_offers(
         # Filter by fee limits
         if not is_fee_within_limits(offer, cj_amount, max_cj_fee):
             fee = calculate_cj_fee(offer, cj_amount)
-            logger.debug(f"Ignoring offer from {offer.counterparty}: fee {fee} exceeds limits")
+            logger.trace(f"Ignoring offer from {offer.counterparty}: fee {fee} exceeds limits")
             continue
 
         eligible.append(offer)
@@ -554,8 +559,30 @@ def choose_sweep_orders(
     # Dedupe
     deduped = dedupe_offers_by_maker(eligible)
 
+    logger.debug(
+        f"After deduplication: {len(deduped)} unique makers from {len(eligible)} eligible offers"
+    )
+    if len(deduped) < len(eligible):
+        # Show which makers had multiple offers
+        from collections import Counter
+
+        maker_counts = Counter(o.counterparty for o in eligible)
+        multi_offer_makers = {m: c for m, c in maker_counts.items() if c > 1}
+        if multi_offer_makers:
+            logger.debug(f"Makers with multiple offers: {multi_offer_makers}")
+
     if len(deduped) < n:
-        logger.warning(f"Not enough makers for sweep: need {n}, found {len(deduped)}")
+        logger.warning(
+            f"Not enough makers for sweep: need {n}, found {len(deduped)} "
+            f"(filtered from {len(offers)} total offers)"
+        )
+        # Can't proceed if we don't have at least 1 maker (minimum for a CoinJoin)
+        if len(deduped) < 1:
+            logger.error(
+                "No makers available. "
+                "Try relaxing fee limits or checking if makers are in ignored list."
+            )
+            return {}, 0, 0
         n = len(deduped)
 
     if n == 0:

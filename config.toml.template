@@ -195,7 +195,7 @@
 # broadcast_peer_count = 3
 
 # Minimum number of makers required
-# minimum_makers = 2
+# minimum_makers = 1
 
 # ============================================================================
 # Directory Server Settings
