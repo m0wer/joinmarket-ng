@@ -176,13 +176,30 @@ class TestLoadNotificationConfig:
         assert config.use_tor is False
 
     def test_load_tor_defaults(self) -> None:
-        """Test that Tor is enabled by default."""
+        """Test that Tor is enabled by default with default host and port."""
         env = {"NOTIFY_URLS": "gotify://host/token"}
 
         with patch.dict(os.environ, env, clear=True):
             config = load_notification_config()
 
         assert config.use_tor is True
+        assert config.tor_socks_host == "127.0.0.1"
+        assert config.tor_socks_port == 9050
+
+    def test_load_tor_custom_settings(self) -> None:
+        """Test loading custom Tor proxy settings from environment."""
+        env = {
+            "NOTIFY_URLS": "gotify://host/token",
+            "TOR_SOCKS_HOST": "192.168.1.100",
+            "TOR_SOCKS_PORT": "9150",
+        }
+
+        with patch.dict(os.environ, env, clear=True):
+            config = load_notification_config()
+
+        assert config.use_tor is True
+        assert config.tor_socks_host == "192.168.1.100"
+        assert config.tor_socks_port == 9150
 
 
 class TestNotifier:
@@ -336,11 +353,13 @@ class TestNotifier:
 
     @pytest.mark.asyncio
     async def test_tor_proxy_configuration(self) -> None:
-        """Test that Tor proxy environment variables are set correctly."""
+        """Test that Tor proxy environment variables are set correctly from config."""
         config = NotificationConfig(
             enabled=True,
             urls=["gotify://host/token"],
             use_tor=True,
+            tor_socks_host="192.168.1.100",
+            tor_socks_port=9150,
         )
         notifier = Notifier(config)
 
@@ -352,16 +371,7 @@ class TestNotifier:
         mock_apprise_module = MagicMock()
         mock_apprise_module.Apprise.return_value = mock_apprise_instance
 
-        # Set custom TOR_SOCKS_HOST and TOR_SOCKS_PORT
-        env = {
-            "TOR_SOCKS_HOST": "192.168.1.100",
-            "TOR_SOCKS_PORT": "9150",
-        }
-
-        with (
-            patch.dict("sys.modules", {"apprise": mock_apprise_module}),
-            patch.dict(os.environ, env),
-        ):
+        with patch.dict("sys.modules", {"apprise": mock_apprise_module}):
             # Force re-initialization
             notifier._initialized = False
             notifier._apprise = None
@@ -679,16 +689,22 @@ class TestConvertSettingsToNotificationConfig:
         assert config.enabled is False
 
     def test_convert_tor_settings(self) -> None:
-        """Test converting Tor proxy settings."""
-        from jmcore.settings import JoinMarketSettings, NotificationSettings
+        """Test converting Tor proxy settings from JoinMarketSettings."""
+        from jmcore.settings import JoinMarketSettings, NotificationSettings, TorSettings
 
         settings = JoinMarketSettings(
+            tor=TorSettings(
+                socks_host="tor.example.com",
+                socks_port=9999,
+            ),
             notifications=NotificationSettings(
                 urls=["gotify://host/token"],
-                use_tor=False,
-            )
+                use_tor=True,
+            ),
         )
 
         config = convert_settings_to_notification_config(settings)
 
-        assert config.use_tor is False
+        assert config.use_tor is True
+        assert config.tor_socks_host == "tor.example.com"
+        assert config.tor_socks_port == 9999
