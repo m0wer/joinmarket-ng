@@ -44,6 +44,7 @@ def build_taker_config(
     destination: str = "",
     mixdepth: int = 0,
     counterparties: int | None = None,
+    select_utxos: bool = False,
     # CLI overrides (None means use settings value)
     network: NetworkType | None = None,
     bitcoin_network: NetworkType | None = None,
@@ -167,9 +168,12 @@ def build_taker_config(
     except ValueError:
         broadcast_policy = BroadcastPolicy.MULTIPLE_PEERS
 
+    # Import SecretStr for wrapping sensitive values
+    from pydantic import SecretStr
+
     return TakerConfig(
-        mnemonic=mnemonic,
-        passphrase=passphrase,
+        mnemonic=SecretStr(mnemonic),
+        passphrase=SecretStr(passphrase),
         network=effective_network,
         bitcoin_network=effective_bitcoin_network,
         data_dir=effective_data_dir,
@@ -184,7 +188,7 @@ def build_taker_config(
         smart_scan=settings.wallet.smart_scan,
         background_full_rescan=settings.wallet.background_full_rescan,
         scan_lookback_blocks=settings.wallet.scan_lookback_blocks,
-        destination_address=destination,
+        destination_address=SecretStr(destination),
         amount=amount,
         mixdepth=mixdepth,
         counterparty_count=effective_counterparties,
@@ -201,6 +205,7 @@ def build_taker_config(
         broadcast_peer_count=settings.taker.broadcast_peer_count,
         minimum_makers=settings.taker.minimum_makers,
         rescan_interval_sec=settings.taker.rescan_interval_sec,
+        select_utxos=select_utxos,
     )
 
 
@@ -375,6 +380,14 @@ def coinjoin(
             help="For bondless spots, require zero absolute fee",
         ),
     ] = None,
+    select_utxos: Annotated[
+        bool,
+        typer.Option(
+            "--select-utxos",
+            "-s",
+            help="Interactively select UTXOs (fzf-like TUI)",
+        ),
+    ] = False,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompt")] = False,
     log_level: Annotated[str, typer.Option("--log-level", "-l", help="Log level")] = "INFO",
 ) -> None:
@@ -414,6 +427,7 @@ def coinjoin(
             destination=destination,
             mixdepth=mixdepth,
             counterparties=counterparties,
+            select_utxos=select_utxos,
             network=network,
             bitcoin_network=bitcoin_network,
             backend_type=backend_type,
