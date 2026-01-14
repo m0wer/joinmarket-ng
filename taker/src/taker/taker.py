@@ -1234,6 +1234,40 @@ class Taker:
             # Select UTXOs from wallet
             logger.info(f"Selecting UTXOs from mixdepth {mixdepth}...")
 
+            # Interactive UTXO selection if requested
+            manually_selected_utxos: list[UTXOInfo] | None = None
+            if self.config.select_utxos:
+                from jmwallet.utxo_selector import select_utxos_interactive
+
+                try:
+                    # Get all eligible UTXOs for selection
+                    available_utxos = self.wallet.get_all_utxos(
+                        mixdepth, self.config.taker_utxo_age
+                    )
+                    if not available_utxos:
+                        logger.error(f"No eligible UTXOs in mixdepth {mixdepth}")
+                        self.state = TakerState.FAILED
+                        return None
+
+                    logger.info(
+                        f"Launching interactive UTXO selector ({len(available_utxos)} available)..."
+                    )
+                    manually_selected_utxos = select_utxos_interactive(available_utxos, amount)
+
+                    if not manually_selected_utxos:
+                        logger.info("UTXO selection cancelled by user")
+                        self.state = TakerState.CANCELLED
+                        return None
+
+                    logger.info(
+                        f"Manually selected {len(manually_selected_utxos)} UTXOs "
+                        f"(total: {sum(u.value for u in manually_selected_utxos):,} sats)"
+                    )
+                except RuntimeError as e:
+                    logger.error(f"Interactive UTXO selection failed: {e}")
+                    self.state = TakerState.FAILED
+                    return None
+
             # NOTE: Neutrino takers require makers that support extended UTXO metadata
             # (scriptPubKey + blockheight). This is negotiated during the CoinJoin handshake
             # via the neutrino_compat feature in the !pubkey response. All peers use v5
@@ -1248,10 +1282,17 @@ class Taker:
                 # SWEEP MODE: Select ALL UTXOs and calculate exact cj_amount for zero change
                 logger.info("Sweep mode: selecting all UTXOs from mixdepth")
 
-                # Get ALL UTXOs from the mixdepth
-                self.preselected_utxos = self.wallet.get_all_utxos(
-                    mixdepth, self.config.taker_utxo_age
-                )
+                # Use manually selected UTXOs if available, otherwise get all UTXOs
+                if manually_selected_utxos:
+                    self.preselected_utxos = manually_selected_utxos
+                    logger.info(
+                        f"Using {len(manually_selected_utxos)} manually selected UTXOs for sweep"
+                    )
+                else:
+                    # Get ALL UTXOs from the mixdepth
+                    self.preselected_utxos = self.wallet.get_all_utxos(
+                        mixdepth, self.config.taker_utxo_age
+                    )
 
                 if not self.preselected_utxos:
                     logger.error(f"No eligible UTXOs in mixdepth {mixdepth}")
@@ -1306,26 +1347,34 @@ class Taker:
                 # This ensures the PoDLE UTXO is one we'll actually use in the transaction
                 logger.info("Selecting UTXOs and generating PoDLE commitment...")
 
-                # Estimate required amount (conservative estimate for UTXO pre-selection)
-                # We'll refine this in _phase_build_tx once we have exact maker UTXOs
-                estimated_inputs = 2 + len(selected_offers) * 2  # Rough estimate
-                estimated_outputs = 2 + len(selected_offers) * 2
-                estimated_tx_fee = self._estimate_tx_fee(estimated_inputs, estimated_outputs)
-                estimated_required = self.cj_amount + total_fee + estimated_tx_fee
-
-                # Pre-select UTXOs for the CoinJoin
-                try:
-                    self.preselected_utxos = self.wallet.select_utxos(
-                        mixdepth, estimated_required, self.config.taker_utxo_age
-                    )
+                # Use manually selected UTXOs if available
+                if manually_selected_utxos:
+                    self.preselected_utxos = manually_selected_utxos
                     logger.info(
-                        f"Pre-selected {len(self.preselected_utxos)} UTXOs for CoinJoin "
-                        f"(total: {sum(u.value for u in self.preselected_utxos):,} sats)"
+                        f"Using {len(manually_selected_utxos)} manually selected UTXOs "
+                        f"(total: {sum(u.value for u in manually_selected_utxos):,} sats)"
                     )
-                except ValueError as e:
-                    logger.error(f"Insufficient funds for CoinJoin: {e}")
-                    self.state = TakerState.FAILED
-                    return None
+                else:
+                    # Estimate required amount (conservative estimate for UTXO pre-selection)
+                    # We'll refine this in _phase_build_tx once we have exact maker UTXOs
+                    estimated_inputs = 2 + len(selected_offers) * 2  # Rough estimate
+                    estimated_outputs = 2 + len(selected_offers) * 2
+                    estimated_tx_fee = self._estimate_tx_fee(estimated_inputs, estimated_outputs)
+                    estimated_required = self.cj_amount + total_fee + estimated_tx_fee
+
+                    # Pre-select UTXOs for the CoinJoin
+                    try:
+                        self.preselected_utxos = self.wallet.select_utxos(
+                            mixdepth, estimated_required, self.config.taker_utxo_age
+                        )
+                        logger.info(
+                            f"Pre-selected {len(self.preselected_utxos)} UTXOs for CoinJoin "
+                            f"(total: {sum(u.value for u in self.preselected_utxos):,} sats)"
+                        )
+                    except ValueError as e:
+                        logger.error(f"Insufficient funds for CoinJoin: {e}")
+                        self.state = TakerState.FAILED
+                        return None
 
             # Initialize maker sessions - neutrino_compat will be detected during handshake
             # when we receive the !pubkey response with features field

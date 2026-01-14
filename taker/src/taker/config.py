@@ -149,6 +149,10 @@ class TakerConfig(WalletConfig):
         le=10,
         description="Max attempts to replace non-responsive makers (0 = disabled)",
     )
+    select_utxos: bool = Field(
+        default=False,
+        description="Interactively select UTXOs before CoinJoin (CLI only)",
+    )
 
     # Wallet rescan configuration
     rescan_interval_sec: int = Field(
