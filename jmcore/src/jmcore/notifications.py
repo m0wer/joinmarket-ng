@@ -96,6 +96,16 @@ class NotificationConfig(BaseModel):
         default=True,
         description="Route notifications through Tor SOCKS proxy",
     )
+    tor_socks_host: str = Field(
+        default="127.0.0.1",
+        description="Tor SOCKS5 proxy host (only used if use_tor=True)",
+    )
+    tor_socks_port: int = Field(
+        default=9050,
+        ge=1,
+        le=65535,
+        description="Tor SOCKS5 proxy port (only used if use_tor=True)",
+    )
 
     # Event type toggles (all enabled by default if notifications are enabled)
     notify_fill: bool = Field(default=True, description="Notify on !fill requests")
@@ -128,7 +138,8 @@ def load_notification_config() -> NotificationConfig:
     - NOTIFY_INCLUDE_NICK: Include peer nicks (default: true)
     - NOTIFY_STARTUP: Notify on startup (default: true)
     - NOTIFY_USE_TOR: Route through Tor SOCKS proxy (default: true)
-      - Uses TOR_SOCKS_HOST and TOR_SOCKS_PORT environment variables for proxy address
+      - TOR_SOCKS_HOST: Tor proxy host (default: 127.0.0.1)
+      - TOR_SOCKS_PORT: Tor proxy port (default: 9050)
     - NOTIFY_<EVENT>: Per-event toggles (e.g., NOTIFY_FILL, NOTIFY_SIGNING)
     """
     urls_str = os.environ.get("NOTIFY_URLS", "")
@@ -162,6 +173,8 @@ def load_notification_config() -> NotificationConfig:
         include_txids=get_bool_env("NOTIFY_INCLUDE_TXIDS", False),
         include_nick=get_bool_env("NOTIFY_INCLUDE_NICK", True),
         use_tor=get_bool_env("NOTIFY_USE_TOR", True),
+        tor_socks_host=os.environ.get("TOR_SOCKS_HOST", "127.0.0.1"),
+        tor_socks_port=int(os.environ.get("TOR_SOCKS_PORT", "9050")),
         notify_fill=get_bool_env("NOTIFY_FILL", True),
         notify_rejection=get_bool_env("NOTIFY_REJECTION", True),
         notify_signing=get_bool_env("NOTIFY_SIGNING", True),
@@ -220,6 +233,8 @@ def convert_settings_to_notification_config(settings: JoinMarketSettings) -> Not
         include_txids=ns.include_txids,
         include_nick=ns.include_nick,
         use_tor=ns.use_tor,
+        tor_socks_host=settings.tor.socks_host,
+        tor_socks_port=settings.tor.socks_port,
         notify_fill=ns.notify_fill,
         notify_rejection=ns.notify_rejection,
         notify_signing=ns.notify_signing,
@@ -273,9 +288,9 @@ class Notifier:
 
                 # Configure proxy environment variables if Tor is enabled
                 if self.config.use_tor:
-                    # Use the standard JoinMarket Tor configuration
-                    tor_host = os.environ.get("TOR_SOCKS_HOST", "127.0.0.1")
-                    tor_port = os.environ.get("TOR_SOCKS_PORT", "9050")
+                    # Use the Tor configuration from settings
+                    tor_host = self.config.tor_socks_host
+                    tor_port = self.config.tor_socks_port
                     # Use socks5h:// to resolve DNS through the proxy (important for .onion)
                     proxy_url = f"socks5h://{tor_host}:{tor_port}"
                     # Set environment variables that Apprise/requests will use
