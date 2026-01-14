@@ -1540,6 +1540,67 @@ class WalletService:
             else:
                 return "new"
 
+    def get_next_after_last_used_address(
+        self,
+        mixdepth: int,
+        used_addresses: set[str] | None = None,
+    ) -> tuple[str, int]:
+        """
+        Get the next receive address after the last used one for a mixdepth.
+
+        This returns the address at (highest used index + 1). The highest used index
+        is determined by checking blockchain history, UTXOs, and CoinJoin history.
+        If no address has been used yet, returns index 0.
+
+        This is useful for wallet info display, showing the next address to use
+        after the last one that was used in any way, ignoring any gaps in the sequence.
+
+        Args:
+            mixdepth: The mixdepth (account) number
+            used_addresses: Set of addresses that were used/flagged in CoinJoins
+
+        Returns:
+            Tuple of (address, index)
+        """
+        if used_addresses is None:
+            if self.data_dir:
+                from jmwallet.history import get_used_addresses
+
+                used_addresses = get_used_addresses(self.data_dir)
+            else:
+                used_addresses = set()
+
+        max_index = -1
+        change = 0  # external/receive chain
+
+        # Check addresses with current UTXOs
+        utxos = self.utxo_cache.get(mixdepth, [])
+        for utxo in utxos:
+            if utxo.address in self.address_cache:
+                md, ch, idx = self.address_cache[utxo.address]
+                if md == mixdepth and ch == change and idx > max_index:
+                    max_index = idx
+
+        # Check addresses that ever had blockchain activity (including spent)
+        for address in self.addresses_with_history:
+            if address in self.address_cache:
+                md, ch, idx = self.address_cache[address]
+                if md == mixdepth and ch == change and idx > max_index:
+                    max_index = idx
+
+        # Check CoinJoin history for addresses that may have been shared
+        for address in used_addresses:
+            if address in self.address_cache:
+                md, ch, idx = self.address_cache[address]
+                if md == mixdepth and ch == change and idx > max_index:
+                    max_index = idx
+
+        # Return next index after the last used (or 0 if none used)
+        next_index = max_index + 1
+
+        address = self.get_receive_address(mixdepth, next_index)
+        return address, next_index
+
     def get_next_unused_unflagged_address(
         self,
         mixdepth: int,

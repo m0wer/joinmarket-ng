@@ -643,8 +643,8 @@ async def _show_wallet_info(
             print("\nBalance by mixdepth:")
             for md in range(5):
                 balance = await wallet.get_balance(md)
-                # Get next unused unflagged address (not just index 0)
-                addr, _ = wallet.get_next_unused_unflagged_address(md, used_addresses)
+                # Get next address after the last used (highest used index + 1)
+                addr, _ = wallet.get_next_after_last_used_address(md, used_addresses)
                 print(f"  Mixdepth {md}: {balance:>15,} sats  |  {addr}")
 
     finally:
