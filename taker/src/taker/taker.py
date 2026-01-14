@@ -45,6 +45,7 @@ from jmwallet.wallet.signing import (
     create_witness_stack,
     deserialize_transaction,
     sign_p2wpkh_input,
+    verify_p2wpkh_signature,
 )
 from loguru import logger
 from pydantic import ConfigDict, Field
@@ -575,6 +576,7 @@ class MultiDirectoryClient:
         expected_nicks: list[str],
         expected_command: str,
         timeout: float = 60.0,
+        expected_counts: dict[str, int] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Wait for responses from multiple makers at once.
 
@@ -600,7 +602,14 @@ class MultiDirectoryClient:
         Special handling for !sig:
         - Makers send multiple !sig messages (one per UTXO)
         - We accumulate all messages in a list instead of keeping just the last one
-        - We continue listening for the full timeout to collect all signatures
+        - Use expected_counts to specify how many signatures to expect per maker
+        - Returns as soon as all expected signatures are received
+
+        Args:
+            expected_nicks: List of maker nicks to expect responses from
+            expected_command: Command to wait for (e.g., "!pubkey", "!sig")
+            timeout: Maximum time to wait in seconds
+            expected_counts: For !sig, dict of nick -> expected signature count
         """
         # Track if this command expects multiple messages per maker
         accumulate_responses = expected_command == "!sig"
@@ -609,6 +618,20 @@ class MultiDirectoryClient:
         remaining_nicks = set(expected_nicks)
         deduplicator = ResponseDeduplicator()
         start_time = asyncio.get_event_loop().time()
+
+        def is_complete() -> bool:
+            """Check if we have all expected responses."""
+            if remaining_nicks:
+                return False
+            if accumulate_responses and expected_counts:
+                # For !sig, check if we have all expected signatures
+                for nick, expected in expected_counts.items():
+                    if nick not in responses:
+                        return False
+                    received = len(responses[nick].get("data", []))
+                    if received < expected:
+                        return False
+            return True
 
         def process_message(msg: dict[str, Any], source: str) -> None:
             """Process a single message from any source (directory or direct)."""
@@ -672,13 +695,19 @@ class MultiDirectoryClient:
                             logger.debug(f"Received {expected_command} from {nick} via {source}")
                     break
 
-        while remaining_nicks or (accumulate_responses and responses):
+        while not is_complete():
             elapsed = asyncio.get_event_loop().time() - start_time
             if elapsed >= timeout:
                 if not accumulate_responses:
                     logger.warning(
                         f"Timeout waiting for {expected_command} from: {remaining_nicks}"
                     )
+                elif expected_counts:
+                    # Log which makers haven't sent all signatures
+                    for nick, expected in expected_counts.items():
+                        received = len(responses.get(nick, {}).get("data", []))
+                        if received < expected:
+                            logger.warning(f"Timeout: {nick} sent {received}/{expected} signatures")
                 break
 
             remaining_time = min(5.0, timeout - elapsed)  # Listen in 5s chunks
@@ -691,22 +720,31 @@ class MultiDirectoryClient:
                 except asyncio.QueueEmpty:
                     break
 
-            # For non-accumulating commands, check if we got all responses
-            if not accumulate_responses and not remaining_nicks:
+            # Check if we have everything after processing direct messages
+            if is_complete():
                 break
 
-            # Then listen to directory clients for the remaining time
-            for server, client in self.clients.items():
+            # Listen to all directory clients concurrently for shorter duration
+            # Use 1s chunks to allow more frequent checking of direct message queue
+            listen_duration = min(1.0, remaining_time)
+
+            async def listen_to_client(
+                server: str, client: DirectoryClient
+            ) -> list[tuple[str, dict[str, Any]]]:
                 try:
-                    messages = await client.listen_for_messages(duration=remaining_time)
-                    for msg in messages:
-                        process_message(msg, f"directory:{server}")
+                    messages = await client.listen_for_messages(duration=listen_duration)
+                    return [(server, msg) for msg in messages]
                 except Exception as e:
-                    logger.debug(f"Error waiting for responses: {e}")
+                    logger.debug(f"Error listening to {server}: {e}")
+                    return []
 
-            # For non-accumulating commands, check if we got all responses
-            if not accumulate_responses and not remaining_nicks:
-                break
+            # Gather messages from all directories concurrently
+            results = await asyncio.gather(
+                *[listen_to_client(s, c) for s, c in self.clients.items()]
+            )
+            for result_list in results:
+                for server, msg in result_list:
+                    process_message(msg, f"directory:{server}")
 
         # Log deduplication stats if there were duplicates
         stats = deduplicator.stats
@@ -2843,7 +2881,12 @@ class Taker:
         return None
 
     async def _phase_collect_signatures(self) -> bool:
-        """Send !tx and collect !sig responses from makers."""
+        """Send !tx and collect !sig responses from makers.
+
+        The reference maker sends signatures in TRANSACTION INPUT ORDER, not in the
+        order UTXOs were originally provided. We must match signatures to transaction
+        inputs by verifying which UTXO each signature is valid for, not by index.
+        """
         # Encode transaction as base64 (expected by maker after decryption)
         import base64
 
@@ -2860,6 +2903,11 @@ class Taker:
                 nick, "tx", encrypted_tx, log_routing=True, force_channel=session.comm_channel
             )
 
+        # Build expected signature counts for early termination
+        expected_counts = {
+            nick: len(session.utxos) for nick, session in self.maker_sessions.items()
+        }
+
         # Wait for all !sig responses at once
         timeout = self.config.maker_timeout_sec
         expected_nicks = list(self.maker_sessions.keys())
@@ -2869,12 +2917,25 @@ class Taker:
             expected_nicks=expected_nicks,
             expected_command="!sig",
             timeout=timeout,
+            expected_counts=expected_counts,
         )
 
+        # Deserialize transaction for signature verification
+        # We use verification-based matching: verify each signature against inputs
+        # to find the correct match, rather than relying on ordering.
+        try:
+            tx = deserialize_transaction(self.unsigned_tx)
+        except Exception as e:
+            logger.error(f"Failed to deserialize transaction: {e}")
+            return False
+
+        # Build a map of input_index -> (txid_hex, vout)
+        input_map: dict[int, tuple[str, int]] = {}
+        for idx, tx_input in enumerate(tx.inputs):
+            txid_hex = tx_input.txid_le[::-1].hex()
+            input_map[idx] = (txid_hex, tx_input.vout)
+
         # Process responses
-        # Maker sends multiple !sig messages (one per UTXO) as ENCRYPTED
-        # Response format for each: "<encrypted_sig> <signing_pubkey> <signature>"
-        # responses[nick]["data"] is now a list of encrypted signature messages
         for nick in list(self.maker_sessions.keys()):
             if nick in responses:
                 try:
@@ -2887,7 +2948,6 @@ class Taker:
                     # Get all signature messages for this maker
                     response_data_list = responses[nick]["data"]
                     if not isinstance(response_data_list, list):
-                        # Fallback for single signature (shouldn't happen with new code)
                         response_data_list = [response_data_list]
 
                     if not response_data_list:
@@ -2895,23 +2955,34 @@ class Taker:
                         del self.maker_sessions[nick]
                         continue
 
-                    # Process each signature message
+                    # Identify this maker's input indices in the transaction
+                    maker_utxo_map = {(u["txid"], u["vout"]): u for u in session.utxos}
+                    maker_input_indices: list[int] = []
+
+                    for idx, (txid, vout) in input_map.items():
+                        if (txid, vout) in maker_utxo_map:
+                            maker_input_indices.append(idx)
+
+                    if len(maker_input_indices) != len(session.utxos):
+                        logger.warning(
+                            f"UTXO count mismatch for {nick}: found {len(maker_input_indices)} "
+                            f"inputs in tx, expected {len(session.utxos)}"
+                        )
+                        # Continue anyway, maybe some UTXOs were excluded (though shouldn't happen)
+
+                    # Process signatures with verification
                     sig_infos: list[dict[str, Any]] = []
+                    matched_indices: set[int] = set()
+
                     for sig_idx, response_data in enumerate(response_data_list):
                         parts = response_data.strip().split()
                         if not parts:
-                            logger.warning(f"Empty !sig message #{sig_idx + 1} from {nick}")
                             continue
 
                         encrypted_data = parts[0]
-
-                        # Decrypt the signature
-                        # Maker sends base64: varint(sig_len) + sig + varint(pub_len) + pub
                         decrypted_sig = session.crypto.decrypt(encrypted_data)
 
-                        # Parse the signature to extract the witness stack
-                        # Format: varint(sig_len) + sig + varint(pub_len) + pub
-                        # Add padding if needed - base64 strings must have length divisible by 4
+                        # Parse signature (same as before)
                         padding_needed = (4 - len(decrypted_sig) % 4) % 4
                         padded_sig = decrypted_sig + "=" * padding_needed
                         sig_bytes = base64.b64decode(padded_sig)
@@ -2920,32 +2991,46 @@ class Taker:
                         pub_len = sig_bytes[1 + sig_len]
                         pubkey = sig_bytes[2 + sig_len : 2 + sig_len + pub_len]
 
-                        # Build witness as [signature_hex, pubkey_hex]
-                        witness = [signature.hex(), pubkey.hex()]
+                        # Try to verify against each of maker's inputs
+                        matched_input_idx = None
 
-                        # Match signature to the maker's UTXO by index
-                        # Makers send signatures in the same order as their UTXOs
-                        if sig_idx < len(session.utxos):
-                            utxo = session.utxos[sig_idx]
-                            sig_info = {
-                                "txid": utxo["txid"],
-                                "vout": utxo["vout"],
-                                "witness": witness,
-                            }
-                            sig_infos.append(sig_info)
+                        for idx in maker_input_indices:
+                            if idx in matched_indices:
+                                continue
+
+                            txid, vout = input_map[idx]
+                            utxo = maker_utxo_map[(txid, vout)]
+                            value = utxo["value"]
+
+                            # Create scriptCode for verification
+                            script_code = create_p2wpkh_script_code(pubkey)
+
+                            if verify_p2wpkh_signature(
+                                tx, idx, script_code, value, signature, pubkey
+                            ):
+                                matched_input_idx = idx
+                                break
+
+                        if matched_input_idx is not None:
+                            matched_indices.add(matched_input_idx)
+                            txid, vout = input_map[matched_input_idx]
+                            witness = [signature.hex(), pubkey.hex()]
+
+                            sig_infos.append({"txid": txid, "vout": vout, "witness": witness})
                             logger.debug(
-                                f"Processed !sig #{sig_idx + 1}/{len(session.utxos)} from {nick}"
+                                f"Verified signature from {nick} matches input {matched_input_idx} "
+                                f"({txid[:16]}...:{vout})"
                             )
                         else:
                             logger.warning(
-                                f"Received extra signature #{sig_idx + 1} from {nick} "
-                                f"(only has {len(session.utxos)} UTXOs)"
+                                f"Signature #{sig_idx + 1} from {nick} "
+                                "did not verify against any input"
                             )
 
                     if len(sig_infos) != len(session.utxos):
                         logger.warning(
                             f"Signature count mismatch for {nick}: "
-                            f"received {len(sig_infos)}, expected {len(session.utxos)}"
+                            f"verified {len(sig_infos)}, expected {len(session.utxos)}"
                         )
                         del self.maker_sessions[nick]
                         continue
@@ -2953,7 +3038,7 @@ class Taker:
                     signatures[nick] = sig_infos
                     session.signature = {"signatures": sig_infos}
                     session.responded_sig = True
-                    logger.debug(f"Processed {len(sig_infos)} signatures from {nick}")
+                    logger.debug(f"Processed {len(sig_infos)} verified signatures from {nick}")
 
                 except Exception as e:
                     logger.warning(f"Invalid !sig response from {nick}: {e}")

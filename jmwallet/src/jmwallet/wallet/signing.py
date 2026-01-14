@@ -172,6 +172,46 @@ def sign_p2wpkh_input(
     return signature + bytes([sighash_type])
 
 
+def verify_p2wpkh_signature(
+    tx: Transaction,
+    input_index: int,
+    script_code: bytes,
+    value: int,
+    signature: bytes,
+    pubkey: bytes,
+) -> bool:
+    """Verify a P2WPKH signature using coincurve.
+
+    Args:
+        tx: The transaction containing the input
+        input_index: Index of the input to verify
+        script_code: The scriptCode (P2PKH script for P2WPKH)
+        value: The value of the input being spent (in satoshis)
+        signature: DER-encoded signature with sighash type byte appended
+        pubkey: Public key bytes (compressed or uncompressed)
+
+    Returns:
+        True if signature is valid, False otherwise
+    """
+    from coincurve import PublicKey
+
+    try:
+        # Extract sighash type from last byte of signature
+        if not signature:
+            return False
+        sighash_type = signature[-1]
+        der_signature = signature[:-1]
+
+        sighash = compute_sighash_segwit(tx, input_index, script_code, value, sighash_type)
+
+        # Verify signature against sighash
+        # coincurve verify(signature, message, hasher=None)
+        public_key = PublicKey(pubkey)
+        return public_key.verify(der_signature, sighash, hasher=None)
+    except Exception:
+        return False
+
+
 def create_witness_stack(signature: bytes, pubkey_bytes: bytes) -> list[bytes]:
     return [signature, pubkey_bytes]
 
@@ -239,4 +279,5 @@ __all__ = [
     "read_varint",
     "sign_p2wpkh_input",
     "sign_p2wsh_input",
+    "verify_p2wpkh_signature",
 ]

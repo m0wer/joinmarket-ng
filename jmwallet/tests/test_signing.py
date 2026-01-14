@@ -20,6 +20,7 @@ from jmwallet.wallet.signing import (
     read_varint,
     sign_p2wpkh_input,
     sign_p2wsh_input,
+    verify_p2wpkh_signature,
 )
 
 
@@ -289,6 +290,51 @@ class TestSignatureVerification:
         # coincurve uses RFC 6979 deterministic k, so signatures should be identical
         assert sig1 == sig2
         assert len(sig1) > 64
+
+    def test_verify_p2wpkh_signature(self, test_mnemonic):
+        """Test that a valid signature passes verification."""
+        seed = mnemonic_to_seed(test_mnemonic)
+        master = HDKey.from_seed(seed)
+        key = master.derive("m/84'/0'/0'/0/0")
+
+        tx = Transaction(
+            version=bytes.fromhex("02000000"),
+            marker_flag=True,
+            inputs=[
+                TxInput(
+                    txid_le=bytes(32),
+                    vout=0,
+                    script=b"",
+                    sequence=b"\xff\xff\xff\xff",
+                )
+            ],
+            outputs=[TxOutput(value=50000, script=bytes.fromhex("0014" + "00" * 20))],
+            locktime=bytes(4),
+            raw=b"",
+        )
+
+        pubkey = key.get_public_key_bytes(compressed=True)
+        script_code = create_p2wpkh_script_code(pubkey)
+        value = 100000
+
+        # Sign
+        signature = sign_p2wpkh_input(tx, 0, script_code, value, key.private_key)
+
+        # Verify
+        assert verify_p2wpkh_signature(tx, 0, script_code, value, signature, pubkey)
+
+        # Verify fails with wrong value
+        assert not verify_p2wpkh_signature(tx, 0, script_code, value - 1, signature, pubkey)
+
+        # Verify fails with wrong pubkey
+        other_key = master.derive("m/84'/0'/0'/0/1")
+        other_pubkey = other_key.get_public_key_bytes(compressed=True)
+        assert not verify_p2wpkh_signature(tx, 0, script_code, value, signature, other_pubkey)
+
+        # Verify fails with wrong signature (corrupted)
+        bad_sig = bytearray(signature)
+        bad_sig[10] ^= 0xFF  # Flip a byte in the signature
+        assert not verify_p2wpkh_signature(tx, 0, script_code, value, bytes(bad_sig), pubkey)
 
 
 class TestP2WSHSigning:
