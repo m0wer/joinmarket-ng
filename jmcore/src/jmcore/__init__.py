@@ -79,7 +79,11 @@ from jmcore.notifications import (
     load_notification_config,
     reset_notifier,
 )
-from jmcore.paths import get_commitment_blacklist_path, get_default_data_dir
+from jmcore.paths import (
+    get_commitment_blacklist_path,
+    get_default_data_dir,
+    get_ignored_makers_path,
+)
 from jmcore.podle import (
     PoDLECommitment,
     PoDLEError,
@@ -200,6 +204,7 @@ __all__ = [
     # Paths
     "get_commitment_blacklist_path",
     "get_default_data_dir",
+    "get_ignored_makers_path",
     # PoDLE
     "PoDLECommitment",
     "PoDLEError",

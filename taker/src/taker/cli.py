@@ -799,6 +799,52 @@ async def _run_tumble(
 
 
 @app.command()
+def clear_ignored_makers(
+    data_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-dir",
+            "-d",
+            envvar="JOINMARKET_DATA_DIR",
+            help="Data directory for JoinMarket files",
+        ),
+    ] = None,
+) -> None:
+    """Clear the list of ignored makers."""
+    from jmcore.paths import get_default_data_dir, get_ignored_makers_path
+
+    if data_dir is None:
+        data_dir = get_default_data_dir()
+
+    ignored_makers_path = get_ignored_makers_path(data_dir)
+
+    if not ignored_makers_path.exists():
+        typer.echo("No ignored makers file found.")
+        return
+
+    # Count makers before deletion
+    try:
+        with open(ignored_makers_path, encoding="utf-8") as f:
+            count = sum(1 for line in f if line.strip())
+    except Exception as e:
+        typer.echo(f"Error reading ignored makers file: {e}", err=True)
+        raise typer.Exit(1)
+
+    # Ask for confirmation
+    if not typer.confirm(f"Clear {count} ignored maker(s)?"):
+        typer.echo("Cancelled.")
+        return
+
+    # Delete the file
+    try:
+        ignored_makers_path.unlink()
+        typer.echo(f"Cleared {count} ignored maker(s).")
+    except Exception as e:
+        typer.echo(f"Error deleting ignored makers file: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
 def config_init(
     data_dir: Annotated[
         Path | None,

@@ -66,3 +66,19 @@ def get_used_commitments_path(data_dir: Path | None = None) -> Path:
     cmtdata_dir.mkdir(parents=True, exist_ok=True)
 
     return cmtdata_dir / "commitments.json"
+
+
+def get_ignored_makers_path(data_dir: Path | None = None) -> Path:
+    """
+    Get the path to the ignored makers file (for takers).
+
+    Args:
+        data_dir: Optional data directory (defaults to get_default_data_dir())
+
+    Returns:
+        Path to ignored_makers.txt
+    """
+    if data_dir is None:
+        data_dir = get_default_data_dir()
+
+    return data_dir / "ignored_makers.txt"

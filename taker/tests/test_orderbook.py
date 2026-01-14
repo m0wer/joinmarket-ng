@@ -4,6 +4,8 @@ Unit tests for orderbook management and order selection.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from jmcore.models import Offer, OfferType
 
@@ -372,27 +374,66 @@ class TestChooseSweepOrders:
 class TestOrderbookManager:
     """Tests for OrderbookManager."""
 
-    def test_update_offers(self, sample_offers: list[Offer], max_cj_fee: MaxCjFee) -> None:
+    def test_update_offers(
+        self, sample_offers: list[Offer], max_cj_fee: MaxCjFee, tmp_path: Path
+    ) -> None:
         """Test updating orderbook."""
-        manager = OrderbookManager(max_cj_fee)
+        manager = OrderbookManager(max_cj_fee, data_dir=tmp_path)
         manager.update_offers(sample_offers)
         assert len(manager.offers) == len(sample_offers)
 
-    def test_add_ignored_maker(self, max_cj_fee: MaxCjFee) -> None:
+    def test_add_ignored_maker(self, max_cj_fee: MaxCjFee, tmp_path: Path) -> None:
         """Test adding ignored maker."""
-        manager = OrderbookManager(max_cj_fee)
+        manager = OrderbookManager(max_cj_fee, data_dir=tmp_path)
         manager.add_ignored_maker("bad_maker")
         assert "bad_maker" in manager.ignored_makers
 
-    def test_add_honest_maker(self, max_cj_fee: MaxCjFee) -> None:
+        # Verify persistence
+        ignored_path = tmp_path / "ignored_makers.txt"
+        assert ignored_path.exists()
+        with open(ignored_path, encoding="utf-8") as f:
+            makers = {line.strip() for line in f}
+        assert "bad_maker" in makers
+
+    def test_ignored_makers_persistence(self, max_cj_fee: MaxCjFee, tmp_path: Path) -> None:
+        """Test that ignored makers persist across manager instances."""
+        # First manager adds ignored makers
+        manager1 = OrderbookManager(max_cj_fee, data_dir=tmp_path)
+        manager1.add_ignored_maker("maker1")
+        manager1.add_ignored_maker("maker2")
+        assert len(manager1.ignored_makers) == 2
+
+        # Second manager should load the persisted ignored makers
+        manager2 = OrderbookManager(max_cj_fee, data_dir=tmp_path)
+        assert len(manager2.ignored_makers) == 2
+        assert "maker1" in manager2.ignored_makers
+        assert "maker2" in manager2.ignored_makers
+
+    def test_clear_ignored_makers(self, max_cj_fee: MaxCjFee, tmp_path: Path) -> None:
+        """Test clearing ignored makers."""
+        manager = OrderbookManager(max_cj_fee, data_dir=tmp_path)
+        manager.add_ignored_maker("maker1")
+        manager.add_ignored_maker("maker2")
+        assert len(manager.ignored_makers) == 2
+
+        ignored_path = tmp_path / "ignored_makers.txt"
+        assert ignored_path.exists()
+
+        manager.clear_ignored_makers()
+        assert len(manager.ignored_makers) == 0
+        assert not ignored_path.exists()
+
+    def test_add_honest_maker(self, max_cj_fee: MaxCjFee, tmp_path: Path) -> None:
         """Test adding honest maker."""
-        manager = OrderbookManager(max_cj_fee)
+        manager = OrderbookManager(max_cj_fee, data_dir=tmp_path)
         manager.add_honest_maker("good_maker")
         assert "good_maker" in manager.honest_makers
 
-    def test_select_makers(self, sample_offers: list[Offer], max_cj_fee: MaxCjFee) -> None:
+    def test_select_makers(
+        self, sample_offers: list[Offer], max_cj_fee: MaxCjFee, tmp_path: Path
+    ) -> None:
         """Test maker selection."""
-        manager = OrderbookManager(max_cj_fee)
+        manager = OrderbookManager(max_cj_fee, data_dir=tmp_path)
         manager.update_offers(sample_offers)
 
         orders, fee = manager.select_makers(cj_amount=100_000, n=2)
@@ -400,10 +441,10 @@ class TestOrderbookManager:
         assert fee > 0
 
     def test_select_makers_honest_only(
-        self, sample_offers: list[Offer], max_cj_fee: MaxCjFee
+        self, sample_offers: list[Offer], max_cj_fee: MaxCjFee, tmp_path: Path
     ) -> None:
         """Test honest-only maker selection."""
-        manager = OrderbookManager(max_cj_fee)
+        manager = OrderbookManager(max_cj_fee, data_dir=tmp_path)
         manager.update_offers(sample_offers)
         manager.add_honest_maker("maker1")
 
@@ -412,14 +453,14 @@ class TestOrderbookManager:
         assert len(orders) <= 1
 
     def test_select_makers_exclude_nicks(
-        self, sample_offers: list[Offer], max_cj_fee: MaxCjFee
+        self, sample_offers: list[Offer], max_cj_fee: MaxCjFee, tmp_path: Path
     ) -> None:
         """Test maker selection with explicit nick exclusion.
 
         This tests the exclude_nicks parameter used during maker replacement
         to avoid re-selecting makers that are already in the current session.
         """
-        manager = OrderbookManager(max_cj_fee)
+        manager = OrderbookManager(max_cj_fee, data_dir=tmp_path)
         manager.update_offers(sample_offers)
 
         # First, select some makers without exclusion
@@ -441,10 +482,10 @@ class TestOrderbookManager:
         assert len(new_nicks & selected_nicks) == 0, "Should not re-select excluded makers"
 
     def test_select_makers_exclude_nicks_combined_with_ignored(
-        self, sample_offers: list[Offer], max_cj_fee: MaxCjFee
+        self, sample_offers: list[Offer], max_cj_fee: MaxCjFee, tmp_path: Path
     ) -> None:
         """Test that exclude_nicks works together with ignored_makers."""
-        manager = OrderbookManager(max_cj_fee)
+        manager = OrderbookManager(max_cj_fee, data_dir=tmp_path)
         manager.update_offers(sample_offers)
 
         # Ignore maker1
@@ -763,10 +804,10 @@ class TestFilterOffersByNickVersion:
             assert nick.startswith("J5")
 
     def test_orderbook_manager_with_version_filter(
-        self, mixed_version_offers: list[Offer], max_cj_fee: MaxCjFee
+        self, mixed_version_offers: list[Offer], max_cj_fee: MaxCjFee, tmp_path: Path
     ) -> None:
         """OrderbookManager.select_makers respects min_nick_version."""
-        manager = OrderbookManager(max_cj_fee)
+        manager = OrderbookManager(max_cj_fee, data_dir=tmp_path)
         manager.update_offers(mixed_version_offers)
 
         orders, fee = manager.select_makers(cj_amount=100_000, n=2, min_nick_version=5)

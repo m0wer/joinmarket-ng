@@ -19,6 +19,7 @@ from jmcore.bitcoin import (
     calculate_sweep_amount,
 )
 from jmcore.models import Offer, OfferType
+from jmcore.paths import get_ignored_makers_path
 from jmcore.protocol import get_nick_version
 from loguru import logger
 
@@ -629,6 +630,7 @@ class OrderbookManager:
         max_cj_fee: MaxCjFee,
         bondless_makers_allowance: float = 0.125,
         bondless_require_zero_fee: bool = True,
+        data_dir: Any = None,  # Path | None, but avoid import
     ):
         self.max_cj_fee = max_cj_fee
         self.bondless_makers_allowance = bondless_makers_allowance
@@ -638,15 +640,70 @@ class OrderbookManager:
         self.ignored_makers: set[str] = set()
         self.honest_makers: set[str] = set()
 
+        # Persistence for ignored makers
+        self.ignored_makers_path = get_ignored_makers_path(data_dir)
+        self._load_ignored_makers()
+
+    def _load_ignored_makers(self) -> None:
+        """Load ignored makers from disk."""
+        if not self.ignored_makers_path.exists():
+            logger.debug(f"No existing ignored makers file at {self.ignored_makers_path}")
+            return
+
+        try:
+            with open(self.ignored_makers_path, encoding="utf-8") as f:
+                for line in f:
+                    maker = line.strip()
+                    if maker:
+                        self.ignored_makers.add(maker)
+            if self.ignored_makers:
+                logger.info(
+                    f"Loaded {len(self.ignored_makers)} ignored makers from "
+                    f"{self.ignored_makers_path}"
+                )
+        except Exception as e:
+            logger.error(f"Failed to load ignored makers from {self.ignored_makers_path}: {e}")
+
+    def _save_ignored_makers(self) -> None:
+        """Save ignored makers to disk."""
+        try:
+            # Ensure parent directory exists
+            self.ignored_makers_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(self.ignored_makers_path, "w", encoding="utf-8") as f:
+                for maker in sorted(self.ignored_makers):
+                    f.write(maker + "\n")
+                f.flush()
+            logger.debug(
+                f"Saved {len(self.ignored_makers)} ignored makers to {self.ignored_makers_path}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to save ignored makers to {self.ignored_makers_path}: {e}")
+
     def update_offers(self, offers: list[Offer]) -> None:
         """Update orderbook with new offers."""
         self.offers = offers
         logger.info(f"Updated orderbook with {len(offers)} offers")
 
     def add_ignored_maker(self, maker: str) -> None:
-        """Add a maker to the ignored list (permanently for this session)."""
+        """Add a maker to the ignored list and persist to disk."""
         self.ignored_makers.add(maker)
         logger.info(f"Added {maker} to ignored makers list")
+        self._save_ignored_makers()
+
+    def clear_ignored_makers(self) -> None:
+        """Clear all ignored makers and delete the persistence file."""
+        count = len(self.ignored_makers)
+        self.ignored_makers.clear()
+        logger.info(f"Cleared {count} ignored makers")
+
+        # Delete the file if it exists
+        try:
+            if self.ignored_makers_path.exists():
+                self.ignored_makers_path.unlink()
+                logger.debug(f"Deleted {self.ignored_makers_path}")
+        except Exception as e:
+            logger.error(f"Failed to delete {self.ignored_makers_path}: {e}")
 
     def add_honest_maker(self, maker: str) -> None:
         """Mark a maker as honest (completed a CoinJoin successfully)."""

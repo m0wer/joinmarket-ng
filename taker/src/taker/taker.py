@@ -771,6 +771,7 @@ class Taker:
             config.max_cj_fee,
             bondless_makers_allowance=config.bondless_makers_allowance,
             bondless_require_zero_fee=config.bondless_makers_allowance_require_zero_fee,
+            data_dir=config.data_dir,
         )
 
         # PoDLE manager for commitment tracking
