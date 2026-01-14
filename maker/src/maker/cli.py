@@ -582,7 +582,7 @@ def start(
     async def run_bot() -> None:
         try:
             # Send startup notification immediately
-            notifier = get_notifier()
+            notifier = get_notifier(settings)
             await notifier.notify_startup(
                 component="Maker",
                 network=config.network.value,

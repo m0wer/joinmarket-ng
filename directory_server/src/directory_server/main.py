@@ -6,6 +6,7 @@ import asyncio
 import signal
 import sys
 
+from jmcore.notifications import get_notifier
 from jmcore.settings import get_settings
 from loguru import logger
 
@@ -26,6 +27,10 @@ def setup_logging(level: str) -> None:
 async def run_server() -> None:
     settings = get_settings()
     setup_logging(settings.logging.level)
+
+    # Initialize notifier with settings before creating server
+    # This ensures DirectoryServer can use get_notifier() with config file settings
+    get_notifier(settings)
 
     network = settings.network_config.network
     server_nick = f"directory-{network.value}"

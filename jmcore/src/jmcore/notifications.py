@@ -38,10 +38,13 @@ from __future__ import annotations
 import asyncio
 import os
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from pydantic import BaseModel, Field, SecretStr
+
+if TYPE_CHECKING:
+    from jmcore.settings import JoinMarketSettings
 
 
 class NotificationPriority(str, Enum):
@@ -186,6 +189,51 @@ def load_notification_config() -> NotificationConfig:
             logger.info("Notifications disabled (NOTIFY_URLS not set)")
 
     return config
+
+
+def convert_settings_to_notification_config(settings: JoinMarketSettings) -> NotificationConfig:
+    """
+    Convert NotificationSettings from JoinMarketSettings to NotificationConfig.
+
+    This allows the notification system to use the unified settings system
+    (config file + env vars + CLI args) instead of only environment variables.
+
+    Args:
+        settings: JoinMarketSettings instance with notification configuration
+
+    Returns:
+        NotificationConfig suitable for use with Notifier
+    """
+    ns = settings.notifications
+
+    # Convert URL strings to SecretStr
+    urls = [SecretStr(url) for url in ns.urls]
+
+    # Notifications are enabled if explicitly enabled or if URLs are provided
+    enabled = ns.enabled or bool(ns.urls)
+
+    return NotificationConfig(
+        enabled=enabled,
+        urls=urls,
+        title_prefix=ns.title_prefix,
+        include_amounts=ns.include_amounts,
+        include_txids=ns.include_txids,
+        include_nick=ns.include_nick,
+        use_tor=ns.use_tor,
+        notify_fill=ns.notify_fill,
+        notify_rejection=ns.notify_rejection,
+        notify_signing=ns.notify_signing,
+        notify_mempool=ns.notify_mempool,
+        notify_confirmed=ns.notify_confirmed,
+        notify_nick_change=ns.notify_nick_change,
+        notify_disconnect=ns.notify_disconnect,
+        notify_coinjoin_start=ns.notify_coinjoin_start,
+        notify_coinjoin_complete=ns.notify_coinjoin_complete,
+        notify_coinjoin_failed=ns.notify_coinjoin_failed,
+        notify_peer_events=ns.notify_peer_events,
+        notify_rate_limit=ns.notify_rate_limit,
+        notify_startup=ns.notify_startup,
+    )
 
 
 class Notifier:
@@ -727,19 +775,29 @@ class Notifier:
 _notifier: Notifier | None = None
 
 
-def get_notifier() -> Notifier:
+def get_notifier(settings: JoinMarketSettings | None = None) -> Notifier:
     """
     Get the global Notifier instance.
 
-    The notifier is lazily initialized on first use and loads configuration
-    from environment variables.
+    The notifier is lazily initialized on first use. Configuration is loaded
+    from JoinMarketSettings if provided, otherwise from environment variables.
+
+    Args:
+        settings: Optional JoinMarketSettings instance. If provided, notification
+                  configuration will be taken from settings.notifications
+                  (which supports config file + env vars + CLI args).
+                  If None, falls back to environment variables only (legacy).
 
     Returns:
         Notifier instance
     """
     global _notifier
     if _notifier is None:
-        _notifier = Notifier()
+        if settings is not None:
+            config = convert_settings_to_notification_config(settings)
+        else:
+            config = load_notification_config()
+        _notifier = Notifier(config)
     return _notifier
 
 
@@ -756,4 +814,5 @@ __all__ = [
     "get_notifier",
     "reset_notifier",
     "load_notification_config",
+    "convert_settings_to_notification_config",
 ]

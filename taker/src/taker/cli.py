@@ -443,7 +443,9 @@ def coinjoin(
 
     try:
         asyncio.run(
-            _run_coinjoin(config, amount, destination, mixdepth, config.counterparty_count, yes)
+            _run_coinjoin(
+                settings, config, amount, destination, mixdepth, config.counterparty_count, yes
+            )
         )
     except RuntimeError as e:
         # Clean error for expected failures (e.g., connection failures)
@@ -459,6 +461,7 @@ def coinjoin(
 
 
 async def _run_coinjoin(
+    settings: JoinMarketSettings,
     config: TakerConfig,
     amount: int,
     destination: str,
@@ -534,7 +537,7 @@ async def _run_coinjoin(
 
     try:
         # Send startup notification
-        notifier = get_notifier()
+        notifier = get_notifier(settings)
         await notifier.notify_startup(
             component="Taker (CoinJoin)",
             network=config.network.value,
@@ -701,7 +704,7 @@ def tumble(
     logger.info(f"Using backend: {config.backend_type}")
 
     try:
-        asyncio.run(_run_tumble(config, schedule))
+        asyncio.run(_run_tumble(settings, config, schedule))
     except RuntimeError as e:
         # Clean error for expected failures (e.g., connection failures)
         logger.error(f"Tumble failed: {e}")
@@ -715,7 +718,9 @@ def tumble(
         raise typer.Exit(1)
 
 
-async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
+async def _run_tumble(
+    settings: JoinMarketSettings, config: TakerConfig, schedule: Schedule
+) -> None:
     """Run tumbler schedule."""
     from taker.taker import Taker
 
@@ -759,7 +764,7 @@ async def _run_tumble(config: TakerConfig, schedule: Schedule) -> None:
 
     try:
         # Send startup notification
-        notifier = get_notifier()
+        notifier = get_notifier(settings)
         await notifier.notify_startup(
             component="Taker (Tumble)",
             network=config.network.value,

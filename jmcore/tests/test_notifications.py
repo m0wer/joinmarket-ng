@@ -13,6 +13,7 @@ from jmcore.notifications import (
     NotificationConfig,
     NotificationPriority,
     Notifier,
+    convert_settings_to_notification_config,
     get_notifier,
     load_notification_config,
     reset_notifier,
@@ -580,3 +581,114 @@ class TestNotificationLogging:
 
         log_output = output.getvalue()
         assert "Notification failed: Test Title" in log_output
+
+
+class TestConvertSettingsToNotificationConfig:
+    """Tests for convert_settings_to_notification_config function."""
+
+    def test_convert_basic_settings(self) -> None:
+        """Test converting basic notification settings."""
+        from jmcore.settings import JoinMarketSettings, NotificationSettings
+
+        settings = JoinMarketSettings(
+            notifications=NotificationSettings(
+                enabled=True,
+                urls=["gotify://host/token", "tgram://bot/chat"],
+                title_prefix="Test Prefix",
+            )
+        )
+
+        config = convert_settings_to_notification_config(settings)
+
+        assert config.enabled is True
+        assert len(config.urls) == 2
+        assert config.urls[0].get_secret_value() == "gotify://host/token"
+        assert config.urls[1].get_secret_value() == "tgram://bot/chat"
+        assert config.title_prefix == "Test Prefix"
+
+    def test_convert_privacy_settings(self) -> None:
+        """Test converting privacy-related settings."""
+        from jmcore.settings import JoinMarketSettings, NotificationSettings
+
+        settings = JoinMarketSettings(
+            notifications=NotificationSettings(
+                urls=["gotify://host/token"],
+                include_amounts=False,
+                include_txids=True,
+                include_nick=False,
+            )
+        )
+
+        config = convert_settings_to_notification_config(settings)
+
+        assert config.include_amounts is False
+        assert config.include_txids is True
+        assert config.include_nick is False
+
+    def test_convert_event_toggles(self) -> None:
+        """Test converting per-event notification toggles."""
+        from jmcore.settings import JoinMarketSettings, NotificationSettings
+
+        settings = JoinMarketSettings(
+            notifications=NotificationSettings(
+                urls=["gotify://host/token"],
+                notify_fill=False,
+                notify_signing=False,
+                notify_coinjoin_start=True,
+                notify_peer_events=True,
+            )
+        )
+
+        config = convert_settings_to_notification_config(settings)
+
+        assert config.notify_fill is False
+        assert config.notify_signing is False
+        assert config.notify_coinjoin_start is True
+        assert config.notify_peer_events is True
+
+    def test_convert_enabled_with_urls(self) -> None:
+        """Test that having URLs automatically enables notifications."""
+        from jmcore.settings import JoinMarketSettings, NotificationSettings
+
+        settings = JoinMarketSettings(
+            notifications=NotificationSettings(
+                enabled=False,  # Explicitly disabled
+                urls=["gotify://host/token"],  # But has URLs
+            )
+        )
+
+        config = convert_settings_to_notification_config(settings)
+
+        # Should be enabled because URLs are provided
+        assert config.enabled is True
+
+    def test_convert_disabled_no_urls(self) -> None:
+        """Test that explicit enabled=False is respected."""
+        from jmcore.settings import JoinMarketSettings, NotificationSettings
+
+        settings = JoinMarketSettings(
+            notifications=NotificationSettings(
+                enabled=False,  # Explicitly disabled
+                urls=[],
+            )
+        )
+
+        config = convert_settings_to_notification_config(settings)
+
+        # Should be disabled
+        assert config.enabled is False
+
+    def test_convert_tor_settings(self) -> None:
+        """Test converting Tor proxy settings."""
+        from jmcore.settings import JoinMarketSettings, NotificationSettings
+
+        settings = JoinMarketSettings(
+            notifications=NotificationSettings(
+                urls=["gotify://host/token"],
+                use_tor=False,
+            )
+        )
+
+        config = convert_settings_to_notification_config(settings)
+
+        assert config.use_tor is False
