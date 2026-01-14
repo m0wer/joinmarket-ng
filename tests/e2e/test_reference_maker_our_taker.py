@@ -1057,3 +1057,166 @@ async def test_our_taker_uses_direct_connections_with_reference_makers(
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s", "--timeout=900"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(600)
+async def test_sweep_coinjoin_with_reference_makers(
+    reference_maker_services, running_yieldgenerators
+):
+    """
+    Execute a SWEEP CoinJoin with our taker and reference JAM makers.
+
+    This test specifically validates the sweep mode fix where cj_amount must be
+    preserved from the !fill message. Before the fix, the taker would recalculate
+    cj_amount in _phase_build_tx when actual maker inputs differed from the
+    estimate, causing makers to reject with "wrong change".
+
+    The sweep mode is triggered by using amount=0 which means "sweep the entire
+    mixdepth".
+    """
+    compose_file = reference_maker_services["compose_file"]
+
+    # Ensure miner wallet is ready
+    if not ensure_miner_wallet():
+        pytest.skip("Failed to setup miner wallet")
+
+    # Ensure bitcoin nodes are synced
+    logger.info("Checking bitcoin node sync...")
+    if not _wait_for_node_sync(max_attempts=30):
+        pytest.fail("Bitcoin nodes failed to sync")
+
+    # Fund the taker wallet with a smaller amount for sweep testing
+    # This simulates the bug scenario where we have just enough for a sweep
+    taker_address = "bcrt1q6rz28mcfaxtmd6v789l9rrlrusdprr9pz3cppk"
+    logger.info(f"Funding taker wallet at {taker_address} for sweep test...")
+    # Fund with 0.5 BTC - enough for a sweep but not excessive
+    funded = fund_jam_maker_wallet(taker_address, 0.5)
+    if not funded:
+        pytest.fail("Failed to fund taker wallet")
+
+    # Wait for confirmations
+    await asyncio.sleep(5)
+
+    # Get a destination address from bitcoin node
+    logger.info("Running our taker to execute SWEEP CoinJoin...")
+    result = run_bitcoin_cmd(["-rpcwallet=miner", "getnewaddress", "", "bech32"])
+    if result.returncode != 0:
+        pytest.fail(f"Failed to get destination address: {result.stderr}")
+    dest_address = result.stdout.strip()
+
+    # Run the taker with amount=0 to trigger sweep mode
+    cmd = [
+        "docker",
+        "compose",
+        "-f",
+        str(compose_file),
+        "run",
+        "--rm",
+        "-e",
+        "COINJOIN_AMOUNT=0",  # 0 = sweep mode
+        "-e",
+        "MIN_MAKERS=1",  # Single maker for faster test
+        "-e",
+        "MAX_CJ_FEE_REL=0.01",
+        "-e",
+        "MAX_CJ_FEE_ABS=100000",
+        "-e",
+        "LOG_LEVEL=DEBUG",
+        "taker-reference",
+        "jm-taker",
+        "coinjoin",
+        "--amount",
+        "0",  # Sweep mode
+        "--destination",
+        dest_address,
+        "--counterparties",
+        "1",  # Single maker to speed up the test
+        "--mixdepth",
+        "0",
+        "--network",
+        "testnet",
+        "--bitcoin-network",
+        "regtest",
+        "--backend",
+        "full_node",
+        "--max-abs-fee",
+        "100000",
+        "--max-rel-fee",
+        "0.01",
+        "--log-level",
+        "DEBUG",
+        "--yes",
+    ]
+
+    logger.info(f"Sweep taker command: {' '.join(cmd)}")
+
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=COINJOIN_TIMEOUT, check=False
+    )
+
+    logger.info(f"Taker stdout:\n{result.stdout}")
+    if result.stderr:
+        logger.info(f"Taker stderr:\n{result.stderr}")
+
+    # Analyze results
+    output_combined = result.stdout + result.stderr
+    output_lower = output_combined.lower()
+
+    # Sweep mode indicators
+    sweep_indicators = [
+        "sweep mode",
+        "sweep:",
+        "cj_amount=",  # Should show preserved cj_amount
+    ]
+    has_sweep = any(ind in output_lower for ind in sweep_indicators)
+
+    if has_sweep:
+        logger.info("Sweep mode was activated")
+
+    # Success indicators
+    success_indicators = [
+        "coinjoin completed",
+        "transaction broadcast",
+        "txid:",
+        "successfully",
+    ]
+    has_success = any(ind in output_lower for ind in success_indicators)
+
+    # The specific failure we fixed - maker rejecting with "wrong change"
+    wrong_change_indicators = [
+        "wrong change",
+        "maker refuses",
+        "change output value too low",
+    ]
+    has_wrong_change = any(ind in output_lower for ind in wrong_change_indicators)
+
+    # Check maker logs for the specific error
+    logger.info("Checking jam-maker logs for 'wrong change' errors...")
+    maker_output = ""
+    for maker_id in [1, 2]:
+        result_logs = run_compose_cmd(
+            ["logs", "--tail=100", f"jam-maker{maker_id}"], check=False
+        )
+        maker_output += result_logs.stdout
+        logger.debug(f"jam-maker{maker_id} logs:\n{result_logs.stdout[-2000:]}")
+
+    maker_has_wrong_change = "wrong change" in maker_output.lower()
+
+    if has_wrong_change or maker_has_wrong_change:
+        pytest.fail(
+            "SWEEP BUG DETECTED: Maker rejected transaction with 'wrong change'.\n"
+            "This indicates the cj_amount was recalculated after !fill was sent.\n"
+            f"Taker output: {output_combined[-2000:]}\n"
+            f"Maker logs: {maker_output[-2000:]}"
+        )
+
+    # Verify sweep completed successfully
+    assert has_success, (
+        f"Sweep CoinJoin did not complete successfully.\n"
+        f"Exit code: {result.returncode}\n"
+        f"Output: {output_combined[-3000:]}"
+    )
+
+    logger.info("SUCCESS: Sweep CoinJoin completed with reference makers!")
+    logger.info("The cj_amount preservation fix is working correctly.")

@@ -1066,6 +1066,52 @@ See "Maker Transaction ID Discovery" under Transaction History Tracking for impl
 
 Implementation: `taker/src/taker/taker.py`, `maker/src/maker/coinjoin.py`
 
+### Direct Peer-to-Peer Connections
+
+After discovering makers through directory servers, takers opportunistically establish direct Tor connections to makers. This provides:
+
+- **Privacy**: Directory servers cannot observe which takers communicate with which makers
+- **Reliability**: Communication continues even if directory servers become unavailable
+- **Performance**: Lower latency for time-sensitive protocol messages
+
+**Connection Flow**:
+
+1. **Discovery**: Taker fetches orderbook from directory servers and learns makers' onion addresses from the peerlist
+2. **Direct Connection**: Taker attempts to establish a direct Tor connection to each selected maker's onion hidden service
+3. **Fallback**: If direct connection fails or isn't established yet, messages are relayed through directory servers
+4. **Message Routing**: Once established, all subsequent messages for that CoinJoin session use the direct connection
+
+**Channel Consistency Enforcement**:
+
+Critical security requirement: ALL messages within a single CoinJoin session MUST use the same communication channel (either direct or directory relay).
+
+**Why this matters**:
+- Prevents session confusion attacks where an attacker might try to inject messages via a different channel
+- Ensures message ordering and prevents race conditions
+- Protects against potential man-in-the-middle scenarios
+
+**Implementation**:
+
+Both taker and maker enforce channel consistency:
+
+**Taker** (`taker/src/taker/taker.py`):
+- `MakerSession.comm_channel`: Records the channel used for the first message (`!fill`)
+- All subsequent messages (`!auth`, `!tx`, `!push`) use `force_channel` parameter to ensure same channel
+- Connection priority: Direct connection preferred, falls back to directory relay
+
+**Maker** (`maker/src/maker/coinjoin.py`):
+- `CoinJoinSession.comm_channel`: Records channel from first message
+- `validate_channel()`: Validates that each message arrives on the same channel
+- Rejects messages that violate channel consistency with clear warning logs
+
+**Channel Identifiers**:
+- `"direct"`: Peer-to-peer onion connection
+- `"dir:<host>:<port>"`: Relayed through specific directory server
+
+**Logging**: Channel violations are logged with WARNING level showing both the expected and actual channels for debugging.
+
+Implementation: `taker/src/taker/taker.py`, `maker/src/maker/bot.py`, `maker/src/maker/coinjoin.py`
+
 ---
 
 ## Transaction Policies
@@ -1662,6 +1708,38 @@ These limits are applied in `MessageEnvelope.from_bytes()` and configured per di
 | `!sw0reloffer` | No | Public orderbook |
 
 Note: `!push` is intentionally unencrypted because the transaction is already public broadcast data. The privacy benefit is that the taker's IP is not linked to the broadcast.
+
+#### Channel Consistency
+
+To prevent session confusion and potential attacks, both takers and makers enforce strict channel consistency within each CoinJoin session:
+
+**Security Requirement**: All messages in a CoinJoin session MUST use the same communication channel (either direct P2P or directory relay).
+
+**Attack Scenarios Prevented**:
+
+1. **Session Confusion**: Attacker intercepts messages on one channel and re-sends them on another, attempting to confuse the session state
+2. **Message Injection**: Malicious directory operator or network observer tries to inject messages via a different channel mid-session
+3. **Race Conditions**: Messages arriving simultaneously on different channels could cause state machine inconsistencies
+
+**Enforcement**:
+
+- **First Message**: The channel used for `!fill` (taker→maker) establishes the session channel
+- **Validation**: Each subsequent message (`!auth`, `!tx`, `!push`) is validated against the recorded channel
+- **Rejection**: Messages violating channel consistency are rejected with WARNING logs
+- **No Fallback**: Once a channel is established, the session will NOT fall back to a different channel
+
+**Channel Identifiers**:
+- Direct: `"direct"`
+- Directory: `"dir:<host>:<port>"`
+
+**Logging Example**:
+```
+WARNING | Channel consistency violation for J5taker123:
+         session started on 'dir:node1.example.com:6667',
+         received message on 'direct'
+```
+
+This ensures that if a taker establishes a direct connection after sending `!fill` via directory, the maker will reject subsequent messages from the direct connection, forcing the taker to continue using the directory relay for that specific session.
 
 ### Neutrino/Light Client Security
 

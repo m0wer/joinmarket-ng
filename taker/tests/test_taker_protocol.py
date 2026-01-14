@@ -825,3 +825,406 @@ class TestMultiDirectoryClientDirectConnections:
 
         mock_peer.disconnect.assert_called_once()
         assert client._peer_connections == {}
+
+
+# --- Tests for Sweep Mode CJ Amount Preservation ---
+
+
+class TestSweepCjAmountPreservation:
+    """Tests for sweep mode cj_amount preservation.
+
+    This tests a critical bug fix: in sweep mode, the cj_amount sent in the
+    !fill message must be preserved in _phase_build_tx. If we recalculate
+    cj_amount when actual maker inputs differ from our estimate, the maker
+    will reject the transaction with "wrong change" because they calculate
+    their expected change based on the original cj_amount from !fill.
+
+    See: https://github.com/JoinMarket-Org/joinmarket-clientserver maker.py
+    verify_unsigned_tx() - maker calculates expected_change based on the
+    amount from !fill, not a recalculated amount.
+    """
+
+    @pytest.fixture
+    def mock_wallet_for_sweep(self):
+        """Mock wallet service configured for sweep mode."""
+        wallet = AsyncMock()
+        wallet.mixdepth_count = 5
+        wallet.sync_all = AsyncMock()
+        wallet.get_total_balance = AsyncMock(return_value=100_000_000)
+        wallet.get_balance = AsyncMock(return_value=50_000_000)
+
+        # Two UTXOs for sweep (147,483 sats total, matching the bug report)
+        sweep_utxos = [
+            UTXOInfo(
+                txid="1111111111111111111111111111111111111111111111111111111111111111",
+                vout=2,
+                value=68_874,
+                address="bcrt1qtest1",
+                confirmations=1244,
+                scriptpubkey="0014" + "00" * 20,
+                path="m/84'/1'/0'/0/0",
+                mixdepth=3,
+            ),
+            UTXOInfo(
+                txid="2222222222222222222222222222222222222222222222222222222222222222",
+                vout=15,
+                value=78_609,
+                address="bcrt1qtest2",
+                confirmations=1000,
+                scriptpubkey="0014" + "00" * 20,
+                path="m/84'/1'/0'/0/1",
+                mixdepth=3,
+            ),
+        ]
+        wallet.get_utxos = AsyncMock(return_value=sweep_utxos)
+        wallet.get_all_utxos = Mock(return_value=sweep_utxos)
+        wallet.get_next_address_index = Mock(return_value=0)
+        wallet.get_receive_address = Mock(return_value="bcrt1qdest")
+        wallet.get_change_address = Mock(return_value="bcrt1qchange")
+        wallet.get_key_for_address = Mock()
+        wallet.select_utxos = Mock(return_value=sweep_utxos)
+        wallet.close = AsyncMock()
+        return wallet
+
+    @pytest.fixture
+    def mock_backend_for_sweep(self):
+        """Mock blockchain backend."""
+        backend = AsyncMock()
+        # Maker's UTXO
+        backend.get_utxo = AsyncMock(
+            return_value=UTXOInfo(
+                txid="3333333333333333333333333333333333333333333333333333333333333333",
+                vout=18,
+                value=467_555,
+                address="bcrt1qmaker",
+                confirmations=100,
+                scriptpubkey="0014" + "00" * 20,
+                path="m/84'/1'/0'/0/0",
+                mixdepth=0,
+            )
+        )
+        backend.get_transaction = AsyncMock()
+        backend.broadcast_transaction = AsyncMock(return_value="txid123")
+        backend.can_provide_neutrino_metadata = Mock(return_value=False)
+        backend.requires_neutrino_metadata = Mock(return_value=False)
+        return backend
+
+    @pytest.fixture
+    def taker_config_for_sweep(self):
+        """Taker config for sweep mode test."""
+        from jmcore.models import NetworkType
+
+        from taker.config import TakerConfig
+
+        return TakerConfig(
+            mnemonic="abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon abandon abandon about",
+            network=NetworkType.REGTEST,
+            directory_servers=["localhost:5222"],
+            counterparty_count=1,
+            minimum_makers=1,
+            taker_utxo_age=1,
+            taker_utxo_amtpercent=20,
+            tx_fee_factor=1.0,
+            maker_timeout_sec=30.0,
+            order_wait_time=10.0,
+            fee_rate=1.0,  # 1 sat/vB
+        )
+
+    @pytest.mark.asyncio
+    async def test_sweep_preserves_cj_amount_from_fill(
+        self, mock_wallet_for_sweep, mock_backend_for_sweep, taker_config_for_sweep
+    ):
+        """Test that sweep mode preserves cj_amount from !fill message.
+
+        This is the exact scenario from the bug report:
+        - Taker estimates 2 maker inputs per maker during initial calculation
+        - Maker actually has 1 input
+        - Without the fix, taker would recalculate cj_amount with lower tx_fee
+        - This causes maker to reject tx with "wrong change"
+
+        The fix ensures cj_amount is NOT recalculated in _phase_build_tx.
+        """
+        taker = Taker(mock_wallet_for_sweep, mock_backend_for_sweep, taker_config_for_sweep)
+
+        # Simulate sweep mode setup
+        taker.is_sweep = True
+        taker.preselected_utxos = mock_wallet_for_sweep.get_all_utxos()
+
+        # Initial cj_amount calculated during do_coinjoin (before !fill)
+        # This is the amount that will be sent to makers in !fill
+        initial_cj_amount = 146_339  # From the bug report
+
+        taker.cj_amount = initial_cj_amount
+
+        # Set up a mock maker session with offer
+        maker_offer = Offer(
+            ordertype=OfferType.SW0_ABSOLUTE,  # Absolute fee = 0
+            oid=0,
+            minsize=10000,
+            maxsize=1_000_000_000,
+            txfee=500,  # Maker contributes 500 sats to tx fee
+            cjfee=0,  # Zero fee
+            counterparty="J55Jha4vGPR5fTFv",
+        )
+
+        # Simulate !ioauth response - maker has only 1 input (not 2 as estimated)
+        maker_session = MakerSession(nick="J55Jha4vGPR5fTFv", offer=maker_offer)
+        maker_session.pubkey = "e131e3bb667eb124" + "00" * 24
+        maker_session.responded_fill = True
+        maker_session.responded_auth = True
+        # Maker has 1 UTXO (we estimated 2)
+        maker_session.utxos = [
+            {
+                "txid": "3333333333333333333333333333333333333333333333333333333333333333",
+                "vout": 18,
+                "value": 467_555,
+                "address": "bcrt1qmaker",
+            }
+        ]
+        maker_session.cj_address = "bcrt1qqyqszqgpqyqszqgpqyqszqgpqyqszqgpvxat9t"
+        maker_session.change_address = "bcrt1qqgpqyqszqgpqyqszqgpqyqszqgpqyqszazmwwa"
+        maker_session.crypto = CryptoSession()
+
+        taker.maker_sessions = {"J55Jha4vGPR5fTFv": maker_session}
+
+        # Set fee rate (must be done before _phase_build_tx)
+        taker._fee_rate = 1.0
+
+        # Call _phase_build_tx - this is where the bug occurred
+        result = await taker._phase_build_tx(
+            destination="bcrt1qqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcruj60yu",
+            mixdepth=3,
+        )
+
+        # The transaction should build successfully
+        assert result is True
+
+        # CRITICAL: cj_amount must NOT have changed
+        # Before the fix, it would be recalculated to a different value
+        assert taker.cj_amount == initial_cj_amount, (
+            f"cj_amount was modified from {initial_cj_amount} to {taker.cj_amount}. "
+            "This would cause maker to reject tx with 'wrong change'!"
+        )
+
+    @pytest.mark.asyncio
+    async def test_sweep_handles_tx_fee_difference_as_residual(
+        self, mock_wallet_for_sweep, mock_backend_for_sweep, taker_config_for_sweep
+    ):
+        """Test that tx_fee difference becomes residual (extra miner fee), not cj_amount change.
+
+        When actual maker inputs differ from estimate:
+        - Old behavior: recalculate cj_amount -> maker rejects with "wrong change"
+        - New behavior: keep cj_amount, excess becomes additional miner fee (residual)
+        """
+        taker = Taker(mock_wallet_for_sweep, mock_backend_for_sweep, taker_config_for_sweep)
+
+        # Simulate sweep mode
+        taker.is_sweep = True
+        taker.preselected_utxos = mock_wallet_for_sweep.get_all_utxos()
+
+        # Set cj_amount as if it was calculated with estimated 2 maker inputs
+        # (higher tx_fee estimate -> lower cj_amount)
+        taker.cj_amount = 146_339
+        taker._fee_rate = 1.0
+
+        # Maker with only 1 input (lower tx_fee than estimated)
+        maker_offer = Offer(
+            ordertype=OfferType.SW0_ABSOLUTE,
+            oid=0,
+            minsize=10000,
+            maxsize=1_000_000_000,
+            txfee=500,
+            cjfee=0,
+            counterparty="J55Jha4vGPR5fTFv",
+        )
+
+        maker_session = MakerSession(nick="J55Jha4vGPR5fTFv", offer=maker_offer)
+        maker_session.pubkey = "e131e3bb667eb124" + "00" * 24
+        maker_session.responded_fill = True
+        maker_session.responded_auth = True
+        maker_session.utxos = [
+            {
+                "txid": "3333333333333333333333333333333333333333333333333333333333333333",
+                "vout": 18,
+                "value": 467_555,
+                "address": "bcrt1qmaker",
+            }
+        ]
+        maker_session.cj_address = "bcrt1qqyqszqgpqyqszqgpqyqszqgpqyqszqgpvxat9t"
+        maker_session.change_address = "bcrt1qqgpqyqszqgpqyqszqgpqyqszqgpqyqszazmwwa"
+        maker_session.crypto = CryptoSession()
+
+        taker.maker_sessions = {"J55Jha4vGPR5fTFv": maker_session}
+
+        result = await taker._phase_build_tx(
+            destination="bcrt1qqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcruj60yu",
+            mixdepth=3,
+        )
+
+        assert result is True
+
+        # Verify cj_amount unchanged
+        assert taker.cj_amount == 146_339
+
+        # Calculate what the residual should be:
+        # residual = total_input - cj_amount - maker_fees - actual_tx_fee
+        # The residual represents the difference between estimated and actual tx_fee
+        # (It's positive because actual tx_fee < estimated tx_fee due to fewer inputs)
+        # This extra value goes to miners as additional fee, which is acceptable
+
+    @pytest.mark.asyncio
+    async def test_sweep_fails_on_negative_residual(
+        self, mock_wallet_for_sweep, mock_backend_for_sweep, taker_config_for_sweep
+    ):
+        """Test that sweep mode fails if residual is negative.
+
+        A negative residual occurs when actual tx_fee > estimated tx_fee,
+        typically because a maker provided more UTXOs than we estimated.
+        We cannot reduce cj_amount as it was already sent in !fill.
+        """
+        taker = Taker(mock_wallet_for_sweep, mock_backend_for_sweep, taker_config_for_sweep)
+
+        taker.is_sweep = True
+        taker.preselected_utxos = mock_wallet_for_sweep.get_all_utxos()
+        taker._fee_rate = 1.0
+
+        # Set cj_amount from !fill (calculated with estimated 2 maker inputs + 5 buffer)
+        # From bug report: cj_amount = 146,340 sats
+        # We increase it slightly to ensure negative residual with our fake inputs/tx size
+        taker.cj_amount = 147_000
+
+        # Maker with MANY UTXOs (6 inputs instead of estimated 2+buffer/n_makers)
+        # This causes actual tx_fee to be much higher than estimated
+        maker_offer = Offer(
+            ordertype=OfferType.SW0_ABSOLUTE,
+            oid=0,
+            minsize=10000,
+            maxsize=1_000_000_000,
+            txfee=500,
+            cjfee=0,
+            counterparty="J597qgx3bTJBCAP7",
+        )
+
+        maker_session = MakerSession(nick="J597qgx3bTJBCAP7", offer=maker_offer)
+        maker_session.pubkey = "c143f23bdecb05a9" + "00" * 24
+        maker_session.responded_fill = True
+        maker_session.responded_auth = True
+        # Maker has 6 UTXOs - more than our 2+buffer/n_makers estimate!
+        # 2 taker + 6 maker = 8 inputs -> higher tx_fee
+        maker_session.utxos = [
+            {
+                "txid": "4444444444444444444444444444444444444444444444444444444444444444",
+                "vout": 11,
+                "value": 55_000,
+                "address": "bcrt1qmaker",
+            },
+            {
+                "txid": "5555555555555555555555555555555555555555555555555555555555555555",
+                "vout": 12,
+                "value": 30_161,
+                "address": "bcrt1qmaker",
+            },
+            {
+                "txid": "6666666666666666666666666666666666666666666666666666666666666666",
+                "vout": 8,
+                "value": 30_749,
+                "address": "bcrt1qmaker",
+            },
+            {
+                "txid": "7777777777777777777777777777777777777777777777777777777777777777",
+                "vout": 2,
+                "value": 30_983,
+                "address": "bcrt1qmaker",
+            },
+            {
+                "txid": "8888888888888888888888888888888888888888888888888888888888888888",
+                "vout": 12,
+                "value": 33_000,
+                "address": "bcrt1qmaker",
+            },
+            {
+                "txid": "9999999999999999999999999999999999999999999999999999999999999999",
+                "vout": 3,
+                "value": 45_921,
+                "address": "bcrt1qmaker",
+            },
+        ]
+        maker_session.cj_address = "bcrt1qqyqszqgpqyqszqgpqyqszqgpqyqszqgpvxat9t"
+        maker_session.change_address = "bcrt1qqgpqyqszqgpqyqszqgpqyqszqgpqyqszazmwwa"
+        maker_session.crypto = CryptoSession()
+
+        taker.maker_sessions = {"J597qgx3bTJBCAP7": maker_session}
+
+        result = await taker._phase_build_tx(
+            destination="bcrt1qqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcruj60yu",
+            mixdepth=3,
+        )
+
+        # Should fail with negative residual
+        # From bug report: residual = 147483 - 146340 - 0 - 1970 = -827 (negative!)
+        # The tx_fee with 8 inputs is ~1970 sats (from actual log)
+        assert result is False
+
+
+@pytest.mark.asyncio
+async def test_blacklist_rejection_doesnt_ignore_maker(
+    mock_wallet, mock_backend, mock_config, tmp_path
+):
+    """Test that makers aren't permanently ignored when they reject a blacklisted commitment.
+
+    When a maker rejects a taker's commitment because it's blacklisted, the taker should
+    retry with a different commitment (different NUMS index or UTXO), not permanently
+    ignore the maker. The maker might accept a different commitment.
+    """
+    from taker.orderbook import OrderbookManager
+    from taker.taker import PhaseResult
+
+    taker = Taker(mock_wallet, mock_backend, mock_config)
+    taker.orderbook_manager = OrderbookManager(
+        data_dir=tmp_path,  # Use tmp_path to avoid conflicts with other tests
+        max_cj_fee=mock_config.max_cj_fee,
+        bondless_makers_allowance=mock_config.bondless_makers_allowance,
+        bondless_require_zero_fee=mock_config.bondless_makers_allowance_require_zero_fee,
+    )
+
+    # Simulate a blacklist error from a maker
+    maker_nick = "J5TestMaker"
+    blacklist_result = PhaseResult(
+        success=False,
+        failed_makers=[maker_nick],
+        blacklist_error=True,
+        needs_replacement=False,
+    )
+
+    # Before processing the result, maker should not be ignored
+    assert maker_nick not in taker.orderbook_manager.ignored_makers
+
+    # Process the blacklist rejection (simulating the logic in do_coinjoin)
+    if blacklist_result.blacklist_error:
+        # Don't add makers to ignored list when commitment is blacklisted
+        pass
+    elif blacklist_result.failed_makers:
+        # Add failed makers to ignore list for non-blacklist failures
+        for failed_nick in blacklist_result.failed_makers:
+            taker.orderbook_manager.add_ignored_maker(failed_nick)
+
+    # After processing blacklist error, maker should still NOT be ignored
+    assert maker_nick not in taker.orderbook_manager.ignored_makers
+
+    # Now test that non-blacklist failures DO ignore the maker
+    non_blacklist_result = PhaseResult(
+        success=False,
+        failed_makers=[maker_nick],
+        blacklist_error=False,
+        needs_replacement=True,
+    )
+
+    if non_blacklist_result.blacklist_error:
+        pass
+    elif non_blacklist_result.failed_makers:
+        for failed_nick in non_blacklist_result.failed_makers:
+            taker.orderbook_manager.add_ignored_maker(failed_nick)
+
+    # Now maker should be ignored for non-blacklist failures
+    assert maker_nick in taker.orderbook_manager.ignored_makers

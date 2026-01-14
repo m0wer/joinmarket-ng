@@ -19,7 +19,6 @@ import time
 from enum import Enum
 from typing import Any
 
-from jmcore.bitcoin import calculate_sweep_amount
 from jmcore.bond_calc import calculate_timelocked_fidelity_bond_value
 from jmcore.commitment_blacklist import set_blacklist_path
 from jmcore.crypto import NickIdentity
@@ -1415,8 +1414,18 @@ class Taker:
                 )
 
                 # Estimate tx fee for sweep order calculation
-                # Conservative estimate: assume 2 maker inputs per maker
-                estimated_inputs = len(self.preselected_utxos) + n_makers * 2
+                # Conservative estimate: 2 inputs per maker + buffer for edge cases
+                # Most makers have 1-2 inputs, but occasionally one might have 6+.
+                # The buffer (5 inputs) covers the edge case without being excessive.
+                # If actual < estimated: extra goes to miner (acceptable)
+                # If actual > estimated: CoinJoin fails with negative residual error
+                maker_inputs_per_maker = 2
+                maker_inputs_buffer = 5  # Extra inputs to handle edge cases
+                estimated_inputs = (
+                    len(self.preselected_utxos)
+                    + n_makers * maker_inputs_per_maker
+                    + maker_inputs_buffer
+                )
                 # CJ outputs + maker changes (no taker change in sweep!)
                 estimated_outputs = 1 + n_makers + n_makers
                 estimated_tx_fee = self._estimate_tx_fee(estimated_inputs, estimated_outputs)
@@ -1611,10 +1620,19 @@ class Taker:
                 if fill_result.success:
                     break  # Success, proceed to next phase
 
-                # Add failed makers to ignore list for potential replacement
-                for failed_nick in fill_result.failed_makers:
-                    self.orderbook_manager.add_ignored_maker(failed_nick)
-                    logger.debug(f"Added {failed_nick} to ignored makers (failed fill)")
+                if fill_result.blacklist_error:
+                    # Don't add makers to ignored list when commitment is blacklisted
+                    # The maker may accept a different commitment, so we should retry
+                    # with a new NUMS index or different UTXO
+                    logger.debug(
+                        f"Commitment blacklisted by makers: {fill_result.failed_makers}. "
+                        "Will retry with new commitment."
+                    )
+                elif fill_result.failed_makers:
+                    # Add failed makers to ignore list for non-blacklist failures
+                    for failed_nick in fill_result.failed_makers:
+                        self.orderbook_manager.add_ignored_maker(failed_nick)
+                        logger.debug(f"Added {failed_nick} to ignored makers (failed fill)")
 
                 if fill_result.blacklist_error:
                     # Commitment was blacklisted - try with a new commitment
@@ -2560,53 +2578,50 @@ class Taker:
             preselected_total = sum(u.value for u in self.preselected_utxos)
 
             if self.is_sweep:
-                # SWEEP MODE: Use ALL preselected UTXOs, adjust cj_amount for exact zero change
+                # SWEEP MODE: Use ALL preselected UTXOs, preserve cj_amount from !fill
                 selected_utxos = self.preselected_utxos
                 logger.info(
                     f"Sweep mode: using all {len(selected_utxos)} UTXOs, "
                     f"total {preselected_total:,} sats"
                 )
 
-                # Recalculate exact cj_amount for zero change with final tx fee
-                # cj_amount = total_input - maker_fees - tx_fee
-                # For relative fees, solve:
-                #   cj_amount = (total_in - tx_fee - sum(abs_fees)) / (1 + sum(rel_fees))
+                # CRITICAL: We CANNOT change cj_amount after !fill has been sent!
+                # The cj_amount was already sent to makers in the !fill message.
+                # Makers calculate their expected change as:
+                #   expected_change = my_total_in - amount - txfee + cjfee
+                # where 'amount' is the cj_amount from !fill.
+                # If we change cj_amount here, the maker will reject with "wrong change".
+                #
+                # Residual calculation:
+                #   residual = total_in - cj_amount - maker_fees - tx_fee
+                #
+                # Positive residual: actual tx_fee < estimated
+                #   -> Extra goes to miners as additional fee (acceptable)
+                # Negative residual: actual tx_fee > estimated
+                #   -> Not enough funds to cover tx, must fail
+                #
+                # We use a conservative tx_fee estimate (2 inputs/maker + 5 buffer)
+                # to minimize the chance of negative residual, but it can still happen
+                # if a maker has many UTXOs (e.g., 10+ inputs).
 
-                from jmcore.models import OfferType
-
-                sum_abs_fees = 0
-                rel_fees = []
-
-                for session in self.maker_sessions.values():
-                    offer = session.offer
-                    if offer.ordertype in (OfferType.SW0_ABSOLUTE, OfferType.SWA_ABSOLUTE):
-                        sum_abs_fees += int(offer.cjfee)
-                    else:
-                        rel_fees.append(str(offer.cjfee))
-
-                available = preselected_total - tx_fee - sum_abs_fees
-                self.cj_amount = calculate_sweep_amount(available, rel_fees)
-
-                # Recalculate final maker fees with updated cj_amount
-                total_maker_fee = sum(
-                    calculate_cj_fee(s.offer, self.cj_amount) for s in self.maker_sessions.values()
-                )
-
-                # Verify: taker_change should be 0 or small (dust/rounding)
-                # Any residual becomes additional miner fee (this is intentional!)
-                # Residual can occur when:
-                # - Actual maker fees < estimated max fees used in initial selection
-                # - A maker from pre-selection doesn't respond and is replaced
-                # - Decimal rounding in fee calculations
+                # Calculate residual
                 taker_change = preselected_total - self.cj_amount - total_maker_fee - tx_fee
                 logger.info(
-                    f"Sweep: final cj_amount={self.cj_amount:,}, "
+                    f"Sweep: cj_amount={self.cj_amount:,} (from !fill), "
                     f"maker_fees={total_maker_fee:,}, tx_fee={tx_fee:,}, "
                     f"residual={taker_change} sats"
                 )
 
                 if taker_change < 0:
-                    logger.error(f"Sweep calculation error: negative residual {taker_change}")
+                    # Negative residual means we don't have enough funds
+                    # This happens when actual tx_fee > estimated tx_fee
+                    # (e.g., maker provided more UTXOs than we estimated)
+                    logger.error(
+                        f"Sweep failed: negative residual of {taker_change} sats. "
+                        f"Actual tx_fee ({tx_fee}) exceeded estimated tx_fee. "
+                        f"Maker provided {num_maker_inputs} inputs (we estimated fewer). "
+                        "Cannot reduce cj_amount as it was already sent in !fill message."
+                    )
                     return False
 
                 # Log if residual is significant (more than expected dust)
@@ -2614,7 +2629,7 @@ class Taker:
                     logger.warning(
                         f"Sweep: residual {taker_change} sats exceeds dust threshold "
                         f"({self.config.dust_threshold}). This will become additional miner fee. "
-                        "This can happen if actual maker fees are much lower than estimated."
+                        "This can happen if actual maker fees or tx_fee are lower than estimated."
                     )
 
             else:
