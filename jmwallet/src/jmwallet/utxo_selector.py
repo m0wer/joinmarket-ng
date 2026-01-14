@@ -25,7 +25,7 @@ def format_utxo_line(utxo: UTXOInfo, max_width: int = 80) -> str:
         max_width: Maximum line width
 
     Returns:
-        Formatted string showing mixdepth, amount, confirmations, and outpoint
+        Formatted string showing mixdepth, amount, confirmations, outpoint, and label
     """
     amount_str = format_amount(utxo.value)
     conf_str = f"{utxo.confirmations:>6} conf"
@@ -37,7 +37,10 @@ def format_utxo_line(utxo: UTXOInfo, max_width: int = 80) -> str:
     # Truncate txid for display
     outpoint = f"{utxo.txid[:8]}...:{utxo.vout}"
 
-    line = f"{md_str:>3} | {amount_str:>18} | {conf_str} | {outpoint}{lock_indicator}"
+    # Label/note for UTXO type
+    label_str = f" ({utxo.label})" if utxo.label else ""
+
+    line = f"{md_str:>3} | {amount_str:>18} | {conf_str} | {outpoint}{lock_indicator}{label_str}"
 
     if len(line) > max_width:
         line = line[: max_width - 3] + "..."
@@ -85,7 +88,7 @@ def _run_selector(
         stdscr.attroff(curses.color_pair(3) | curses.A_BOLD)
 
         # Column headers
-        col_header = "    MD |             Amount |   Confs   | Outpoint"
+        col_header = "    MD |             Amount |   Confs   | Outpoint (Label)"
         stdscr.addstr(1, 0, col_header[:width])
         stdscr.addstr(2, 0, "-" * min(len(col_header), width))
 

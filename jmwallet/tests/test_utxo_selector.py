@@ -102,6 +102,24 @@ class TestFormatUtxoLine:
         # Should show the BTC amount
         assert "0.01" in line or "1,000,000" in line
 
+    def test_format_with_label(self, sample_utxos: list[UTXOInfo]) -> None:
+        """Test formatting UTXO with a label."""
+        utxo = sample_utxos[0]
+        utxo.label = "cj-out"
+        line = format_utxo_line(utxo)
+
+        assert "(cj-out)" in line
+
+    def test_format_without_label(self, sample_utxos: list[UTXOInfo]) -> None:
+        """Test formatting UTXO without a label."""
+        utxo = sample_utxos[0]
+        utxo.label = None
+        line = format_utxo_line(utxo)
+
+        # Should not contain label parentheses at the end
+        # The line should not end with a label like "(cj-out)"
+        assert not line.endswith(")")
+
 
 class TestSelectUtxosInteractive:
     """Tests for select_utxos_interactive()."""

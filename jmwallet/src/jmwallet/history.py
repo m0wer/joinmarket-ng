@@ -623,7 +623,7 @@ def get_address_history_types(data_dir: Path | None = None) -> dict[str, str]:
     - "flagged": Address was shared but transaction failed
 
     Args:
-        data_dir: Optional data directory
+        data_dir: Optional data directory (defaults to get_default_data_dir())
 
     Returns:
         Dict mapping address -> type string
@@ -650,6 +650,38 @@ def get_address_history_types(data_dir: Path | None = None) -> dict[str, str]:
                 address_types[entry.change_address] = "flagged"
 
     return address_types
+
+
+def get_utxo_label(address: str, data_dir: Path | None = None) -> str:
+    """
+    Get a human-readable label for a UTXO based on its address history.
+
+    Labels are derived from CoinJoin history:
+    - "cj-out": CoinJoin output (equal-amount output from successful CJ)
+    - "cj-change": CoinJoin change output (change from successful CJ)
+    - "deposit": External deposit (not from CoinJoin)
+    - "flagged": Address was shared but transaction failed
+
+    Args:
+        address: The address to get a label for
+        data_dir: Optional data directory (defaults to get_default_data_dir())
+
+    Returns:
+        Human-readable label for the UTXO
+    """
+    history_types = get_address_history_types(data_dir)
+
+    if address in history_types:
+        history_type = history_types[address]
+        if history_type == "cj_out":
+            return "cj-out"
+        elif history_type == "change":
+            return "cj-change"
+        elif history_type == "flagged":
+            return "flagged"
+
+    # If not in history, it's a deposit (external receive)
+    return "deposit"
 
 
 async def detect_coinjoin_peer_count(
