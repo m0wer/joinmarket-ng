@@ -213,7 +213,7 @@ class TestTakerBroadcast:
 
         # Verify push was sent (without ! prefix - the prefix is only for message routing)
         taker.directory_client.send_privmsg.assert_called_once_with(
-            "J5maker123", "push", tx_b64, log_routing=True
+            "J5maker123", "push", tx_b64, log_routing=True, force_channel=""
         )
 
     @pytest.mark.asyncio
