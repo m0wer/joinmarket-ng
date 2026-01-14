@@ -301,6 +301,7 @@ class MultiDirectoryClient:
                 on_message=self._on_peer_message,
                 on_disconnect=self._on_peer_disconnect,
                 on_handshake_complete=self._on_peer_handshake_complete,
+                nick_identity=self.nick_identity,
             )
             self._peer_connections[nick] = peer
         else:

@@ -8,9 +8,17 @@ import asyncio
 import contextlib
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+
+if TYPE_CHECKING:
+    from jmcore.crypto import NickIdentity
+
+# Host ID for direct peer-to-peer onion connections
+# Used for message signing to prevent replay attacks
+# Reference: jmdaemon/onionmc.py self.hostid = "onion-network"
+ONION_HOSTID = "onion-network"
 
 
 class ConnectionError(Exception):
@@ -327,6 +335,7 @@ class OnionPeer:
         on_message: Callable[[str, bytes], Coroutine[Any, Any, None]] | None = None,
         on_disconnect: Callable[[str], Coroutine[Any, Any, None]] | None = None,
         on_handshake_complete: Callable[[str], Coroutine[Any, Any, None]] | None = None,
+        nick_identity: NickIdentity | None = None,
     ):
         """
         Initialize OnionPeer.
@@ -341,6 +350,8 @@ class OnionPeer:
             on_message: Callback when message received (nick, data)
             on_disconnect: Callback when peer disconnects (nick)
             on_handshake_complete: Callback when handshake completes (nick)
+            nick_identity: Our nick identity for signing messages (required for
+                          compatibility with reference implementation)
         """
         self.nick = nick
         self.location = location
@@ -351,6 +362,7 @@ class OnionPeer:
         self.on_message = on_message
         self.on_disconnect = on_disconnect
         self.on_handshake_complete = on_handshake_complete
+        self.nick_identity = nick_identity
 
         # Parse location
         self._hostname: str | None = None
@@ -616,10 +628,14 @@ class OnionPeer:
         """
         Send a private message to peer.
 
+        Messages are signed with our nick identity for authentication.
+        The reference implementation verifies all private messages, whether
+        received via directory relay or direct peer connection.
+
         Args:
             our_nick: Our JoinMarket nick
             command: Command name (e.g., "fill", "pubkey")
-            message: Message content
+            message: Message content (will be signed if nick_identity is set)
 
         Returns:
             True if send succeeded
@@ -628,8 +644,18 @@ class OnionPeer:
 
         from jmcore.protocol import MessageType, format_jm_message
 
+        # Sign message if we have nick identity
+        # Reference implementation expects: "<command> <message> <pubkey_hex> <sig_b64>"
+        # where signature is over: message + ONION_HOSTID
+        if self.nick_identity:
+            signed_message = self.nick_identity.sign_message(message, ONION_HOSTID)
+        else:
+            # No signature - will fail with reference implementation
+            # but may work with our own maker
+            signed_message = message
+
         # Format: from_nick!to_nick!command message
-        jm_msg = format_jm_message(our_nick, self.nick, command, message)
+        jm_msg = format_jm_message(our_nick, self.nick, command, signed_message)
         msg = json.dumps({"type": MessageType.PRIVMSG.value, "line": jm_msg})
         return await self.send(msg.encode("utf-8"))
 

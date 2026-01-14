@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from jmcore.crypto import NickIdentity
 from jmcore.network import (
+    ONION_HOSTID,
     ConnectionError,
     ConnectionPool,
     OnionPeer,
@@ -404,6 +406,118 @@ class TestOnionPeerConnection:
             message="test",
         )
         assert not success
+
+    @pytest.mark.asyncio
+    async def test_send_privmsg_with_signature(self):
+        """Test that messages are signed when nick_identity is provided.
+
+        This is critical for compatibility with the reference implementation.
+        The reference maker verifies all private messages, whether received via
+        directory relay or direct peer connection. Without proper signing,
+        messages are rejected with "Sig not properly appended to privmsg".
+        """
+        # Create a nick identity for signing
+        nick_identity = NickIdentity()
+
+        peer = OnionPeer(
+            nick="J5maker",
+            location="test.onion:5222",
+            nick_identity=nick_identity,
+        )
+
+        # Set up as connected (without starting receive loop)
+        mock_connection = AsyncMock()
+        mock_connection.is_connected.return_value = True
+        peer._connection = mock_connection
+        peer._status = PeerStatus.HANDSHAKED
+
+        success = await peer.send_privmsg(
+            our_nick=nick_identity.nick,
+            command="auth",
+            message="encrypted_data_here",
+        )
+
+        assert success
+        mock_connection.send.assert_called_once()
+
+        # Verify message format includes signature
+        import json
+
+        sent_data = mock_connection.send.call_args[0][0]
+        msg = json.loads(sent_data.decode())
+        assert msg["type"] == 685  # PRIVMSG
+
+        # Message should have format: nick!recipient!command message pubkey sig
+        line = msg["line"]
+        parts = line.split("!")
+        assert len(parts) == 3
+        assert parts[0] == nick_identity.nick  # from_nick
+        assert parts[1] == "J5maker"  # to_nick
+
+        # The message part should contain: "auth encrypted_data_here pubkey_hex sig_b64"
+        message_part = parts[2]
+        assert message_part.startswith("auth ")
+
+        # Split command from rest
+        _, signed_data = message_part.split(" ", 1)
+
+        # signed_data should be: "encrypted_data_here pubkey_hex sig_b64"
+        data_parts = signed_data.split(" ")
+        assert len(data_parts) == 3, f"Expected 3 parts (data, pubkey, sig), got: {data_parts}"
+        assert data_parts[0] == "encrypted_data_here"
+        assert data_parts[1] == nick_identity.public_key_hex
+        # data_parts[2] is the base64 signature
+
+        # Verify the signature is valid by manually checking
+        import base64
+
+        from coincurve import PublicKey
+
+        from jmcore.crypto import bitcoin_message_hash
+
+        sig_bytes = base64.b64decode(data_parts[2])
+        msg_to_verify = "encrypted_data_here" + ONION_HOSTID
+        msg_hash = bitcoin_message_hash(msg_to_verify)
+        pubkey = PublicKey(bytes.fromhex(nick_identity.public_key_hex))
+        assert pubkey.verify(sig_bytes, msg_hash, hasher=None)
+
+    @pytest.mark.asyncio
+    async def test_send_privmsg_without_identity_no_signature(self):
+        """Test that messages are NOT signed when nick_identity is not provided.
+
+        This maintains backward compatibility but will not work with reference makers.
+        """
+        peer = OnionPeer(
+            nick="J5maker",
+            location="test.onion:5222",
+            # No nick_identity provided
+        )
+
+        # Set up as connected
+        mock_connection = AsyncMock()
+        mock_connection.is_connected.return_value = True
+        peer._connection = mock_connection
+        peer._status = PeerStatus.HANDSHAKED
+
+        success = await peer.send_privmsg(
+            our_nick="J5taker",
+            command="fill",
+            message="123 456 abc",
+        )
+
+        assert success
+
+        import json
+
+        sent_data = mock_connection.send.call_args[0][0]
+        msg = json.loads(sent_data.decode())
+
+        # Message should NOT have pubkey/sig appended (old behavior)
+        line = msg["line"]
+        assert "J5taker!J5maker!fill 123 456 abc" in line
+        # Should only have the original message, not 3 space-separated parts
+        message_part = line.split("!")[-1]
+        assert message_part == "fill 123 456 abc"
 
 
 class TestOnionPeerBackoff:
