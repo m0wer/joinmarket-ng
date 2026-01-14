@@ -344,13 +344,14 @@ class TestHiddenServiceListener:
         fill_called = False
         connection_was_tracked = False
 
-        async def mock_handle_fill(taker_nick: str, msg: str) -> None:
+        async def mock_handle_fill(taker_nick: str, msg: str, source: str = "unknown") -> None:
             nonlocal fill_called, connection_was_tracked
             fill_called = True
             # At this point, the connection should be tracked
             connection_was_tracked = taker_nick in bot.direct_connections
             assert taker_nick == "J5taker123"
             assert "fill" in msg
+            assert source == "direct"  # Should be called with source="direct"
 
         bot._handle_fill = mock_handle_fill
 
@@ -476,7 +477,7 @@ class TestHandlePush:
         # Set up the bot with a mock _handle_push
         push_called = False
 
-        async def mock_handle_push(taker_nick: str, msg: str) -> None:
+        async def mock_handle_push(taker_nick: str, msg: str, source: str = "unknown") -> None:
             nonlocal push_called
             push_called = True
             assert taker_nick == "J5taker123"

@@ -1297,7 +1297,7 @@ class MakerBot:
             # Create message fingerprint for deduplication
             # For private messages: use command (fill, auth, tx, etc.)
             # For public messages: use the whole message
-            fingerprint = ""
+            fingerprint: str | None = ""
             command = ""
 
             if msg_type == MessageType.PRIVMSG.value and len(parts) >= 3:
@@ -1526,13 +1526,13 @@ class MakerBot:
 
             # Note: command prefix already stripped
             if command.startswith("fill"):
-                await self._handle_fill(from_nick, command)
+                await self._handle_fill(from_nick, command, source=source)
             elif command.startswith("auth"):
-                await self._handle_auth(from_nick, command)
+                await self._handle_auth(from_nick, command, source=source)
             elif command.startswith("tx"):
-                await self._handle_tx(from_nick, command)
+                await self._handle_tx(from_nick, command, source=source)
             elif command.startswith("push"):
-                await self._handle_push(from_nick, command)
+                await self._handle_push(from_nick, command, source=source)
             elif command.startswith("hp2"):
                 # hp2 via privmsg = commitment transfer request
                 # We should re-broadcast it publicly to obfuscate the source
@@ -1543,7 +1543,7 @@ class MakerBot:
         except Exception as e:
             logger.error(f"Failed to handle privmsg: {e}")
 
-    async def _handle_fill(self, taker_nick: str, msg: str) -> None:
+    async def _handle_fill(self, taker_nick: str, msg: str, source: str = "unknown") -> None:
         """Handle !fill request from taker.
 
         Fill message format: fill <oid> <amount> <taker_nacl_pk> <commitment> [<signing_pk> <sig>]
@@ -1591,6 +1591,11 @@ class MakerBot:
                 merge_algorithm=self.config.merge_algorithm.value,
             )
 
+            # Validate channel consistency (first message records the channel)
+            if not session.validate_channel(source):
+                logger.error(f"Channel consistency violation for !fill from {taker_nick}")
+                return
+
             # Pass the taker's NaCl pubkey for setting up encryption
             success, response = await session.handle_fill(amount, commitment, taker_pk)
 
@@ -1610,7 +1615,7 @@ class MakerBot:
         except Exception as e:
             logger.error(f"Failed to handle !fill: {e}")
 
-    async def _handle_auth(self, taker_nick: str, msg: str) -> None:
+    async def _handle_auth(self, taker_nick: str, msg: str, source: str = "unknown") -> None:
         """Handle !auth request from taker.
 
         The auth message is ENCRYPTED using NaCl.
@@ -1632,6 +1637,13 @@ class MakerBot:
                     return
 
                 session = self.active_sessions[taker_nick]
+
+                # Validate channel consistency before processing
+                if not session.validate_channel(source):
+                    logger.error(f"Channel consistency violation for !auth from {taker_nick}")
+                    del self.active_sessions[taker_nick]
+                    self._cleanup_session_lock(taker_nick)
+                    return
 
                 # Early state check to reject duplicate !auth messages
                 # This happens when taker sends via multiple directory servers
@@ -1730,7 +1742,7 @@ class MakerBot:
             except Exception as e:
                 logger.error(f"Failed to handle !auth: {e}")
 
-    async def _handle_tx(self, taker_nick: str, msg: str) -> None:
+    async def _handle_tx(self, taker_nick: str, msg: str, source: str = "unknown") -> None:
         """Handle !tx request from taker.
 
         The tx message is ENCRYPTED using NaCl.
@@ -1751,6 +1763,13 @@ class MakerBot:
                     return
 
                 session = self.active_sessions[taker_nick]
+
+                # Validate channel consistency before processing
+                if not session.validate_channel(source):
+                    logger.error(f"Channel consistency violation for !tx from {taker_nick}")
+                    del self.active_sessions[taker_nick]
+                    self._cleanup_session_lock(taker_nick)
+                    return
 
                 # Early state check to reject duplicate !tx messages
                 # This happens when taker sends via multiple directory servers
@@ -1864,7 +1883,7 @@ class MakerBot:
             except Exception as e:
                 logger.error(f"Failed to handle !tx: {e}")
 
-    async def _handle_push(self, taker_nick: str, msg: str) -> None:
+    async def _handle_push(self, taker_nick: str, msg: str, source: str = "unknown") -> None:
         """Handle !push request from taker.
 
         The push message contains a base64-encoded signed transaction that the taker
@@ -1883,6 +1902,9 @@ class MakerBot:
           compatibility and simplicity. The rate limiter is the primary defense.
 
         Format: push <base64_transaction>
+
+        Note: !push doesn't require channel consistency validation since it's
+        fire-and-forget and not part of the critical CoinJoin handshake.
         """
         try:
             import base64
@@ -2183,13 +2205,13 @@ class MakerBot:
                     full_msg = f"{cmd} {msg_data}" if msg_data else cmd
 
                     if cmd == "fill":
-                        await self._handle_fill(sender_nick, full_msg)
+                        await self._handle_fill(sender_nick, full_msg, source="direct")
                     elif cmd == "auth":
-                        await self._handle_auth(sender_nick, full_msg)
+                        await self._handle_auth(sender_nick, full_msg, source="direct")
                     elif cmd == "tx":
-                        await self._handle_tx(sender_nick, full_msg)
+                        await self._handle_tx(sender_nick, full_msg, source="direct")
                     elif cmd == "push":
-                        await self._handle_push(sender_nick, full_msg)
+                        await self._handle_push(sender_nick, full_msg, source="direct")
                     else:
                         logger.debug(f"Unknown direct command from {sender_nick}: {cmd}")
 

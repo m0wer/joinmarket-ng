@@ -210,5 +210,94 @@ async def test_multiple_maker_sessions():
         pass
 
 
+@pytest.mark.asyncio
+async def test_channel_consistency_validation():
+    """Test CoinJoinSession enforces channel consistency."""
+    from unittest.mock import MagicMock
+
+    from jmcore.models import Offer, OfferType
+
+    from maker.coinjoin import CoinJoinSession
+
+    # Create a mock session
+    mock_wallet = MagicMock()
+    mock_backend = MagicMock()
+    mock_backend.requires_neutrino_metadata.return_value = False
+
+    offer = Offer(
+        counterparty="J5TestMaker",
+        ordertype=OfferType.SW0_RELATIVE,
+        oid=0,
+        minsize=10_000,
+        maxsize=100_000_000,
+        txfee=1000,
+        cjfee=5000,
+    )
+
+    session = CoinJoinSession(
+        taker_nick="J5TestTaker",
+        offer=offer,
+        wallet=mock_wallet,
+        backend=mock_backend,
+    )
+
+    # First message should record the channel
+    assert session.comm_channel == ""
+    assert session.validate_channel("dir:node1") is True
+    assert session.comm_channel == "dir:node1"
+
+    # Subsequent messages on same channel should pass
+    assert session.validate_channel("dir:node1") is True
+    assert session.comm_channel == "dir:node1"
+
+    # Message from different channel should fail
+    assert session.validate_channel("direct") is False
+    assert session.comm_channel == "dir:node1"  # Channel unchanged
+
+    # Message from different directory should also fail
+    assert session.validate_channel("dir:node2") is False
+    assert session.comm_channel == "dir:node1"
+
+
+@pytest.mark.asyncio
+async def test_channel_consistency_direct_first():
+    """Test channel consistency when direct connection is established first."""
+    from unittest.mock import MagicMock
+
+    from jmcore.models import Offer, OfferType
+
+    from maker.coinjoin import CoinJoinSession
+
+    mock_wallet = MagicMock()
+    mock_backend = MagicMock()
+    mock_backend.requires_neutrino_metadata.return_value = False
+
+    offer = Offer(
+        counterparty="J5TestMaker",
+        ordertype=OfferType.SW0_ABSOLUTE,
+        oid=0,
+        minsize=10_000,
+        maxsize=100_000_000,
+        txfee=1000,
+        cjfee=0,
+    )
+
+    session = CoinJoinSession(
+        taker_nick="J5DirectTaker",
+        offer=offer,
+        wallet=mock_wallet,
+        backend=mock_backend,
+    )
+
+    # Session starts on direct connection
+    assert session.validate_channel("direct") is True
+    assert session.comm_channel == "direct"
+
+    # All subsequent messages must also be direct
+    assert session.validate_channel("direct") is True
+    assert session.validate_channel("dir:node1") is False
+    assert session.comm_channel == "direct"  # Unchanged
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
