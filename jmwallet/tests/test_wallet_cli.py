@@ -359,3 +359,79 @@ def test_send_respects_config_block_target():
                     if mock_backend.estimate_fee.call_args:
                         print(f"Actually called with: {mock_backend.estimate_fee.call_args}")
                     raise e
+
+
+def test_history_command_status_display():
+    """Test that history command displays correct status for pending, failed, and successful txs."""
+    from jmwallet.history import append_history_entry, create_taker_history_entry
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_dir = Path(tmpdir)
+
+        # Create a pending transaction (success=False, failure_reason="Pending confirmation")
+        pending_entry = create_taker_history_entry(
+            maker_nicks=["J5maker1"],
+            cj_amount=100000,
+            total_maker_fees=500,
+            mining_fee=100,
+            destination="bc1qpending...",
+            source_mixdepth=0,
+            selected_utxos=[("utxo1", 0)],
+            txid="a" * 64,
+        )
+        append_history_entry(pending_entry, data_dir)
+
+        # Create a successful transaction
+        success_entry = create_taker_history_entry(
+            maker_nicks=["J5maker2"],
+            cj_amount=200000,
+            total_maker_fees=600,
+            mining_fee=150,
+            destination="bc1qsuccess...",
+            source_mixdepth=0,
+            selected_utxos=[("utxo2", 0)],
+            txid="b" * 64,
+            success=True,
+        )
+        success_entry.confirmations = 3  # Mark as confirmed
+        success_entry.failure_reason = ""  # Clear failure reason
+        append_history_entry(success_entry, data_dir)
+
+        # Create an actually failed transaction (different failure reason)
+        failed_entry = create_taker_history_entry(
+            maker_nicks=["J5maker3"],
+            cj_amount=150000,
+            total_maker_fees=550,
+            mining_fee=120,
+            destination="bc1qfailed...",
+            source_mixdepth=0,
+            selected_utxos=[("utxo3", 0)],
+            txid="c" * 64,
+            success=False,
+            failure_reason="Maker timeout",
+        )
+        append_history_entry(failed_entry, data_dir)
+
+        # Run the history command
+        result = runner.invoke(app, ["history", "--data-dir", str(data_dir)])
+
+        assert result.exit_code == 0, f"history command failed: {result.stdout}"
+
+        # Verify status labels
+        assert "[PENDING]" in result.stdout, "Pending transaction should show [PENDING]"
+        assert "[FAILED]" in result.stdout, "Failed transaction should show [FAILED]"
+
+        # Count occurrences to ensure the successful transaction doesn't have a status label
+        lines = result.stdout.split("\n")
+        status_lines = [line for line in lines if "aa" in line or "bb" in line or "cc" in line]
+
+        # Verify specific txids have correct status
+        pending_line = next((line for line in status_lines if "aa" in line), None)
+        success_line = next((line for line in status_lines if "bb" in line), None)
+        failed_line = next((line for line in status_lines if "cc" in line), None)
+
+        assert pending_line and "[PENDING]" in pending_line, "Pending tx should have [PENDING]"
+        assert (
+            success_line and "[PENDING]" not in success_line and "[FAILED]" not in success_line
+        ), "Success tx should have no status label"
+        assert failed_line and "[FAILED]" in failed_line, "Failed tx should have [FAILED]"

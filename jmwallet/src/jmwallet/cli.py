@@ -1712,7 +1712,13 @@ def history(
         print("-" * 140)
 
         for entry in entries:
-            status = "" if entry.success else " [FAILED]"
+            # Distinguish between pending, failed, and successful transactions
+            if entry.success:
+                status = ""
+            elif entry.confirmations == 0 and entry.failure_reason == "Pending confirmation":
+                status = " [PENDING]"
+            else:
+                status = " [FAILED]"
             txid_full = entry.txid if entry.txid else "N/A"
             fee_str = f"{entry.net_fee:+,}" if entry.net_fee != 0 else "0"
             peer_str = str(entry.peer_count) if entry.peer_count is not None else "?"
