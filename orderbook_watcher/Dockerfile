@@ -21,7 +21,7 @@ RUN pip install --no-cache-dir --user -r /build/jmcore/requirements.txt
 # Copy jmcore source and install (with notifications support)
 COPY jmcore/src /build/jmcore/src
 COPY jmcore/pyproject.toml /build/jmcore/
-RUN pip install --no-cache-dir --user "/build/jmcore[notifications]"
+RUN pip install --no-cache-dir --user "/build/jmcore"
 
 # Install orderbook_watcher dependencies
 COPY orderbook_watcher/requirements.txt /build/orderbook_watcher/

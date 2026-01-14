@@ -812,10 +812,10 @@ JoinMarket NG supports push notifications for CoinJoin events via [Apprise](http
 
 ### Installation
 
-Notifications are an optional feature. Install with:
+Notifications are an optional feature but `apprise` is installed by default.
 
 ```bash
-pip install jmcore[notifications]
+pip install jmcore
 # or
 pip install apprise>=1.8.0
 ```

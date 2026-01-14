@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir --user -r /build/jmcore/requirements.txt
 # Copy jmcore source and install (with notifications support)
 COPY jmcore/src /build/jmcore/src
 COPY jmcore/pyproject.toml /build/jmcore/
-RUN pip install --no-cache-dir --user "/build/jmcore[notifications]"
+RUN pip install --no-cache-dir --user "/build/jmcore"
 
 # Install directory_server dependencies
 COPY directory_server/requirements.txt /build/directory_server/requirements.txt
@@ -88,7 +88,7 @@ RUN pip install --no-cache-dir --user -r /build/jmcore/requirements.txt
 # Copy jmcore source and install (with notifications support)
 COPY jmcore/src /build/jmcore/src
 COPY jmcore/pyproject.toml /build/jmcore/
-RUN pip install --no-cache-dir --user "/build/jmcore[notifications]"
+RUN pip install --no-cache-dir --user "/build/jmcore"
 
 # Install directory_server dependencies
 COPY directory_server/requirements.txt /build/directory_server/requirements.txt
@@ -151,7 +151,7 @@ RUN pip install --no-cache-dir --user -r /build/jmcore/requirements.txt
 # Copy jmcore source and install (with notifications support)
 COPY jmcore/src /build/jmcore/src
 COPY jmcore/pyproject.toml /build/jmcore/
-RUN pip install --no-cache-dir --user "/build/jmcore[notifications]"
+RUN pip install --no-cache-dir --user "/build/jmcore"
 
 # Install directory_server dependencies
 COPY directory_server/requirements.txt /build/directory_server/requirements.txt

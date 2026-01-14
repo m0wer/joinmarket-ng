@@ -114,7 +114,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Privacy-aware: configurable amount/txid/nick inclusion
   - Per-event toggles for fine-grained control
   - Fire-and-forget: notifications never block protocol operations
-  - New optional dependency: `pip install jmcore[notifications]`
   - Components integrated: Maker, Taker, Directory Server, Orderbook Watcher
   - Docker images now include `apprise` by default for notification support
 - **DescriptorWalletBackend**: New Bitcoin Core backend using descriptor wallets for efficient UTXO tracking.

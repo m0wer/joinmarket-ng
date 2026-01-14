@@ -32,12 +32,10 @@ dependencies = [
     "bech32>=1.2.0",
     "base58>=2.1.0",
     "python-bitcointx>=1.1.5",
+    "apprise>=1.8.0",
 ]
 
 [project.optional-dependencies]
-notifications = [
-    "apprise>=1.8.0",
-]
 dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
