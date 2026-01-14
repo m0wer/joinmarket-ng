@@ -89,6 +89,7 @@ class CoinJoinSession:
         self.taker_nacl_pk = ""  # Taker's NaCl pubkey (hex) for btc_sig
         self.created_at = time.time()
         self.session_timeout_sec = session_timeout_sec
+        self.comm_channel = ""  # Track communication channel ("direct" or "dir:<node_id>")
 
         # Feature detection for extended UTXO format (neutrino_compat)
         # Initially, we use extended format if our own backend requires it (neutrino)
@@ -101,6 +102,38 @@ class CoinJoinSession:
     def is_timed_out(self) -> bool:
         """Check if the session has exceeded the timeout."""
         return time.time() - self.created_at > self.session_timeout_sec
+
+    def validate_channel(self, source: str) -> bool:
+        """
+        Validate that message comes from the same channel as the session.
+
+        All messages in a CoinJoin session MUST use the same communication channel.
+        Mixing channels (e.g., !fill via directory, !auth via direct) could indicate:
+        - Session confusion attack
+        - Accidental misconfiguration
+        - Network issues causing routing inconsistency
+
+        Args:
+            source: Message source ("direct" or "dir:<node_id>")
+
+        Returns:
+            True if channel is valid, False if it violates consistency
+        """
+        if not self.comm_channel:
+            # First message - record the channel
+            self.comm_channel = source
+            logger.debug(f"Session with {self.taker_nick} established on channel: {source}")
+            return True
+
+        if self.comm_channel != source:
+            logger.warning(
+                f"Channel consistency violation for {self.taker_nick}: "
+                f"session started on '{self.comm_channel}', "
+                f"received message on '{source}'"
+            )
+            return False
+
+        return True
 
     async def handle_fill(
         self, amount: int, commitment: str, taker_pk: str
