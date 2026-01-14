@@ -17,6 +17,7 @@ from jmwallet.history import (
     TransactionHistoryEntry,
     append_history_entry,
     get_address_history_types,
+    get_utxo_label,
 )
 from jmwallet.wallet.models import UTXOInfo
 from jmwallet.wallet.service import WalletService
@@ -428,6 +429,76 @@ class TestAddressHistoryTypes:
             assert result["bc1q_success"] == "cj_out"
             assert result["bc1q_success_change"] == "change"
             assert result["bc1q_failed"] == "flagged"
+
+
+class TestUTXOLabels:
+    """Tests for get_utxo_label function."""
+
+    def test_deposit_label_for_unknown_address(self):
+        """Test that unknown addresses get 'deposit' label."""
+        with TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            # No history, so all addresses should be deposits
+            label = get_utxo_label("bc1q_unknown", data_dir)
+            assert label == "deposit"
+
+    def test_cj_out_label(self):
+        """Test that CoinJoin output addresses get 'cj-out' label."""
+        with TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+
+            entry = TransactionHistoryEntry(
+                timestamp="2024-01-01T00:00:00",
+                role="maker",
+                success=True,
+                txid="abc123",
+                cj_amount=100000,
+                destination_address="bc1q_cj_out",
+                change_address="",
+            )
+            append_history_entry(entry, data_dir)
+
+            label = get_utxo_label("bc1q_cj_out", data_dir)
+            assert label == "cj-out"
+
+    def test_cj_change_label(self):
+        """Test that CoinJoin change addresses get 'cj-change' label."""
+        with TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+
+            entry = TransactionHistoryEntry(
+                timestamp="2024-01-01T00:00:00",
+                role="taker",
+                success=True,
+                txid="abc123",
+                cj_amount=100000,
+                destination_address="bc1q_cj_out",
+                change_address="bc1q_change",
+            )
+            append_history_entry(entry, data_dir)
+
+            label = get_utxo_label("bc1q_change", data_dir)
+            assert label == "cj-change"
+
+    def test_flagged_label(self):
+        """Test that failed CoinJoin addresses get 'flagged' label."""
+        with TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+
+            entry = TransactionHistoryEntry(
+                timestamp="2024-01-01T00:00:00",
+                role="taker",
+                success=False,
+                failure_reason="Timed out",
+                txid="",
+                cj_amount=100000,
+                destination_address="bc1q_failed",
+                change_address="bc1q_failed_change",
+            )
+            append_history_entry(entry, data_dir)
+
+            assert get_utxo_label("bc1q_failed", data_dir) == "flagged"
+            assert get_utxo_label("bc1q_failed_change", data_dir) == "flagged"
 
 
 class TestAddressInfoForMixdepth:

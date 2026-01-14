@@ -57,6 +57,7 @@ class UTXOInfo:
     mixdepth: int
     height: int | None = None  # Block height where UTXO was confirmed (for Neutrino)
     locktime: int | None = None  # Locktime for fidelity bond UTXOs (None for regular UTXOs)
+    label: str | None = None  # Human-readable label/note (e.g., "cj-out", "deposit", "change")
 
     @property
     def is_timelocked(self) -> bool:
