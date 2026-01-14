@@ -118,7 +118,7 @@ def mock_config():
         taker_utxo_amtpercent=20,
         tx_fee_factor=1.0,
         maker_timeout_sec=30.0,
-        order_wait_time=120.0,
+        order_wait_time=10.0,
     )
     return config
 

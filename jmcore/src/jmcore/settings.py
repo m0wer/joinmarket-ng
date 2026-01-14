@@ -362,9 +362,13 @@ class TakerSettings(BaseModel):
         description="Timeout for maker responses",
     )
     order_wait_time: float = Field(
-        default=10.0,
+        default=120.0,
         ge=1.0,
-        description="Seconds to wait for orderbook",
+        description=(
+            "Seconds to wait for orderbook responses. Empirical testing shows 95th "
+            "percentile response time over Tor is ~101s. Default 120s (with 20% buffer) "
+            "captures ~95% of offers."
+        ),
     )
     tx_broadcast: str = Field(
         default="random-peer",

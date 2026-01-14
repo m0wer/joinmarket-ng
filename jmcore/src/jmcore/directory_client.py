@@ -14,6 +14,7 @@ import base64
 import binascii
 import contextlib
 import json
+import os
 import struct
 import time
 from collections.abc import Callable
@@ -730,7 +731,9 @@ class DirectoryClient:
         # - Max observed: ~119s
         # Using 120s (95th percentile + 20% buffer) ensures we capture ~95% of all offers.
         # The wide distribution is due to Tor latency and maker response times.
-        listen_duration = 120.0
+        #
+        # For testing, this can be overridden via JM_ORDERBOOK_WAIT_TIME environment variable.
+        listen_duration = float(os.environ.get("JM_ORDERBOOK_WAIT_TIME", "120.0"))
         logger.info(f"Listening for offer announcements for {listen_duration} seconds...")
         messages = await self.listen_for_messages(duration=listen_duration)
 
