@@ -221,6 +221,10 @@ class DirectoryClient:
         self._peerlist_timeout: float = 120.0  # Longer timeout for peerlist (can be large over Tor)
         self._peerlist_timeout_count: int = 0  # Track consecutive timeouts
 
+        # Message buffer for messages received while waiting for specific responses
+        # (e.g., PEERLIST). These messages should be processed, not discarded.
+        self._message_buffer: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
     async def connect(self) -> None:
         """Connect to the directory server and perform handshake."""
         try:
@@ -402,9 +406,12 @@ class DirectoryClient:
                 if msg_type == MessageType.PEERLIST.value:
                     break
 
-                logger.debug(
-                    f"Skipping unexpected message type {msg_type} while waiting for PEERLIST"
+                # Buffer unexpected messages (like PUBMSG offers) for later processing
+                # instead of discarding them
+                logger.trace(
+                    f"Buffering unexpected message type {msg_type} while waiting for PEERLIST"
                 )
+                await self._message_buffer.put(response)
             except TimeoutError:
                 self._handle_peerlist_timeout()
                 return []
@@ -518,9 +525,12 @@ class DirectoryClient:
                 if msg_type == MessageType.PEERLIST.value:
                     break
 
-                logger.debug(
-                    f"Skipping unexpected message type {msg_type} while waiting for PEERLIST"
+                # Buffer unexpected messages (like PUBMSG offers) for later processing
+                # instead of discarding them
+                logger.trace(
+                    f"Buffering unexpected message type {msg_type} while waiting for PEERLIST"
                 )
+                await self._message_buffer.put(response)
             except TimeoutError:
                 self._handle_peerlist_timeout()
                 return []
@@ -657,6 +667,19 @@ class DirectoryClient:
 
         messages: list[dict[str, Any]] = []
         start_time = asyncio.get_event_loop().time()
+
+        # First, drain any buffered messages into our result list
+        # These are messages that were received while waiting for other responses
+        while not self._message_buffer.empty():
+            try:
+                buffered_msg = self._message_buffer.get_nowait()
+                logger.trace(
+                    f"Processing buffered message type {buffered_msg.get('type')}: "
+                    f"{buffered_msg.get('line', '')[:80]}..."
+                )
+                messages.append(buffered_msg)
+            except asyncio.QueueEmpty:
+                break
 
         while asyncio.get_event_loop().time() - start_time < duration:
             try:
@@ -1020,14 +1043,20 @@ class DirectoryClient:
 
         while self.running:
             try:
-                # Read next message with timeout
-                data = await asyncio.wait_for(self.connection.receive(), timeout=5.0)
+                # First check if we have buffered messages from previous operations
+                # (e.g., messages received while waiting for PEERLIST)
+                if not self._message_buffer.empty():
+                    message = await self._message_buffer.get()
+                    logger.trace("Processing buffered message from queue")
+                else:
+                    # Read next message with timeout
+                    data = await asyncio.wait_for(self.connection.receive(), timeout=5.0)
 
-                if not data:
-                    logger.warning(f"Connection to {self.host}:{self.port} closed")
-                    break
+                    if not data:
+                        logger.warning(f"Connection to {self.host}:{self.port} closed")
+                        break
 
-                message = json.loads(data.decode("utf-8"))
+                    message = json.loads(data.decode("utf-8"))
                 msg_type = message.get("type")
                 line = message.get("line", "")
 
