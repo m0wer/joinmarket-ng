@@ -1930,21 +1930,32 @@ class Taker:
             # Prompt for final confirmation if callback is set
             if hasattr(self, "confirmation_callback") and self.confirmation_callback:
                 try:
-                    confirmed = await self.confirmation_callback(
-                        {
-                            "type": "broadcast",
-                            "cj_amount": self.cj_amount,
-                            "num_makers": len(self.maker_sessions),
-                            "maker_nicks": list(self.maker_sessions.keys()),
-                            "total_inputs": total_inputs,
-                            "taker_inputs": num_taker_inputs,
-                            "maker_inputs": num_maker_inputs,
-                            "total_outputs": total_outputs,
-                            "maker_fees": total_maker_fees,
-                            "mining_fee": mining_fee,
-                            "total_cost": total_cost,
-                            "fee_rate": self._fee_rate,
-                        }
+                    # Build maker details for final confirmation
+                    maker_details = []
+                    for nick, session in self.maker_sessions.items():
+                        fee = calculate_cj_fee(session.offer, self.cj_amount)
+                        bond_value = session.offer.fidelity_bond_value
+                        # Get maker's location from any connected directory
+                        location = None
+                        for client in self.directory_client.clients.values():
+                            location = client._active_peers.get(nick)
+                            if location and location != "NOT-SERVING-ONION":
+                                break
+                        maker_details.append(
+                            {
+                                "nick": nick,
+                                "fee": fee,
+                                "bond_value": bond_value,
+                                "location": location,
+                            }
+                        )
+
+                    confirmed = self.confirmation_callback(
+                        maker_details=maker_details,
+                        cj_amount=self.cj_amount,
+                        total_fee=total_cost,
+                        destination=destination,
+                        mining_fee=mining_fee,
                     )
                     if not confirmed:
                         logger.warning("User declined final broadcast confirmation")
