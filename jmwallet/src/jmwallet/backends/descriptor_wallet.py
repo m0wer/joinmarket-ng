@@ -43,9 +43,6 @@ DEFAULT_GAP_LIMIT = 1000
 # Bitcoin averages ~144 blocks/day * 365 days ≈ 52,560 blocks
 DEFAULT_SCAN_LOOKBACK_BLOCKS = 52_560
 
-# Blocks per year (approximate, for time-based calculations)
-BLOCKS_PER_YEAR = 52_560
-
 # Environment variable to enable sensitive logging (descriptors, addresses, etc.)
 SENSITIVE_LOGGING = os.environ.get("SENSITIVE_LOGGING", "").lower() in ("1", "true", "yes")
 
@@ -306,7 +303,8 @@ class DescriptorWalletBackend(BlockchainBackend):
         Args:
             descriptors: List of output descriptors. Can be:
                 - Simple strings: "wpkh(xpub.../0/*)"
-                - Dicts with range: {"desc": "wpkh(xpub.../0/*)", "range": [0, 999]}
+                - Dicts with range:
+                  {"desc": "wpkh(xpub.../0/*)", "range": [0, DEFAULT_GAP_LIMIT - 1]}
             rescan: If True, rescan blockchain (behavior depends on smart_scan).
                    If False, only track new transactions (timestamp="now").
             timestamp: Override timestamp. If None, uses smart calculation or 0/"now".
@@ -322,7 +320,11 @@ class DescriptorWalletBackend(BlockchainBackend):
         Example:
             # Smart scan (fast startup, background full rescan)
             await backend.import_descriptors([
-                {"desc": "wpkh(xpub.../0/*)", "range": [0, 999], "internal": False},
+                {
+                    "desc": "wpkh(xpub.../0/*)",
+                    "range": [0, DEFAULT_GAP_LIMIT - 1],
+                    "internal": False,
+                },
             ], rescan=True, smart_scan=True)
 
             # Full rescan from genesis (slow but complete)
