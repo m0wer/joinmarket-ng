@@ -20,6 +20,7 @@ def test_server_includes_uptime_in_directory_stats() -> None:
     # Create mock aggregator
     aggregator = MagicMock(spec=OrderbookAggregator)
     aggregator.directory_nodes = [("node1.onion", 5222), ("node2.onion", 5222)]
+    aggregator.clients = {}  # No client metadata for this test
 
     # Create node statuses with some uptime data
     start_time = datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC)
@@ -73,6 +74,7 @@ def test_server_handles_nodes_without_status() -> None:
     aggregator = MagicMock(spec=OrderbookAggregator)
     aggregator.directory_nodes = [("node1.onion", 5222), ("node2.onion", 5222)]
     aggregator.node_statuses = {}  # No status data
+    aggregator.clients = {}  # No client metadata for this test
 
     server = OrderbookServer(settings, aggregator)
     orderbook = OrderBook(timestamp=datetime.now(UTC))
