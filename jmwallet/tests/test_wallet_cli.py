@@ -566,3 +566,302 @@ def test_info_uses_default_wallet():
 
             assert result.exit_code == 0, f"info command failed: {result.stdout}"
             assert "Total Balance:" in result.stdout
+
+
+# ============================================================================
+# Import Command Tests
+# ============================================================================
+
+
+def test_import_with_mnemonic_argument():
+    """Test importing a mnemonic passed via --mnemonic argument."""
+    mnemonic = (
+        "abandon abandon abandon abandon abandon abandon "
+        "abandon abandon abandon abandon abandon about"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_file = Path(tmpdir) / "imported.mnemonic"
+
+        result = runner.invoke(
+            app,
+            [
+                "import",
+                "--mnemonic",
+                mnemonic,
+                "--output",
+                str(output_file),
+                "--no-prompt-password",
+            ],
+        )
+
+        assert result.exit_code == 0, f"import failed: {result.stdout}"
+        assert "IMPORTED MNEMONIC" in result.stdout
+        assert output_file.exists(), "Mnemonic file was not created"
+
+        # Verify the saved mnemonic matches
+        saved_mnemonic = output_file.read_text().strip()
+        assert saved_mnemonic == mnemonic
+
+
+def test_import_with_encryption():
+    """Test importing a mnemonic with password encryption."""
+    mnemonic = (
+        "abandon abandon abandon abandon abandon abandon "
+        "abandon abandon abandon abandon abandon about"
+    )
+    password = "test_password_123"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_file = Path(tmpdir) / "encrypted_import.mnemonic"
+
+        result = runner.invoke(
+            app,
+            [
+                "import",
+                "--mnemonic",
+                mnemonic,
+                "--output",
+                str(output_file),
+                "--password",
+                password,
+                "--no-prompt-password",
+            ],
+        )
+
+        assert result.exit_code == 0, f"import failed: {result.stdout}"
+        assert "IMPORTED MNEMONIC" in result.stdout
+        assert "File is encrypted" in result.stdout
+        assert output_file.exists()
+
+        # Verify we can decrypt and validate the saved mnemonic
+        result = runner.invoke(
+            app, ["validate", "--mnemonic-file", str(output_file), "--password", password]
+        )
+        assert result.exit_code == 0, f"validate failed: {result.stdout}"
+        assert "Mnemonic is VALID" in result.stdout
+
+
+def test_import_24_word_mnemonic():
+    """Test importing a 24-word mnemonic."""
+    mnemonic = (
+        "actress inmate filter october eagle floor conduct issue rail nominee mixture kid "
+        "tunnel thought list tower lobster route ghost cigar bundle oak fiscal pulse"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_file = Path(tmpdir) / "imported24.mnemonic"
+
+        result = runner.invoke(
+            app,
+            [
+                "import",
+                "--words",
+                "24",
+                "--mnemonic",
+                mnemonic,
+                "--output",
+                str(output_file),
+                "--no-prompt-password",
+            ],
+        )
+
+        assert result.exit_code == 0, f"import failed: {result.stdout}"
+        assert "Word count: 24" in result.stdout
+
+
+def test_import_invalid_mnemonic_warns():
+    """Test that importing an invalid mnemonic shows a warning."""
+    # Valid BIP39 words but invalid checksum
+    invalid_mnemonic = (
+        "abandon abandon abandon abandon abandon abandon "
+        "abandon abandon abandon abandon abandon abandon"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_file = Path(tmpdir) / "invalid.mnemonic"
+
+        # Should prompt for confirmation - say no
+        result = runner.invoke(
+            app,
+            [
+                "import",
+                "--mnemonic",
+                invalid_mnemonic,
+                "--output",
+                str(output_file),
+                "--no-prompt-password",
+            ],
+            input="n\n",  # Say no to "Continue anyway?"
+        )
+
+        # Should exit without creating file
+        assert result.exit_code == 1
+        assert not output_file.exists()
+
+
+def test_import_overwrite_protection():
+    """Test that import command asks before overwriting existing file."""
+    mnemonic = (
+        "abandon abandon abandon abandon abandon abandon "
+        "abandon abandon abandon abandon abandon about"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_file = Path(tmpdir) / "existing.mnemonic"
+        output_file.write_text("existing content")
+
+        # Try to import without --force, say no to overwrite
+        result = runner.invoke(
+            app,
+            [
+                "import",
+                "--mnemonic",
+                mnemonic,
+                "--output",
+                str(output_file),
+                "--no-prompt-password",
+            ],
+            input="n\n",  # Say no to overwrite
+        )
+
+        assert "Import cancelled" in result.stdout
+        assert output_file.read_text() == "existing content"
+
+
+def test_import_force_overwrite():
+    """Test that --force flag skips overwrite confirmation."""
+    mnemonic = (
+        "abandon abandon abandon abandon abandon abandon "
+        "abandon abandon abandon abandon abandon about"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_file = Path(tmpdir) / "existing.mnemonic"
+        output_file.write_text("old content")
+
+        result = runner.invoke(
+            app,
+            [
+                "import",
+                "--mnemonic",
+                mnemonic,
+                "--output",
+                str(output_file),
+                "--no-prompt-password",
+                "--force",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert output_file.read_text().strip() == mnemonic
+
+
+def test_import_invalid_word_count():
+    """Test that invalid word count is rejected."""
+    result = runner.invoke(
+        app,
+        [
+            "import",
+            "--words",
+            "13",  # Invalid word count
+            "--mnemonic",
+            "test",
+        ],
+    )
+
+    assert result.exit_code == 1
+
+
+# ============================================================================
+# BIP39 Wordlist Helper Tests
+# ============================================================================
+
+
+def test_get_bip39_wordlist():
+    """Test that BIP39 wordlist is loaded correctly."""
+    from jmwallet.cli import get_bip39_wordlist
+
+    wordlist = get_bip39_wordlist()
+
+    assert len(wordlist) == 2048
+    assert "abandon" in wordlist
+    assert "zoo" in wordlist
+    assert wordlist[0] == "abandon"  # First word alphabetically
+    assert wordlist[-1] == "zoo"  # Last word alphabetically
+
+
+def test_get_word_completions():
+    """Test word completion matching."""
+    from jmwallet.cli import get_word_completions
+
+    wordlist = ["abandon", "ability", "able", "about", "above", "absent", "zoo"]
+
+    # Single letter prefix
+    assert get_word_completions("a", wordlist) == [
+        "abandon",
+        "ability",
+        "able",
+        "about",
+        "above",
+        "absent",
+    ]
+
+    # Two letter prefix
+    assert get_word_completions("ab", wordlist) == [
+        "abandon",
+        "ability",
+        "able",
+        "about",
+        "above",
+        "absent",
+    ]
+
+    # More specific prefix
+    assert get_word_completions("abo", wordlist) == ["about", "above"]
+
+    # Unique match
+    assert get_word_completions("aband", wordlist) == ["abandon"]
+
+    # No match
+    assert get_word_completions("xyz", wordlist) == []
+
+    # Case insensitive
+    assert get_word_completions("ABO", wordlist) == ["about", "above"]
+
+
+def test_get_word_completions_real_wordlist():
+    """Test word completion with the actual BIP39 wordlist."""
+    from jmwallet.cli import get_bip39_wordlist, get_word_completions
+
+    wordlist = get_bip39_wordlist()
+
+    # Test common prefixes
+    zoo_matches = get_word_completions("zoo", wordlist)
+    assert zoo_matches == ["zoo"]
+
+    # "aban" should uniquely match "abandon"
+    aban_matches = get_word_completions("aban", wordlist)
+    assert aban_matches == ["abandon"]
+
+    # "ab" should match multiple words
+    ab_matches = get_word_completions("ab", wordlist)
+    assert len(ab_matches) > 1
+    assert all(w.startswith("ab") for w in ab_matches)
+
+
+def test_format_word_suggestions():
+    """Test suggestion formatting."""
+    from jmwallet.cli import format_word_suggestions
+
+    # Few words - show all
+    assert format_word_suggestions(["a", "b", "c"]) == "a, b, c"
+
+    # Exactly max_display
+    words = ["a", "b", "c", "d", "e", "f", "g", "h"]
+    assert format_word_suggestions(words, max_display=8) == "a, b, c, d, e, f, g, h"
+
+    # More than max_display
+    words = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]
+    result = format_word_suggestions(words, max_display=8)
+    assert result == "a, b, c, d, e, f, g, h, ... (+2 more)"

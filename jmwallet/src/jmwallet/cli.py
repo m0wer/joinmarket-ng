@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal
@@ -228,8 +229,297 @@ def load_mnemonic_file(
 
 
 # ============================================================================
+# BIP39 Wordlist and Interactive Mnemonic Input
+# ============================================================================
+
+
+def get_bip39_wordlist() -> list[str]:
+    """
+    Get the BIP39 English wordlist.
+
+    Returns:
+        List of 2048 BIP39 words in order.
+    """
+    from mnemonic import Mnemonic
+
+    m = Mnemonic("english")
+    return list(m.wordlist)
+
+
+def get_word_completions(prefix: str, wordlist: list[str]) -> list[str]:
+    """
+    Get BIP39 words that start with the given prefix.
+
+    Args:
+        prefix: The prefix to match (case-insensitive)
+        wordlist: The BIP39 wordlist
+
+    Returns:
+        List of matching words
+    """
+    prefix_lower = prefix.lower()
+    return [w for w in wordlist if w.startswith(prefix_lower)]
+
+
+def format_word_suggestions(matches: list[str], max_display: int = 8) -> str:
+    """
+    Format word suggestions for display.
+
+    Args:
+        matches: List of matching words
+        max_display: Maximum number of words to display
+
+    Returns:
+        Formatted suggestion string
+    """
+    if len(matches) <= max_display:
+        return ", ".join(matches)
+    return ", ".join(matches[:max_display]) + f", ... (+{len(matches) - max_display} more)"
+
+
+def interactive_mnemonic_input(word_count: int = 24) -> str:
+    """
+    Interactively input a BIP39 mnemonic with autocomplete support.
+
+    Features:
+    - Tab completion (if terminal supports readline)
+    - Shows suggestions when prefix matches multiple words
+    - Auto-completes when only one word matches
+    - Validates each word against BIP39 wordlist
+
+    Args:
+        word_count: Expected number of words (12, 15, 18, 21, or 24)
+
+    Returns:
+        The complete mnemonic phrase
+
+    Raises:
+        typer.Exit: If user cancels input (Ctrl+C)
+    """
+    from rich.console import Console
+
+    console = Console()
+    wordlist = get_bip39_wordlist()
+    words: list[str] = []
+
+    # Try to set up readline completion if available
+    try:
+        import readline
+
+        def completer(text: str, state: int) -> str | None:
+            matches = get_word_completions(text, wordlist)
+            if state < len(matches):
+                return matches[state]
+            return None
+
+        readline.set_completer(completer)
+        readline.parse_and_bind("tab: complete")
+        readline.set_completer_delims(" ")
+        has_readline = True
+    except ImportError:
+        has_readline = False
+
+    console.print("\n[bold]Enter your BIP39 mnemonic phrase[/bold]")
+    console.print(
+        f"[dim]Expected: {word_count} words | Tab to autocomplete | Ctrl+C to cancel[/dim]"
+    )
+    if not has_readline:
+        console.print(
+            "[dim]Tip: Type prefix and press Enter - auto-completes if unique match[/dim]"
+        )
+    console.print()
+
+    try:
+        while len(words) < word_count:
+            word_num = len(words) + 1
+            prompt_text = f"Word {word_num}/{word_count}: "
+
+            try:
+                if has_readline:
+                    user_input = input(prompt_text).strip().lower()
+                else:
+                    # For terminals without readline, use typer.prompt
+                    user_input = (
+                        typer.prompt(
+                            f"Word {word_num}/{word_count}",
+                            prompt_suffix=": ",
+                            show_default=False,
+                        )
+                        .strip()
+                        .lower()
+                    )
+            except EOFError:
+                console.print("\n[red]Input cancelled[/red]")
+                raise typer.Exit(1)
+
+            if not user_input:
+                continue
+
+            # Check for exact match
+            if user_input in wordlist:
+                words.append(user_input)
+                console.print(f"  [green]{user_input}[/green]", highlight=False)
+                continue
+
+            # Check for prefix matches
+            matches = get_word_completions(user_input, wordlist)
+
+            if len(matches) == 0:
+                console.print(f"  [red]'{user_input}' - no matching BIP39 word[/red]")
+                continue
+            elif len(matches) == 1:
+                # Auto-complete unique match
+                word = matches[0]
+                words.append(word)
+                console.print(
+                    f"  [green]{word}[/green] [dim](auto-completed from '{user_input}')[/dim]"
+                )
+            else:
+                # Show suggestions
+                console.print(f"  [yellow]Matches: {format_word_suggestions(matches)}[/yellow]")
+                console.print("  [dim]Type more characters to narrow down[/dim]")
+
+    except KeyboardInterrupt:
+        console.print("\n[red]Input cancelled[/red]")
+        raise typer.Exit(1)
+    finally:
+        # Restore readline settings if we modified them
+        if has_readline:
+            try:
+                import readline
+
+                readline.set_completer(None)
+            except ImportError:
+                pass
+
+    mnemonic = " ".join(words)
+
+    # Validate the complete mnemonic
+    console.print()
+    if validate_mnemonic(mnemonic):
+        console.print("[bold green]Mnemonic checksum valid![/bold green]")
+    else:
+        console.print("[bold red]WARNING: Mnemonic checksum INVALID![/bold red]")
+        console.print(
+            "[yellow]The words are valid BIP39 words but the checksum doesn't match.[/yellow]"
+        )
+        console.print("[yellow]This could mean a word was entered incorrectly.[/yellow]")
+        if not typer.confirm("Continue anyway?", default=False):
+            raise typer.Exit(1)
+
+    return mnemonic
+
+
+# ============================================================================
 # CLI Commands
 # ============================================================================
+
+
+@app.command("import")
+def import_mnemonic(
+    word_count: Annotated[
+        int, typer.Option("--words", "-w", help="Number of words (12, 15, 18, 21, or 24)")
+    ] = 24,
+    mnemonic: Annotated[
+        str | None, typer.Option("--mnemonic", "-m", help="Mnemonic phrase (space-separated)")
+    ] = None,
+    output_file: Annotated[
+        Path | None, typer.Option("--output", "-o", help="Output file path")
+    ] = None,
+    password: Annotated[
+        str | None, typer.Option("--password", "-p", help="Password for encryption")
+    ] = None,
+    prompt_password: Annotated[
+        bool,
+        typer.Option(
+            "--prompt-password/--no-prompt-password",
+            help="Prompt for password interactively (default: prompt)",
+        ),
+    ] = True,
+    force: Annotated[
+        bool,
+        typer.Option("--force", "-f", help="Overwrite existing file without confirmation"),
+    ] = False,
+) -> None:
+    """Import an existing BIP39 mnemonic phrase to create/recover a wallet.
+
+    Enter your existing mnemonic interactively with autocomplete support,
+    or pass it directly via --mnemonic.
+
+    By default, saves to ~/.joinmarket-ng/wallets/default.mnemonic with password protection.
+
+    Examples:
+        jm-wallet import                          # Interactive input, 24 words
+        jm-wallet import --words 12               # Interactive input, 12 words
+        jm-wallet import --mnemonic "word1 word2 ..."  # Direct input
+        jm-wallet import -o my-wallet.mnemonic    # Custom output file
+    """
+    setup_logging()
+
+    if word_count not in (12, 15, 18, 21, 24):
+        logger.error(f"Invalid word count: {word_count}. Must be 12, 15, 18, 21, or 24.")
+        raise typer.Exit(1)
+
+    # Get mnemonic from argument or interactive input
+    if mnemonic:
+        # Validate provided mnemonic
+        words = mnemonic.strip().split()
+        if len(words) != word_count:
+            logger.warning(
+                f"Mnemonic has {len(words)} words but --words={word_count} was specified. "
+                f"Using actual word count: {len(words)}"
+            )
+        if not validate_mnemonic(mnemonic):
+            logger.error("Provided mnemonic is INVALID (bad checksum)")
+            if not typer.confirm("Continue anyway?", default=False):
+                raise typer.Exit(1)
+        resolved_mnemonic = mnemonic.strip()
+    else:
+        # Interactive input with autocomplete
+        if not sys.stdin.isatty():
+            logger.error("Interactive input requires a terminal. Use --mnemonic instead.")
+            raise typer.Exit(1)
+        resolved_mnemonic = interactive_mnemonic_input(word_count)
+
+    # Display summary
+    typer.echo("\n" + "=" * 80)
+    typer.echo("IMPORTED MNEMONIC")
+    typer.echo("=" * 80)
+    word_list = resolved_mnemonic.split()
+    typer.echo(f"Word count: {len(word_list)}")
+    typer.echo(f"First word: {word_list[0]}")
+    typer.echo(f"Last word: {word_list[-1]}")
+    typer.echo("=" * 80 + "\n")
+
+    # Determine output file
+    if output_file is None:
+        output_file = Path.home() / ".joinmarket-ng" / "wallets" / "default.mnemonic"
+
+    # Check if file exists
+    if output_file.exists() and not force:
+        logger.warning(f"Wallet file already exists: {output_file}")
+        if not typer.confirm("Overwrite existing wallet file?", default=False):
+            typer.echo("Import cancelled")
+            raise typer.Exit(0)
+
+    # Get password
+    if prompt_password and password is None:
+        password = typer.prompt("Enter encryption password", hide_input=True)
+        confirm = typer.prompt("Confirm password", hide_input=True)
+        if password != confirm:
+            logger.error("Passwords do not match")
+            raise typer.Exit(1)
+
+    # Save the mnemonic
+    save_mnemonic_file(resolved_mnemonic, output_file, password)
+
+    typer.echo(f"\nMnemonic saved to: {output_file}")
+    if password:
+        typer.echo("File is encrypted - you will need the password to use it.")
+    else:
+        typer.echo("WARNING: File is NOT encrypted")
+        typer.echo("For production use, consider using a password!")
+    typer.echo("\nWallet import complete. You can now use other jm-wallet commands.")
 
 
 @app.command()
