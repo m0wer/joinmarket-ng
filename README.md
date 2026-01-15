@@ -244,13 +244,15 @@ After installation, edit `~/.joinmarket-ng/config.toml` to configure your Bitcoi
 
 ```toml
 [bitcoin]
-backend_type = "neutrino"  # or "full_node" for Bitcoin Core
-neutrino_url = "http://127.0.0.1:8334"
+backend_type = "descriptor_wallet"  # or "neutrino" for lightweight SPV
 
-# For full_node:
-# rpc_url = "http://127.0.0.1:8332"
-# rpc_user = "your_user"
-# rpc_password = "your_password"
+# For descriptor_wallet or full_node (both require Bitcoin Core RPC):
+rpc_url = "http://127.0.0.1:8332"
+rpc_user = "your_user"
+rpc_password = "your_password"
+
+# For neutrino:
+# neutrino_url = "http://127.0.0.1:8334"
 ```
 
 See [INSTALL.md](./INSTALL.md) for the complete installation guide, Docker setup, and troubleshooting.

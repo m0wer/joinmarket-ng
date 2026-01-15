@@ -225,7 +225,7 @@ neutrino_url = "http://127.0.0.1:8334"
 
 ```toml
 [bitcoin]
-backend_type = "full_node"
+backend_type = "descriptor_wallet"
 rpc_url = "http://127.0.0.1:8332"
 rpc_user = "your_rpc_user"
 rpc_password = "your_rpc_password"

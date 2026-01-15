@@ -53,7 +53,7 @@ nano ~/.joinmarket-ng/config.toml
 
 ```toml
 [bitcoin]
-backend_type = "full_node"
+backend_type = "descriptor_wallet"
 rpc_url = "http://127.0.0.1:8332"
 rpc_user = "your_rpc_user"
 rpc_password = "your_rpc_password"
@@ -339,13 +339,13 @@ Note: Takers only need Tor SOCKS proxy (port 9050) - they don't serve a hidden s
 |----------|---------|-------------|
 | `MNEMONIC_FILE` | - | Path to mnemonic file (recommended) |
 | `MNEMONIC` | - | Direct mnemonic phrase (not recommended for production) |
-| `BACKEND_TYPE` | `full_node` | Backend: `full_node`, `descriptor_wallet`, or `neutrino` |
+| `BACKEND_TYPE` | `descriptor_wallet` | Backend: `descriptor_wallet`, `full_node`, or `neutrino` |
 | `NETWORK` | `mainnet` | Protocol network for handshakes |
 | `BITCOIN_NETWORK` | `$NETWORK` | Bitcoin network for address generation |
-| `BITCOIN_RPC_URL` | `http://localhost:8332` | Bitcoin Core RPC URL |
-| `BITCOIN_RPC_USER` | - | Bitcoin Core RPC username |
-| `BITCOIN_RPC_PASSWORD` | - | Bitcoin Core RPC password |
-| `NEUTRINO_URL` | `http://localhost:8334` | Neutrino REST API URL |
+| `BITCOIN_RPC_URL` | `http://localhost:8332` | Bitcoin Core RPC URL (descriptor_wallet and full_node) |
+| `BITCOIN_RPC_USER` | - | Bitcoin Core RPC username (descriptor_wallet and full_node) |
+| `BITCOIN_RPC_PASSWORD` | - | Bitcoin Core RPC password (descriptor_wallet and full_node) |
+| `NEUTRINO_URL` | `http://localhost:8334` | Neutrino REST API URL (neutrino only) |
 | `DIRECTORY_SERVERS` | (mainnet defaults) | Comma-separated list of directory servers |
 | `COINJOIN_AMOUNT` | `1000000` | Default CoinJoin amount in sats |
 | `MIN_MAKERS` | `4` | Minimum number of makers |
@@ -380,7 +380,7 @@ jm-taker tumble --help
 | `--destination` | INTERNAL | Address or INTERNAL for next mixdepth |
 | `--mixdepth` | 0 | Source mixdepth (0-4) |
 | `--counterparties` | 3 | Number of makers (more = better privacy) |
-| `--backend` | full_node | Backend: full_node, descriptor_wallet, or neutrino |
+| `--backend` | descriptor_wallet | Backend: descriptor_wallet, full_node, or neutrino |
 | `--max-abs-fee` | 500 | Max absolute fee per maker (sats) |
 | `--max-rel-fee` | 0.001 | Max relative fee (0.1%) |
 | `--bondless-allowance` | 0.125 | Fraction of time to choose makers randomly (0.0-1.0) |
