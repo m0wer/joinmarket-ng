@@ -481,7 +481,9 @@ def info(
     network: Annotated[str | None, typer.Option("--network", "-n", help="Bitcoin network")] = None,
     backend_type: Annotated[
         str | None,
-        typer.Option("--backend", "-b", help="Backend: full_node | descriptor_wallet | neutrino"),
+        typer.Option(
+            "--backend", "-b", help="Backend: scantxoutset | descriptor_wallet | neutrino"
+        ),
     ] = None,
     rpc_url: Annotated[str | None, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")] = None,
     rpc_user: Annotated[str | None, typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER")] = None,
@@ -596,7 +598,7 @@ async def _show_wallet_info(
             rpc_password=backend_settings.rpc_password,
             wallet_name=wallet_name,
         )
-    elif backend_type == "full_node":
+    elif backend_type == "scantxoutset":
         backend = BitcoinCoreBackend(
             rpc_url=backend_settings.rpc_url,
             rpc_user=backend_settings.rpc_user,
@@ -651,7 +653,7 @@ async def _show_wallet_info(
                     fidelity_bond_addresses=fidelity_bond_addresses if bond_count else None
                 )
         else:
-            # Use standard sync (scantxoutset for full_node, BIP157/158 for neutrino)
+            # Use standard sync (scantxoutset for scantxoutset, BIP157/158 for neutrino)
             await wallet.sync_all(fidelity_bond_addresses or None)
 
         # Update any pending transaction statuses
@@ -841,7 +843,9 @@ def list_bonds(
     network: Annotated[str | None, typer.Option("--network", "-n", help="Bitcoin network")] = None,
     backend_type: Annotated[
         str | None,
-        typer.Option("--backend", "-b", help="Backend: full_node | descriptor_wallet | neutrino"),
+        typer.Option(
+            "--backend", "-b", help="Backend: scantxoutset | descriptor_wallet | neutrino"
+        ),
     ] = None,
     rpc_url: Annotated[str | None, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")] = None,
     rpc_user: Annotated[str | None, typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER")] = None,
@@ -1182,7 +1186,9 @@ def send(
     network: Annotated[str | None, typer.Option("--network", "-n", help="Bitcoin network")] = None,
     backend_type: Annotated[
         str | None,
-        typer.Option("--backend", "-b", help="Backend: full_node | descriptor_wallet | neutrino"),
+        typer.Option(
+            "--backend", "-b", help="Backend: scantxoutset | descriptor_wallet | neutrino"
+        ),
     ] = None,
     rpc_url: Annotated[str | None, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")] = None,
     rpc_user: Annotated[str | None, typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER")] = None,
@@ -1996,7 +2002,9 @@ def recover_bonds(
     network: Annotated[str | None, typer.Option("--network", "-n", help="Bitcoin network")] = None,
     backend_type: Annotated[
         str | None,
-        typer.Option("--backend", "-b", help="Backend: full_node | descriptor_wallet | neutrino"),
+        typer.Option(
+            "--backend", "-b", help="Backend: scantxoutset | descriptor_wallet | neutrino"
+        ),
     ] = None,
     rpc_url: Annotated[str | None, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")] = None,
     rpc_user: Annotated[str | None, typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER")] = None,
@@ -2254,7 +2262,9 @@ def registry_sync(
     network: Annotated[str | None, typer.Option("--network", "-n")] = None,
     backend_type: Annotated[
         str | None,
-        typer.Option("--backend", "-b", help="Backend: full_node | descriptor_wallet | neutrino"),
+        typer.Option(
+            "--backend", "-b", help="Backend: scantxoutset | descriptor_wallet | neutrino"
+        ),
     ] = None,
     rpc_url: Annotated[str | None, typer.Option("--rpc-url", envvar="BITCOIN_RPC_URL")] = None,
     rpc_user: Annotated[str | None, typer.Option("--rpc-user", envvar="BITCOIN_RPC_USER")] = None,

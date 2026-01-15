@@ -96,7 +96,7 @@ def build_taker_config(
 
     # Build backend config
     backend_config: dict[str, Any] = {}
-    if effective_backend_type in ("full_node", "descriptor_wallet"):
+    if effective_backend_type in ("scantxoutset", "descriptor_wallet"):
         backend_config = {
             "rpc_url": effective_rpc_url,
             "rpc_user": effective_rpc_user,
@@ -237,7 +237,7 @@ def create_backend(config: TakerConfig) -> Any:
             rpc_password=config.backend_config["rpc_password"],
             wallet_name=wallet_name,
         )
-    else:  # full_node
+    else:  # scantxoutset
         return BitcoinCoreBackend(
             rpc_url=config.backend_config["rpc_url"],
             rpc_user=config.backend_config["rpc_user"],
@@ -292,7 +292,7 @@ def coinjoin(
     backend_type: Annotated[
         str | None,
         typer.Option(
-            "--backend", "-b", help="Backend type: full_node | descriptor_wallet | neutrino"
+            "--backend", "-b", help="Backend type: scantxoutset | descriptor_wallet | neutrino"
         ),
     ] = None,
     rpc_url: Annotated[
@@ -604,7 +604,7 @@ def tumble(
     backend_type: Annotated[
         str | None,
         typer.Option(
-            "--backend", "-b", help="Backend type: full_node | descriptor_wallet | neutrino"
+            "--backend", "-b", help="Backend type: scantxoutset | descriptor_wallet | neutrino"
         ),
     ] = None,
     rpc_url: Annotated[

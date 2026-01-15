@@ -63,7 +63,7 @@ class TestTorControlConfig:
 class TestBackendConfig:
     def test_default_values(self):
         config = BackendConfig()
-        assert config.backend_type == "full_node"
+        assert config.backend_type == "scantxoutset"
         assert config.backend_config == {}
 
     def test_custom_config(self):
@@ -73,8 +73,8 @@ class TestBackendConfig:
             "rpc_user": "user",
             "rpc_password": "pass",
         }
-        config = BackendConfig(backend_type="full_node", backend_config=backend_cfg)
-        assert config.backend_type == "full_node"
+        config = BackendConfig(backend_type="scantxoutset", backend_config=backend_cfg)
+        assert config.backend_type == "scantxoutset"
         assert config.backend_config == backend_cfg
 
 

@@ -339,12 +339,12 @@ Note: Takers only need Tor SOCKS proxy (port 9050) - they don't serve a hidden s
 |----------|---------|-------------|
 | `WALLET__MNEMONIC_FILE` | - | Path to mnemonic file (recommended) |
 | `WALLET__MNEMONIC` | - | Direct mnemonic phrase (not recommended for production) |
-| `BITCOIN__BACKEND_TYPE` | `descriptor_wallet` | Backend: `descriptor_wallet`, `full_node`, or `neutrino` |
+| `BITCOIN__BACKEND_TYPE` | `descriptor_wallet` | Backend: `descriptor_wallet`, `scantxoutset`, or `neutrino` |
 | `NETWORK__NETWORK` | `mainnet` | Protocol network for handshakes |
 | `NETWORK__BITCOIN_NETWORK` | `$NETWORK__NETWORK` | Bitcoin network for address generation |
-| `BITCOIN__RPC_URL` | `http://localhost:8332` | Bitcoin Core RPC URL (descriptor_wallet and full_node) |
-| `BITCOIN__RPC_USER` | - | Bitcoin Core RPC username (descriptor_wallet and full_node) |
-| `BITCOIN__RPC_PASSWORD` | - | Bitcoin Core RPC password (descriptor_wallet and full_node) |
+| `BITCOIN__RPC_URL` | `http://localhost:8332` | Bitcoin Core RPC URL (descriptor_wallet and scantxoutset) |
+| `BITCOIN__RPC_USER` | - | Bitcoin Core RPC username (descriptor_wallet and scantxoutset) |
+| `BITCOIN__RPC_PASSWORD` | - | Bitcoin Core RPC password (descriptor_wallet and scantxoutset) |
 | `BITCOIN__NEUTRINO_URL` | `http://localhost:8334` | Neutrino REST API URL (neutrino only) |
 | `NETWORK__DIRECTORY_SERVERS` | (mainnet defaults) | JSON array of directory servers (e.g., `["host1:port1", "host2:port2"]`) |
 | `TAKER__COINJOIN_AMOUNT` | `1000000` | Default CoinJoin amount in sats |
@@ -380,7 +380,7 @@ jm-taker tumble --help
 | `--destination` | INTERNAL | Address or INTERNAL for next mixdepth |
 | `--mixdepth` | 0 | Source mixdepth (0-4) |
 | `--counterparties` | 3 | Number of makers (more = better privacy) |
-| `--backend` | descriptor_wallet | Backend: descriptor_wallet, full_node, or neutrino |
+| `--backend` | descriptor_wallet | Backend: descriptor_wallet, scantxoutset, or neutrino |
 | `--max-abs-fee` | 500 | Max absolute fee per maker (sats) |
 | `--max-rel-fee` | 0.001 | Max relative fee (0.1%) |
 | `--bondless-allowance` | 0.125 | Fraction of time to choose makers randomly (0.0-1.0) |
@@ -498,7 +498,7 @@ Use env vars for RPC credentials (see jmwallet README).
 │                                            t]               (defaults to     │
 │                                                             --network)       │
 │    --backend        -b                     TEXT             Backend type:    │
-│                                                             full_node |      │
+│                                                             scantxoutset |   │
 │                                                             descriptor_wall… │
 │                                                             | neutrino       │
 │    --rpc-url                               TEXT             Bitcoin full     │
@@ -607,8 +607,9 @@ Use env vars for RPC credentials (see jmwallet README).
 │                                                     BIP39_PASSPHRASE]        │
 │ --network                   [mainnet|testnet|signe  Bitcoin network          │
 │                             t|regtest]                                       │
-│ --backend           -b      TEXT                    Backend type: full_node  │
-│                                                     | descriptor_wallet |    │
+│ --backend           -b      TEXT                    Backend type:            │
+│                                                     scantxoutset |           │
+│                                                     descriptor_wallet |      │
 │                                                     neutrino                 │
 │ --rpc-url                   TEXT                    Bitcoin full node RPC    │
 │                                                     URL                      │

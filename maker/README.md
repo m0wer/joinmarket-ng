@@ -379,10 +379,10 @@ docker-compose logs -f maker
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BITCOIN__BACKEND_TYPE` | `descriptor_wallet` | Backend type: `descriptor_wallet`, `full_node`, or `neutrino` |
-| `BITCOIN__RPC_URL` | `http://localhost:8332` | Bitcoin Core RPC URL (descriptor_wallet and full_node) |
-| `BITCOIN__RPC_USER` | - | Bitcoin Core RPC username (descriptor_wallet and full_node) |
-| `BITCOIN__RPC_PASSWORD` | - | Bitcoin Core RPC password (descriptor_wallet and full_node) |
+| `BITCOIN__BACKEND_TYPE` | `descriptor_wallet` | Backend type: `descriptor_wallet`, `scantxoutset`, or `neutrino` |
+| `BITCOIN__RPC_URL` | `http://localhost:8332` | Bitcoin Core RPC URL (descriptor_wallet and scantxoutset) |
+| `BITCOIN__RPC_USER` | - | Bitcoin Core RPC username (descriptor_wallet and scantxoutset) |
+| `BITCOIN__RPC_PASSWORD` | - | Bitcoin Core RPC password (descriptor_wallet and scantxoutset) |
 | `BITCOIN__NEUTRINO_URL` | `http://localhost:8334` | Neutrino REST API URL (neutrino only) |
 
 ### Network Configuration
@@ -433,7 +433,7 @@ jm-maker start --help
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--mnemonic-file` | - | Path to encrypted wallet file |
-| `--backend-type` | descriptor_wallet | Backend: descriptor_wallet, full_node, or neutrino |
+| `--backend-type` | descriptor_wallet | Backend: descriptor_wallet, scantxoutset, or neutrino |
 | `--cj-fee-relative` | 0.001 | Relative fee (0.001 = 0.1%) - auto-selects sw0reloffer |
 | `--cj-fee-absolute` | - | Absolute fee in sats - auto-selects sw0absoffer |
 | `--min-size` | 100000 | Minimum CoinJoin size in sats |
@@ -538,7 +538,7 @@ Thresholds are configurable via environment variables if needed (see config.py).
 │                                                        (defaults to          │
 │                                                        --network)            │
 │ --backend-type                  TEXT                   Backend type:         │
-│                                                        full_node |           │
+│                                                        scantxoutset |        │
 │                                                        descriptor_wallet |   │
 │                                                        neutrino              │
 │ --rpc-url                       TEXT                   Bitcoin full node RPC │

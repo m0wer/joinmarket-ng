@@ -81,27 +81,7 @@ jm-wallet info --backend descriptor_wallet
 
 The first run imports your wallet descriptors into Bitcoin Core (one-time ~5 second operation). Subsequent syncs are nearly instant.
 
-#### Option B: Bitcoin Core Legacy (Simple but Slow)
-
-**Best for**: One-off operations or scripts where setup time doesn't matter.
-
-Uses `scantxoutset` RPC to scan the entire UTXO set each time. No persistent state, no wallet files created on the node.
-
-**Performance**: ~90 seconds per sync on mainnet
-
-**Requirements**: Bitcoin Core v30+
-
-```bash
-source ~/.joinmarket-ng/bitcoin.env
-jm-wallet info \
-  --mnemonic-file ~/.joinmarket-ng/wallets/my-wallet.mnemonic \
-  --backend full_node
-
-# Or if using default wallet:
-jm-wallet info --backend full_node
-```
-
-#### Option C: Neutrino (Lightweight SPV)
+#### Option B: Neutrino (Lightweight SPV)
 
 **Best for**: Limited storage or fast initial sync.
 
@@ -197,7 +177,7 @@ jm-wallet info --mnemonic-file ~/my-wallet.mnemonic --backend neutrino
 
 # Bitcoin Core (with environment file)
 source ~/.joinmarket-ng/bitcoin.env
-jm-wallet info --backend full_node
+jm-wallet info --backend descriptor_wallet
 ```
 
 ### List Fidelity Bonds
@@ -290,7 +270,7 @@ For detailed help on any command, see the auto-generated help sections below.
 │ --prompt-bip39-passphrase                   Prompt for BIP39 passphrase      │
 │                                             interactively                    │
 │ --network                  -n      TEXT     Bitcoin network                  │
-│ --backend                  -b      TEXT     Backend: full_node |             │
+│ --backend                  -b      TEXT     Backend: scantxoutset |          │
 │                                             descriptor_wallet | neutrino     │
 │ --rpc-url                          TEXT     [env var: BITCOIN_RPC_URL]       │
 │ --rpc-user                         TEXT     [env var: BITCOIN_RPC_USER]      │
@@ -329,7 +309,7 @@ For detailed help on any command, see the auto-generated help sections below.
 │                                             [env var: BIP39_PASSPHRASE]      │
 │ --prompt-bip39-passphrase                   Prompt for BIP39 passphrase      │
 │ --network                  -n      TEXT     Bitcoin network                  │
-│ --backend                  -b      TEXT     Backend: full_node |             │
+│ --backend                  -b      TEXT     Backend: scantxoutset |          │
 │                                             descriptor_wallet | neutrino     │
 │ --rpc-url                          TEXT     [env var: BITCOIN_RPC_URL]       │
 │ --rpc-user                         TEXT     [env var: BITCOIN_RPC_USER]      │
@@ -407,7 +387,7 @@ For detailed help on any command, see the auto-generated help sections below.
 │ --block-target                     INTEGER  Target blocks for fee estimation │
 │                                             (1-1008). Defaults to 3.         │
 │ --network                  -n      TEXT     Bitcoin network                  │
-│ --backend                  -b      TEXT     Backend: full_node |             │
+│ --backend                  -b      TEXT     Backend: scantxoutset |          │
 │                                             descriptor_wallet | neutrino     │
 │ --rpc-url                          TEXT     [env var: BITCOIN_RPC_URL]       │
 │ --rpc-user                         TEXT     [env var: BITCOIN_RPC_USER]      │
@@ -540,7 +520,7 @@ For detailed help on any command, see the auto-generated help sections below.
 │                                             [env var: BIP39_PASSPHRASE]      │
 │ --prompt-bip39-passphrase                   Prompt for BIP39 passphrase      │
 │ --network                  -n      TEXT     Bitcoin network                  │
-│ --backend                  -b      TEXT     Backend: full_node |             │
+│ --backend                  -b      TEXT     Backend: scantxoutset |          │
 │                                             descriptor_wallet | neutrino     │
 │ --rpc-url                          TEXT     [env var: BITCOIN_RPC_URL]       │
 │ --rpc-user                         TEXT     [env var: BITCOIN_RPC_USER]      │
@@ -576,7 +556,7 @@ For detailed help on any command, see the auto-generated help sections below.
 │                                          [env var: BIP39_PASSPHRASE]         │
 │ --prompt-bip39-passphrase                Prompt for BIP39 passphrase         │
 │ --network                  -n      TEXT                                      │
-│ --backend                  -b      TEXT  Backend: full_node |                │
+│ --backend                  -b      TEXT  Backend: scantxoutset |             │
 │                                          descriptor_wallet | neutrino        │
 │ --rpc-url                          TEXT  [env var: BITCOIN_RPC_URL]          │
 │ --rpc-user                         TEXT  [env var: BITCOIN_RPC_USER]         │

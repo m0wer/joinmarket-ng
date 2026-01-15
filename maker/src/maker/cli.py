@@ -99,7 +99,7 @@ def build_maker_config(
 
     # Build backend config
     backend_config: dict[str, Any] = {}
-    if effective_backend_type in ("full_node", "descriptor_wallet"):
+    if effective_backend_type in ("scantxoutset", "descriptor_wallet"):
         backend_config = {
             "rpc_url": effective_rpc_url,
             "rpc_user": effective_rpc_user,
@@ -291,7 +291,7 @@ def create_wallet_service(config: MakerConfig) -> WalletService:
             rpc_password=backend_cfg.get("rpc_password", ""),
             wallet_name=wallet_name,
         )
-    elif backend_type == "full_node":
+    elif backend_type == "scantxoutset":
         backend_cfg = config.backend_config
         backend = BitcoinCoreBackend(
             rpc_url=backend_cfg.get("rpc_url", "http://127.0.0.1:8332"),
@@ -369,7 +369,7 @@ def start(
     ] = None,
     backend_type: Annotated[
         str | None,
-        typer.Option(help="Backend type: full_node | descriptor_wallet | neutrino"),
+        typer.Option(help="Backend type: scantxoutset | descriptor_wallet | neutrino"),
     ] = None,
     rpc_url: Annotated[
         str | None, typer.Option(envvar="BITCOIN_RPC_URL", help="Bitcoin full node RPC URL")

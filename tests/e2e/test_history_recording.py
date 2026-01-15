@@ -168,7 +168,7 @@ async def test_coinjoin_creates_history_entry(
             mnemonic=TAKER_MNEMONIC,
             network=NetworkType.TESTNET,
             bitcoin_network=NetworkType.REGTEST,
-            backend_type="full_node",
+            backend_type="scantxoutset",
             backend_config={
                 "rpc_url": "http://127.0.0.1:18443",
                 "rpc_user": "test",

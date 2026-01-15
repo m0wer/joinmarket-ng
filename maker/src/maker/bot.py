@@ -527,7 +527,7 @@ class MakerBot:
                 # Use fast descriptor wallet sync
                 await self.wallet.sync_with_descriptor_wallet(fidelity_bond_addresses)
             else:
-                # Use standard sync (scantxoutset for full_node, BIP157/158 for neutrino)
+                # Use standard sync (scantxoutset for scantxoutset, BIP157/158 for neutrino)
                 await self.wallet.sync_all(fidelity_bond_addresses)
 
             # Update bond registry with UTXO info from the scan (only if using registry)

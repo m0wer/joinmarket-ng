@@ -88,6 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Renamed `full_node` backend to `scantxoutset`** for clarity. The backend type has been renamed to better reflect what it does (uses Bitcoin Core's `scantxoutset` RPC to scan the UTXO set). This is an alternative backend that should not be recommended for general usage - `descriptor_wallet` is the preferred default for full nodes. Updated all documentation to reflect this change and removed examples about the `scantxoutset` backend from tutorials.
 - **Environment Variable Naming Standardization**: Standardized environment variable naming to use double underscore (`__`) for nested settings, following pydantic-settings convention.
   - Old format: `TOR_SOCKS_HOST`, `NOTIFY_URLS`
   - New format: `TOR__SOCKS_HOST`, `NOTIFICATIONS__URLS`
@@ -172,8 +173,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Default backend changed from `full_node` to `descriptor_wallet`** for all components (maker, taker, wallet CLI).
-  - Full node (scantxoutset) still available via `--backend full_node`
+- **Default backend changed from `scantxoutset` to `descriptor_wallet`** for all components (maker, taker, wallet CLI).
+  - Scantxoutset (formerly `full_node`) still available via `--backend scantxoutset`
   - Provides significant performance improvement for ongoing operations (~1s vs ~90s per sync)
   - Docker compose examples updated to use descriptor_wallet by default
 - Fee rate handling improvements:

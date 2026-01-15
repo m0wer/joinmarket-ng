@@ -5,7 +5,7 @@ Tests neutrino light client backend functionality:
 - Basic blockchain operations (height, transactions, fees)
 - UTXO discovery and watching addresses
 - Maker and taker operation with neutrino backend
-- Cross-backend compatibility (full_node + neutrino)
+- Cross-backend compatibility (scantxoutset + neutrino)
 - Fidelity bonds with neutrino backend
 
 Requires: docker compose --profile neutrino up -d

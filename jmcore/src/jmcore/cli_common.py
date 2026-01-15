@@ -547,7 +547,7 @@ def create_backend(
             rpc_password=backend_settings.rpc_password,
             wallet_name=wallet_name,
         )
-    elif backend_type == "full_node":
+    elif backend_type == "scantxoutset":
         return BitcoinCoreBackend(
             rpc_url=backend_settings.rpc_url,
             rpc_user=backend_settings.rpc_user,
@@ -556,7 +556,7 @@ def create_backend(
     else:
         raise ValueError(
             f"Invalid backend type: {backend_type}. "
-            f"Valid options: full_node, descriptor_wallet, neutrino"
+            f"Valid options: scantxoutset, descriptor_wallet, neutrino"
         )
 
 
