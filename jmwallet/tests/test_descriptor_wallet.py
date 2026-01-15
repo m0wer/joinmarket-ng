@@ -1143,3 +1143,206 @@ class TestFidelityBondSync:
         assert bond_desc_imported, (
             f"Bond address {bond_address} not found in imported descriptors: {imported_descs_strs}"
         )
+
+
+# =============================================================================
+# Address History Tests
+# =============================================================================
+
+
+class TestAddressHistory:
+    """Tests for tracking address history including spent addresses."""
+
+    @pytest.mark.asyncio
+    async def test_get_addresses_with_history(self) -> None:
+        """Test that get_addresses_with_history returns all addresses with transaction history."""
+        backend = DescriptorWalletBackend(wallet_name="test_addr_history")
+        backend._wallet_loaded = True
+
+        mock_transactions = [
+            {
+                "address": "bc1qtest1",
+                "category": "receive",
+                "amount": 0.01,
+                "txid": "abc123",
+            },
+            {
+                "address": "bc1qtest2",
+                "category": "receive",
+                "amount": 0.02,
+                "txid": "def456",
+            },
+            {
+                "address": "bc1qtest1",  # Same address, second tx
+                "category": "send",
+                "amount": -0.01,
+                "txid": "ghi789",
+            },
+            {
+                "address": "bc1qtest3",
+                "category": "receive",
+                "amount": 0.03,
+                "txid": "jkl012",
+            },
+        ]
+
+        async def mock_rpc(
+            method: str,
+            params: list[Any] | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            if method == "listtransactions":
+                return mock_transactions
+            return {}
+
+        backend._rpc_call = mock_rpc  # type: ignore[method-assign]
+
+        addresses = await backend.get_addresses_with_history()
+
+        # Should have 3 unique addresses
+        assert len(addresses) == 3
+        assert "bc1qtest1" in addresses
+        assert "bc1qtest2" in addresses
+        assert "bc1qtest3" in addresses
+
+    @pytest.mark.asyncio
+    async def test_get_addresses_with_history_empty(self) -> None:
+        """Test get_addresses_with_history with no transactions."""
+        backend = DescriptorWalletBackend(wallet_name="test_empty_history")
+        backend._wallet_loaded = True
+
+        async def mock_rpc(
+            method: str,
+            params: list[Any] | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            if method == "listtransactions":
+                return []
+            return {}
+
+        backend._rpc_call = mock_rpc  # type: ignore[method-assign]
+
+        addresses = await backend.get_addresses_with_history()
+
+        assert len(addresses) == 0
+
+    @pytest.mark.asyncio
+    async def test_get_addresses_with_history_filters_categories(self) -> None:
+        """Test that get_addresses_with_history only includes receive/send/generate."""
+        backend = DescriptorWalletBackend(wallet_name="test_filter_history")
+        backend._wallet_loaded = True
+
+        mock_transactions = [
+            {
+                "address": "bc1qreceive",
+                "category": "receive",
+                "amount": 0.01,
+                "txid": "abc",
+            },
+            {
+                "address": "bc1qsend",
+                "category": "send",
+                "amount": -0.01,
+                "txid": "def",
+            },
+            {
+                "address": "bc1qgenerate",
+                "category": "generate",
+                "amount": 50.0,
+                "txid": "ghi",
+            },
+            {
+                "address": "bc1qimmature",
+                "category": "immature",  # Should be excluded
+                "amount": 50.0,
+                "txid": "jkl",
+            },
+            {
+                "category": "orphan",  # No address, should be skipped
+                "amount": 0,
+                "txid": "mno",
+            },
+        ]
+
+        async def mock_rpc(
+            method: str,
+            params: list[Any] | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            if method == "listtransactions":
+                return mock_transactions
+            return {}
+
+        backend._rpc_call = mock_rpc  # type: ignore[method-assign]
+
+        addresses = await backend.get_addresses_with_history()
+
+        # Should have 3 addresses (receive, send, generate) but not immature/orphan
+        assert len(addresses) == 3
+        assert "bc1qreceive" in addresses
+        assert "bc1qsend" in addresses
+        assert "bc1qgenerate" in addresses
+        assert "bc1qimmature" not in addresses
+
+    @pytest.mark.asyncio
+    async def test_sync_populates_addresses_with_history(self) -> None:
+        """Test that sync_with_descriptor_wallet populates addresses_with_history."""
+        from jmwallet.backends.base import UTXO
+        from jmwallet.wallet.service import WalletService
+
+        backend = DescriptorWalletBackend(wallet_name="test_sync_history")
+        backend._wallet_loaded = True
+        backend._descriptors_imported = True
+
+        # Address that HAS a UTXO
+        addr_with_utxo = "bc1qcurrentutxo"
+        # Address that WAS used but now has 0 balance (fully spent)
+        addr_spent = "bc1qspentaddr"
+
+        async def mock_get_all_utxos() -> list[UTXO]:
+            return [
+                UTXO(
+                    txid="abc123" * 10 + "ab",
+                    vout=0,
+                    value=100000,
+                    address=addr_with_utxo,
+                    confirmations=100,
+                    scriptpubkey="0014current",
+                ),
+            ]
+
+        async def mock_get_addresses_with_history() -> set[str]:
+            return {addr_with_utxo, addr_spent}
+
+        backend.get_all_utxos = mock_get_all_utxos  # type: ignore[method-assign]
+        backend.get_addresses_with_history = mock_get_addresses_with_history  # type: ignore
+
+        test_mnemonic = (
+            "abandon abandon abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon about"
+        )
+        wallet = WalletService(
+            mnemonic=test_mnemonic,
+            backend=backend,
+            network="mainnet",
+            mixdepth_count=5,
+        )
+
+        # Mock _find_address_path to return a path for our test addresses
+        def mock_find_path(address: str) -> tuple[int, int, int] | None:
+            if address == addr_with_utxo:
+                return (0, 0, 0)
+            elif address == addr_spent:
+                return (0, 0, 1)  # Different index
+            return None
+
+        wallet._find_address_path = mock_find_path  # type: ignore[method-assign]
+
+        await wallet.sync_with_descriptor_wallet()
+
+        # Both addresses should be in addresses_with_history
+        assert addr_with_utxo in wallet.addresses_with_history
+        assert addr_spent in wallet.addresses_with_history

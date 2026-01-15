@@ -1054,6 +1054,23 @@ class WalletService:
         # Update cache
         self.utxo_cache = result
 
+        # Fetch all addresses with transaction history (including spent)
+        # This is important to track addresses that have been used but are now empty
+        try:
+            if hasattr(self.backend, "get_addresses_with_history"):
+                history_addresses = await self.backend.get_addresses_with_history()
+                for address in history_addresses:
+                    # Check if this address belongs to our wallet
+                    path_info = self._find_address_path(address)
+                    if path_info is not None:
+                        self.addresses_with_history.add(address)
+                        # Also add to address cache if not already there
+                        if address not in self.address_cache:
+                            self.address_cache[address] = path_info
+                logger.debug(f"Tracked {len(self.addresses_with_history)} addresses with history")
+        except Exception as e:
+            logger.debug(f"Could not fetch addresses with history: {e}")
+
         total_utxos = sum(len(u) for u in result.values())
         total_value = sum(sum(u.value for u in utxos) for utxos in result.values())
         logger.info(

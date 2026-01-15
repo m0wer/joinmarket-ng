@@ -785,3 +785,87 @@ def update_transaction_peer_count(
     except Exception as e:
         logger.error(f"Failed to update history: {e}")
         return False
+
+
+async def update_all_pending_transactions(
+    backend: BlockchainBackend | Any,
+    data_dir: Path | None = None,
+) -> int:
+    """
+    Update the status of all pending transactions using the blockchain backend.
+
+    This function is called when displaying wallet info or history to ensure
+    pending transactions are updated with their current confirmation status.
+    Particularly important for one-shot coinjoin commands that exit before
+    the background monitor can update the status.
+
+    Args:
+        backend: Blockchain backend to query transaction status
+        data_dir: Optional data directory
+
+    Returns:
+        Number of transactions that were updated
+    """
+    pending = get_pending_transactions(data_dir)
+    if not pending:
+        return 0
+
+    updated_count = 0
+    has_mempool = backend.has_mempool_access()
+
+    for entry in pending:
+        if not entry.txid:
+            # Can't check without txid
+            continue
+
+        try:
+            if has_mempool:
+                # Full node: can check mempool directly
+                tx_info = await backend.get_transaction(entry.txid)
+                if tx_info is not None:
+                    # Transaction is in mempool (confirmations=0) or confirmed (confirmations>0)
+                    if tx_info.confirmations >= 0:
+                        # Mark as success even with 0 confs (mempool visible)
+                        update_transaction_confirmation(
+                            txid=entry.txid,
+                            confirmations=max(tx_info.confirmations, 1),
+                            data_dir=data_dir,
+                        )
+                        updated_count += 1
+                        logger.debug(
+                            f"Updated pending tx {entry.txid[:16]}... "
+                            f"({tx_info.confirmations} confs)"
+                        )
+            else:
+                # Neutrino: can only check confirmed blocks
+                if not entry.destination_address:
+                    continue
+
+                try:
+                    current_height = await backend.get_block_height()
+                except Exception:
+                    current_height = None
+
+                verified = await backend.verify_tx_output(
+                    txid=entry.txid,
+                    vout=0,  # CJ outputs are typically first
+                    address=entry.destination_address,
+                    start_height=current_height,
+                )
+
+                if verified:
+                    update_transaction_confirmation(
+                        txid=entry.txid,
+                        confirmations=1,
+                        data_dir=data_dir,
+                    )
+                    updated_count += 1
+                    logger.debug(f"Updated pending tx {entry.txid[:16]}... via Neutrino")
+
+        except Exception as e:
+            logger.debug(f"Could not update pending tx {entry.txid[:16]}...: {e}")
+
+    if updated_count > 0:
+        logger.info(f"Updated {updated_count} pending transaction(s)")
+
+    return updated_count
