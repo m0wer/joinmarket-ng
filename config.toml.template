@@ -13,7 +13,7 @@
 # Tor Settings
 # ============================================================================
 
-# [tor]
+[tor]
 # SOCKS proxy settings
 # socks_host = "127.0.0.1"
 # socks_port = 9050
@@ -30,7 +30,7 @@
 # Bitcoin Backend Settings
 # ============================================================================
 
-# [bitcoin]
+[bitcoin]
 # Backend type: "descriptor_wallet" (default), "full_node", or "neutrino"
 # backend_type = "descriptor_wallet"
 
@@ -46,7 +46,7 @@
 # Network Settings
 # ============================================================================
 
-# [network_config]
+[network_config]
 # Network: "mainnet", "testnet", "signet", or "regtest"
 # network = "mainnet"
 
@@ -61,7 +61,7 @@
 # Wallet Settings
 # ============================================================================
 
-# [wallet]
+[wallet]
 # Number of mixing depths (1-10)
 # mixdepth_count = 5
 
@@ -89,7 +89,7 @@
 # Logging Settings
 # ============================================================================
 
-# [logging]
+[logging]
 # Log level: "DEBUG", "INFO", "WARNING", "ERROR"
 # level = "INFO"
 
@@ -100,7 +100,7 @@
 # Notification Settings (Apprise integration)
 # ============================================================================
 
-# [notifications]
+[notifications]
 # Enable notifications
 # enabled = false
 
@@ -137,7 +137,7 @@
 # Maker Settings (Yield Generator)
 # ============================================================================
 
-# [maker]
+[maker]
 # Minimum CoinJoin amount in satoshis
 # min_size = 100000
 
@@ -169,7 +169,7 @@
 # Taker Settings (CoinJoin Client)
 # ============================================================================
 
-# [taker]
+[taker]
 # Number of counterparty makers to use (1-20)
 # counterparty_count = 10
 
@@ -203,7 +203,7 @@
 # Directory Server Settings
 # ============================================================================
 
-# [directory_server]
+[directory_server]
 # Server listening address
 # host = "127.0.0.1"
 # port = 5222
@@ -233,7 +233,7 @@
 # Orderbook Watcher Settings
 # ============================================================================
 
-# [orderbook_watcher]
+[orderbook_watcher]
 # HTTP API settings
 # http_host = "0.0.0.0"
 # http_port = 8000

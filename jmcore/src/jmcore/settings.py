@@ -641,8 +641,22 @@ class TomlConfigSettingsSource(PydanticBaseSettingsSource):
                 self._config = tomllib.load(f)
 
             logger.info(f"Loaded config from {config_path}")
+        except tomllib.TOMLDecodeError as e:
+            logger.error(f"Invalid TOML syntax in config file {config_path}")
+            logger.error(f"Error: {e}")
+            logger.error("Please fix the syntax errors in your config file and try again.")
+            logger.error(
+                "Tip: Make sure section headers like [bitcoin], [tor], etc. are uncommented"
+            )
+            import sys
+
+            sys.exit(1)
         except Exception as e:
-            logger.warning(f"Failed to load config from {config_path}: {e}")
+            logger.error(f"Failed to load config from {config_path}: {e}")
+            logger.error("Please check your config file and try again.")
+            import sys
+
+            sys.exit(1)
 
     def get_field_value(self, field: Any, field_name: str) -> tuple[Any, str, bool]:
         """Get field value from TOML config."""
