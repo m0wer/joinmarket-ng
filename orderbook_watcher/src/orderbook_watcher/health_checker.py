@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from jmcore.crypto import NickIdentity
 from jmcore.network import connect_via_tor
 from jmcore.protocol import (
+    FEATURE_PEERLIST_FEATURES,
     JM_VERSION,
     FeatureSet,
     create_handshake_request,
@@ -182,12 +183,15 @@ class MakerHealthChecker:
             )
 
             # Perform handshake
+            # Request peerlist_features support to get maker's features from handshake
+
+            our_features = FeatureSet(features={FEATURE_PEERLIST_FEATURES})
             handshake_data = create_handshake_request(
                 nick=self.nick_identity.nick,
                 location="NOT-SERVING-ONION",
                 network=self.network,
                 directory=False,
-                neutrino_compat=False,  # We're just checking health, not doing CoinJoin
+                features=our_features,
             )
 
             handshake_msg = {

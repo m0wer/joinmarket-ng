@@ -956,9 +956,15 @@ class OrderbookAggregator:
                 health_status = self.health_checker.health_status.get(location)
                 if health_status:
                     offer.directly_reachable = health_status.reachable
-                    # Update features from handshake if available and not already set
-                    if health_status.features and not offer.features:
-                        offer.features = health_status.features.to_dict()
+                    # Merge features from handshake if available
+                    # Health check provides authoritative features from direct connection
+                    if health_status.features:
+                        # Merge health check features with existing features
+                        # Health check features take precedence (most recent/direct)
+                        health_features = health_status.features.to_dict()
+                        for feature, value in health_features.items():
+                            if value:  # Only merge true features
+                                offer.features[feature] = value
 
         return orderbook
 

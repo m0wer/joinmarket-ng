@@ -1092,6 +1092,23 @@ class DirectoryClient:
                                     self.peer_features[from_nick] = {}
                                     logger.debug(f"Discovered new peer: {from_nick}")
 
+                                    # If directory supports peerlist_features, request updated peerlist
+                                    # to get this peer's features immediately
+                                    if (
+                                        self.directory_peerlist_features
+                                        and self._peerlist_supported
+                                    ):
+                                        try:
+                                            # Request peerlist to get features for new peer
+                                            # This is a background task - don't block message processing
+                                            asyncio.create_task(
+                                                self._refresh_peerlist_for_new_peer()
+                                            )
+                                        except Exception as e:
+                                            logger.debug(
+                                                f"Failed to request peerlist for new peer: {e}"
+                                            )
+
                                     # Request orderbook from new peer (rate-limited)
                                     if (
                                         request_orderbook
@@ -1330,6 +1347,26 @@ class DirectoryClient:
             del self.bonds[bond_key]
 
         return removed
+
+    async def _refresh_peerlist_for_new_peer(self) -> None:
+        """
+        Refresh peerlist to get features for newly discovered peers.
+
+        This is called as a background task when a new peer is discovered
+        to immediately fetch their features from the directory's peerlist.
+        """
+        try:
+            # Small delay to batch multiple new peer discoveries
+            await asyncio.sleep(2.0)
+
+            # Request peerlist - this will update peer_features
+            peers = await self.get_peerlist_with_features()
+            if peers:
+                logger.debug(
+                    f"Refreshed peerlist for new peer discovery: {len(peers)} active peers"
+                )
+        except Exception as e:
+            logger.debug(f"Failed to refresh peerlist for new peer: {e}")
 
     def get_active_nicks(self) -> set[str]:
         """Get set of nicks from the last peerlist update."""
