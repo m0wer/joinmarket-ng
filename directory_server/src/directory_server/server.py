@@ -14,12 +14,31 @@ from jmcore.notifications import get_notifier
 from jmcore.protocol import MessageType
 from jmcore.rate_limiter import RateLimitAction, RateLimiter
 from jmcore.settings import DirectoryServerSettings
+from jmcore.version import __version__
 from loguru import logger
 
 from directory_server.handshake_handler import HandshakeError, HandshakeHandler
 from directory_server.health import HealthCheckServer
 from directory_server.message_router import MessageRouter
 from directory_server.peer_registry import PeerRegistry
+
+
+def build_motd(user_motd: str) -> str:
+    """
+    Build the MOTD string with version information.
+
+    If the user-provided MOTD doesn't contain version info, append it.
+    This ensures clients can see the JoinMarket NG version like:
+    "JOINMARKET VERSION: 0.9.0"
+    """
+    version_line = f"JOINMARKET VERSION: {__version__}"
+
+    # If user already included version info, use their MOTD as-is
+    if "VERSION" in user_motd.upper():
+        return user_motd
+
+    # Append version info to user's MOTD
+    return f"{user_motd}\n{version_line}"
 
 
 class DirectoryServer:
@@ -37,7 +56,9 @@ class DirectoryServer:
             on_send_failed=self._handle_send_failed,
         )
         self.handshake_handler = HandshakeHandler(
-            network=self.network, server_nick=f"directory-{network.value}", motd=settings.motd
+            network=self.network,
+            server_nick=f"directory-{network.value}",
+            motd=build_motd(settings.motd),
         )
         # Rate limit by connection ID to prevent nick spoofing attacks.
         # A malicious peer could claim another's nick and spam to get them rate limited.

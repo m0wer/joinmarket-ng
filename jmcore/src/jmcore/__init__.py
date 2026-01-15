@@ -4,8 +4,6 @@ jmcore - Core library for JoinMarket components
 Provides shared functionality for protocol, crypto, and networking.
 """
 
-__version__ = "2.2.0"
-
 # Bitcoin utilities - consolidated from multiple modules
 from jmcore.bitcoin import (
     ParsedTransaction,
@@ -152,8 +150,15 @@ from jmcore.tor_control import (
     TorControlError,
     TorHiddenServiceError,
 )
+from jmcore.version import VERSION, __version__, get_version, get_version_info, get_version_tuple
 
 __all__ = [
+    # Version
+    "VERSION",
+    "__version__",
+    "get_version",
+    "get_version_info",
+    "get_version_tuple",
     # Constants
     "BITCOIN_DUST_THRESHOLD",
     "DEFAULT_DUST_THRESHOLD",

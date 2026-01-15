@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "joinmarket-orderbook-watcher"
-version = "2.1.0"
+version = "0.9.0"
 description = "JoinMarket orderbook watcher and aggregator"
 readme = "README.md"
 requires-python = ">=3.11"
