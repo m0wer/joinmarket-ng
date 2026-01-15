@@ -52,9 +52,9 @@ Create an environment file:
 
 ```bash
 cat > ~/.joinmarket-ng/bitcoin.env << EOF
-export BITCOIN_RPC_URL=http://127.0.0.1:8332
-export BITCOIN_RPC_USER=your_rpc_user
-export BITCOIN_RPC_PASSWORD=your_rpc_password
+export BITCOIN__RPC_URL=http://127.0.0.1:8332
+export BITCOIN__RPC_USER=your_rpc_user
+export BITCOIN__RPC_PASSWORD=your_rpc_password
 EOF
 chmod 600 ~/.joinmarket-ng/bitcoin.env
 ```

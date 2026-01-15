@@ -325,7 +325,7 @@ Replace the `bitcoind` service with `neutrino` and update maker environment:
 ```yaml
 environment:
   - BACKEND_TYPE=neutrino
-  - NEUTRINO_URL=http://neutrino:8334
+  - BITCOIN__NEUTRINO_URL=http://neutrino:8334
 
 # Replace bitcoind service with:
 neutrino:
@@ -343,10 +343,10 @@ Edit the environment section in `docker-compose.yml`:
 ```yaml
 environment:
   # Relative fee (0.1% - default)
-  - CJ_FEE_RELATIVE=0.001
+  - MAKER__CJ_FEE_RELATIVE=0.001
   # OR absolute fee (uncomment one, not both)
-  # - CJ_FEE_ABSOLUTE=1000
-  - MIN_SIZE=100000
+  # - MAKER__CJ_FEE_ABSOLUTE=1000
+  - MAKER__MIN_SIZE=100000
 ```
 
 ### Viewing Logs
@@ -361,58 +361,59 @@ docker-compose logs -f maker
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MNEMONIC_FILE` | - | Path to encrypted mnemonic file (recommended) |
-| `MNEMONIC` | - | Direct mnemonic phrase (not recommended for production) |
+| `WALLET__MNEMONIC_FILE` | - | Path to encrypted mnemonic file (recommended) |
+| `WALLET__MNEMONIC` | - | Direct mnemonic phrase (not recommended for production) |
 
 ### Tor Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TOR_SOCKS_HOST` | `127.0.0.1` | Tor SOCKS proxy host |
-| `TOR_SOCKS_PORT` | `9050` | Tor SOCKS proxy port |
-| `TOR_CONTROL_HOST` | Auto-detect | Tor control host (auto-detects from `TOR_SOCKS_HOST` in Docker) |
-| `TOR_CONTROL_PORT` | `9051` | Tor control port |
-| `TOR_COOKIE_PATH` | Auto-detect | Path to Tor cookie auth file |
+| `TOR__SOCKS_HOST` | `127.0.0.1` | Tor SOCKS proxy host |
+| `TOR__SOCKS_PORT` | `9050` | Tor SOCKS proxy port |
+| `TOR__CONTROL_ENABLED` | Auto-detect | Enable Tor control port (auto-detected in Docker) |
+| `TOR__CONTROL_HOST` | `127.0.0.1` | Tor control host |
+| `TOR__CONTROL_PORT` | `9051` | Tor control port |
+| `TOR__COOKIE_PATH` | Auto-detect | Path to Tor cookie auth file |
 
 ### Backend Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BACKEND_TYPE` | `descriptor_wallet` | Backend type: `descriptor_wallet`, `full_node`, or `neutrino` |
-| `BITCOIN_RPC_URL` | `http://localhost:8332` | Bitcoin Core RPC URL (descriptor_wallet and full_node) |
-| `BITCOIN_RPC_USER` | - | Bitcoin Core RPC username (descriptor_wallet and full_node) |
-| `BITCOIN_RPC_PASSWORD` | - | Bitcoin Core RPC password (descriptor_wallet and full_node) |
-| `NEUTRINO_URL` | `http://localhost:8334` | Neutrino REST API URL (neutrino only) |
+| `BITCOIN__BACKEND_TYPE` | `descriptor_wallet` | Backend type: `descriptor_wallet`, `full_node`, or `neutrino` |
+| `BITCOIN__RPC_URL` | `http://localhost:8332` | Bitcoin Core RPC URL (descriptor_wallet and full_node) |
+| `BITCOIN__RPC_USER` | - | Bitcoin Core RPC username (descriptor_wallet and full_node) |
+| `BITCOIN__RPC_PASSWORD` | - | Bitcoin Core RPC password (descriptor_wallet and full_node) |
+| `BITCOIN__NEUTRINO_URL` | `http://localhost:8334` | Neutrino REST API URL (neutrino only) |
 
 ### Network Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NETWORK` | `mainnet` | Protocol network: `mainnet`, `testnet`, `signet`, `regtest` |
-| `BITCOIN_NETWORK` | `$NETWORK` | Bitcoin network for address generation (if different from protocol network) |
-| `DIRECTORY_SERVERS` | (network defaults) | Comma-separated list of directory servers (host:port) |
+| `NETWORK__NETWORK` | `mainnet` | Protocol network: `mainnet`, `testnet`, `signet`, `regtest` |
+| `NETWORK__BITCOIN_NETWORK` | `$NETWORK__NETWORK` | Bitcoin network for address generation (if different from protocol network) |
+| `NETWORK__DIRECTORY_SERVERS` | (network defaults) | JSON array of directory servers (e.g., `["host1:port1", "host2:port2"]`) |
 
 ### Fee Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MIN_SIZE` | `100000` | Minimum CoinJoin size in sats |
-| `CJ_FEE_RELATIVE` | `0.001` | Relative fee (0.001 = 0.1%) - auto-selects `sw0reloffer` type |
-| `CJ_FEE_ABSOLUTE` | - | Absolute fee in sats - auto-selects `sw0absoffer` type if set |
-| `TX_FEE_CONTRIBUTION` | `0` | Transaction fee contribution in sats |
+| `MAKER__MIN_SIZE` | `100000` | Minimum CoinJoin size in sats |
+| `MAKER__CJ_FEE_RELATIVE` | `0.001` | Relative fee (0.001 = 0.1%) - auto-selects `sw0reloffer` type |
+| `MAKER__CJ_FEE_ABSOLUTE` | - | Absolute fee in sats - auto-selects `sw0absoffer` type if set |
+| `MAKER__TX_FEE_CONTRIBUTION` | `0` | Transaction fee contribution in sats |
 
-> **Important:** Only set ONE of `CJ_FEE_RELATIVE` or `CJ_FEE_ABSOLUTE`. The offer type is automatically selected based on which you provide.
+> **Important:** Only set ONE of `MAKER__CJ_FEE_RELATIVE` or `MAKER__CJ_FEE_ABSOLUTE`. The offer type is automatically selected based on which you provide.
 
 ### Advanced Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `FIDELITY_BOND_LOCKTIMES` | Auto-discover | Comma-separated Unix timestamps for fidelity bond locktimes |
-| `MERGE_ALGORITHM` | `default` | UTXO selection: `default`, `gradual`, `greedy`, `random` |
-| `ONION_SERVING_HOST` | `127.0.0.1` | Bind address for incoming connections (set to `0.0.0.0` in Docker) |
-| `ONION_SERVING_PORT` | `5222` | Port for incoming .onion connections |
-| `TOR_TARGET_HOST` | `127.0.0.1` | Target hostname for Tor hidden service (set to service name in Docker Compose) |
-| `JOINMARKET_DATA_DIR` | `~/.joinmarket-ng` | Data directory for history and blacklist |
+| `MAKER__FIDELITY_BOND_LOCKTIMES` | Auto-discover | JSON array of Unix timestamps for fidelity bond locktimes (e.g., `["1893456000", "1924992000"]`) |
+| `MAKER__MERGE_ALGORITHM` | `default` | UTXO selection: `default`, `gradual`, `greedy`, `random` |
+| `NETWORK__ONION_SERVING_HOST` | `127.0.0.1` | Bind address for incoming connections (set to `0.0.0.0` in Docker) |
+| `NETWORK__ONION_SERVING_PORT` | `5222` | Port for incoming .onion connections |
+| `NETWORK__TOR_TARGET_HOST` | `127.0.0.1` | Target hostname for Tor hidden service (set to service name in Docker Compose) |
+| `WALLET__JOINMARKET_DATA_DIR` | `~/.joinmarket-ng` | Data directory for history and blacklist |
 
 ## CLI Reference
 

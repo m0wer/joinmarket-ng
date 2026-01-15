@@ -253,7 +253,7 @@ counterparty_count = 3   # Number of makers per CoinJoin
 
 Settings are loaded in this order (highest priority first):
 1. CLI arguments (e.g., `--backend neutrino`)
-2. Environment variables (e.g., `BITCOIN_RPC_URL`)
+2. Environment variables (e.g., `BITCOIN__RPC_URL`)
 3. Config file (`~/.joinmarket-ng/config.toml`)
 4. Default values
 

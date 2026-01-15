@@ -78,13 +78,13 @@ pip install -r requirements.txt
 
 3. Set environment variables:
 ```bash
-export NETWORK=mainnet
-export DIRECTORY_NODES=node1.onion:5222,node2.onion:5222
-export TOR_SOCKS_HOST=127.0.0.1
-export TOR_SOCKS_PORT=9050
-export MEMPOOL_API_URL=https://mempool.sgn.space/api
-export HTTP_HOST=0.0.0.0
-export HTTP_PORT=8000
+export NETWORK__NETWORK=mainnet
+export NETWORK__DIRECTORY_SERVERS='["node1.onion:5222", "node2.onion:5222"]'
+export TOR__SOCKS_HOST=127.0.0.1
+export TOR__SOCKS_PORT=9050
+export ORDERBOOK_WATCHER__MEMPOOL_API_URL=https://mempool.sgn.space/api
+export ORDERBOOK_WATCHER__HTTP_HOST=0.0.0.0
+export ORDERBOOK_WATCHER__HTTP_PORT=8000
 ```
 
 4. Run the watcher:
@@ -94,23 +94,23 @@ python -m orderbook_watcher.main
 
 ## Configuration
 
-All configuration is done via environment variables:
+All configuration is done via environment variables or config file (`~/.joinmarket-ng/config.toml`):
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `NETWORK` | Bitcoin network (mainnet/testnet/signet/regtest) | mainnet |
-| `DIRECTORY_NODES` | Comma-separated list of directory nodes (host:port) | (required) |
-| `TOR_SOCKS_HOST` | Tor SOCKS proxy host | 127.0.0.1 |
-| `TOR_SOCKS_PORT` | Tor SOCKS proxy port | 9050 |
-| `MEMPOOL_API_URL` | Mempool.space API base URL | http://mempopwcaqoi7z5xj5zplfdwk5bgzyl3hemx725d4a3agado6xtk3kqd.onion/api |
-| `MEMPOOL_WEB_URL` | Base URL for transaction links (optional) | https://mempool.sgn.space |
-| `MEMPOOL_WEB_ONION_URL` | Onion base URL for transaction links (optional) | http://mempopwcaqoi7z5xj5zplfdwk5bgzyl3hemx725d4a3agado6xtk3kqd.onion |
-| `HTTP_HOST` | HTTP server bind address | 0.0.0.0 |
-| `HTTP_PORT` | HTTP server port | 8000 |
-| `UPDATE_INTERVAL` | Orderbook update interval in seconds | 60 |
-| `LOG_LEVEL` | Logging level (DEBUG/INFO/WARNING/ERROR) | INFO |
-| `MAX_MESSAGE_SIZE` | Maximum message size in bytes | 2097152 |
-| `CONNECTION_TIMEOUT` | Connection timeout in seconds | 30.0 |
+| `NETWORK__NETWORK` | Bitcoin network (mainnet/testnet/signet/regtest) | mainnet |
+| `NETWORK__DIRECTORY_SERVERS` | JSON array of directory servers (e.g., `["host1:port1", "host2:port2"]`) | (required) |
+| `TOR__SOCKS_HOST` | Tor SOCKS proxy host | 127.0.0.1 |
+| `TOR__SOCKS_PORT` | Tor SOCKS proxy port | 9050 |
+| `ORDERBOOK_WATCHER__MEMPOOL_API_URL` | Mempool.space API base URL | http://mempopwcaqoi7z5xj5zplfdwk5bgzyl3hemx725d4a3agado6xtk3kqd.onion/api |
+| `ORDERBOOK_WATCHER__MEMPOOL_WEB_URL` | Base URL for transaction links (optional) | https://mempool.sgn.space |
+| `ORDERBOOK_WATCHER__MEMPOOL_WEB_ONION_URL` | Onion base URL for transaction links (optional) | http://mempopwcaqoi7z5xj5zplfdwk5bgzyl3hemx725d4a3agado6xtk3kqd.onion |
+| `ORDERBOOK_WATCHER__HTTP_HOST` | HTTP server bind address | 0.0.0.0 |
+| `ORDERBOOK_WATCHER__HTTP_PORT` | HTTP server port | 8000 |
+| `ORDERBOOK_WATCHER__UPDATE_INTERVAL` | Orderbook update interval in seconds | 60 |
+| `LOGGING__LOG_LEVEL` | Logging level (DEBUG/INFO/WARNING/ERROR) | INFO |
+| `NETWORK__MAX_MESSAGE_SIZE` | Maximum message size in bytes | 2097152 |
+| `NETWORK__CONNECTION_TIMEOUT` | Connection timeout in seconds | 30.0 |
 
 ## Exposing as a Tor Hidden Service
 

@@ -313,8 +313,8 @@ Replace the `bitcoind` service with `neutrino` and update taker environment:
 
 ```yaml
 environment:
-  - BACKEND_TYPE=neutrino
-  - NEUTRINO_URL=http://neutrino:8334
+  - BITCOIN__BACKEND_TYPE=neutrino
+  - BITCOIN__NEUTRINO_URL=http://neutrino:8334
 
 # Replace bitcoind service with:
 neutrino:
@@ -337,26 +337,26 @@ Note: Takers only need Tor SOCKS proxy (port 9050) - they don't serve a hidden s
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MNEMONIC_FILE` | - | Path to mnemonic file (recommended) |
-| `MNEMONIC` | - | Direct mnemonic phrase (not recommended for production) |
-| `BACKEND_TYPE` | `descriptor_wallet` | Backend: `descriptor_wallet`, `full_node`, or `neutrino` |
-| `NETWORK` | `mainnet` | Protocol network for handshakes |
-| `BITCOIN_NETWORK` | `$NETWORK` | Bitcoin network for address generation |
-| `BITCOIN_RPC_URL` | `http://localhost:8332` | Bitcoin Core RPC URL (descriptor_wallet and full_node) |
-| `BITCOIN_RPC_USER` | - | Bitcoin Core RPC username (descriptor_wallet and full_node) |
-| `BITCOIN_RPC_PASSWORD` | - | Bitcoin Core RPC password (descriptor_wallet and full_node) |
-| `NEUTRINO_URL` | `http://localhost:8334` | Neutrino REST API URL (neutrino only) |
-| `DIRECTORY_SERVERS` | (mainnet defaults) | Comma-separated list of directory servers |
-| `COINJOIN_AMOUNT` | `1000000` | Default CoinJoin amount in sats |
-| `MIN_MAKERS` | `4` | Minimum number of makers |
-| `MAX_CJ_FEE_REL` | `0.001` | Maximum relative fee (0.1%) |
-| `MAX_CJ_FEE_ABS` | `5000` | Maximum absolute fee in sats |
-| `BONDLESS_MAKERS_ALLOWANCE` | `0.125` | Fraction of time to choose makers randomly (0.0-1.0) |
-| `BOND_VALUE_EXPONENT` | `1.3` | Exponent for fidelity bond value calculation |
-| `BONDLESS_REQUIRE_ZERO_FEE` | `true` | Require zero absolute fee for bondless maker spots |
-| `TOR_SOCKS_HOST` | `127.0.0.1` | Tor SOCKS proxy host |
-| `TOR_SOCKS_PORT` | `9050` | Tor SOCKS proxy port |
-| `SENSITIVE_LOGGING` | - | Enable sensitive logging (set to `1` or `true`) |
+| `WALLET__MNEMONIC_FILE` | - | Path to mnemonic file (recommended) |
+| `WALLET__MNEMONIC` | - | Direct mnemonic phrase (not recommended for production) |
+| `BITCOIN__BACKEND_TYPE` | `descriptor_wallet` | Backend: `descriptor_wallet`, `full_node`, or `neutrino` |
+| `NETWORK__NETWORK` | `mainnet` | Protocol network for handshakes |
+| `NETWORK__BITCOIN_NETWORK` | `$NETWORK__NETWORK` | Bitcoin network for address generation |
+| `BITCOIN__RPC_URL` | `http://localhost:8332` | Bitcoin Core RPC URL (descriptor_wallet and full_node) |
+| `BITCOIN__RPC_USER` | - | Bitcoin Core RPC username (descriptor_wallet and full_node) |
+| `BITCOIN__RPC_PASSWORD` | - | Bitcoin Core RPC password (descriptor_wallet and full_node) |
+| `BITCOIN__NEUTRINO_URL` | `http://localhost:8334` | Neutrino REST API URL (neutrino only) |
+| `NETWORK__DIRECTORY_SERVERS` | (mainnet defaults) | JSON array of directory servers (e.g., `["host1:port1", "host2:port2"]`) |
+| `TAKER__COINJOIN_AMOUNT` | `1000000` | Default CoinJoin amount in sats |
+| `TAKER__MIN_MAKERS` | `4` | Minimum number of makers |
+| `TAKER__MAX_CJ_FEE_REL` | `0.001` | Maximum relative fee (0.1%) |
+| `TAKER__MAX_CJ_FEE_ABS` | `5000` | Maximum absolute fee in sats |
+| `TAKER__BONDLESS_MAKERS_ALLOWANCE` | `0.125` | Fraction of time to choose makers randomly (0.0-1.0) |
+| `TAKER__BOND_VALUE_EXPONENT` | `1.3` | Exponent for fidelity bond value calculation |
+| `TAKER__BONDLESS_REQUIRE_ZERO_FEE` | `true` | Require zero absolute fee for bondless maker spots |
+| `TOR__SOCKS_HOST` | `127.0.0.1` | Tor SOCKS proxy host |
+| `TOR__SOCKS_PORT` | `9050` | Tor SOCKS proxy port |
+| `LOGGING__SENSITIVE_LOGGING` | `false` | Enable sensitive logging (set to `true`) |
 
 ## CLI Reference
 
