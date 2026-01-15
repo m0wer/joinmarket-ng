@@ -25,6 +25,7 @@ from jmcore.settings import (
 )
 from jmwallet.wallet.service import WalletService
 from loguru import logger
+from pydantic import SecretStr
 
 from maker.bot import MakerBot
 from maker.config import MakerConfig, MergeAlgorithm
@@ -140,27 +141,23 @@ def build_maker_config(
     else:
         # tor_control host defaults to tor.socks_host
         effective_control_host = (
-            tor_control_host if tor_control_host is not None else effective_socks_host
+            tor_control_host if tor_control_host is not None else settings.tor.control_host
         )
         effective_control_port = (
-            tor_control_port if tor_control_port is not None else settings.tor_control.port
+            tor_control_port if tor_control_port is not None else settings.tor.control_port
         )
         effective_cookie_path = None
         if tor_cookie_path is not None:
             effective_cookie_path = tor_cookie_path
-        elif settings.tor_control.cookie_path:
-            effective_cookie_path = Path(settings.tor_control.cookie_path)
+        elif settings.tor.cookie_path:
+            effective_cookie_path = Path(settings.tor.cookie_path)
 
         tor_control_cfg = TorControlConfig(
-            enabled=settings.tor_control.enabled,
+            enabled=settings.tor.control_enabled,
             host=effective_control_host,
             port=effective_control_port,
             cookie_path=effective_cookie_path,
-            password=(
-                settings.tor_control.password.get_secret_value()
-                if settings.tor_control.password
-                else None
-            ),
+            password=settings.tor.password if settings.tor.password else None,
         )
 
     # Resolve maker-specific settings
@@ -171,7 +168,7 @@ def build_maker_config(
         onion_serving_port if onion_serving_port is not None else settings.maker.onion_serving_port
     )
     effective_target_host = (
-        tor_target_host if tor_target_host is not None else settings.maker.tor_target_host
+        tor_target_host if tor_target_host is not None else settings.tor.target_host
     )
     effective_min_size = min_size if min_size is not None else settings.maker.min_size
     effective_tx_fee = (
@@ -228,8 +225,8 @@ def build_maker_config(
         )
 
     return MakerConfig(
-        mnemonic=mnemonic,
-        passphrase=passphrase,
+        mnemonic=SecretStr(mnemonic),
+        passphrase=SecretStr(passphrase),
         network=effective_network,
         bitcoin_network=effective_bitcoin_network,
         data_dir=effective_data_dir,
@@ -415,26 +412,24 @@ def start(
         ),
     ] = None,
     tor_socks_host: Annotated[
-        str | None, typer.Option(envvar="TOR_SOCKS_HOST", help="Tor SOCKS proxy host")
+        str | None, typer.Option(help="Tor SOCKS proxy host (overrides TOR__SOCKS_HOST)")
     ] = None,
     tor_socks_port: Annotated[
-        int | None, typer.Option(envvar="TOR_SOCKS_PORT", help="Tor SOCKS proxy port")
+        int | None, typer.Option(help="Tor SOCKS proxy port (overrides TOR__SOCKS_PORT)")
     ] = None,
     tor_control_host: Annotated[
         str | None,
         typer.Option(
-            envvar="TOR_CONTROL_HOST",
-            help="Tor control port host",
+            help="Tor control port host (overrides TOR__CONTROL_HOST)",
         ),
     ] = None,
     tor_control_port: Annotated[
-        int | None, typer.Option(envvar="TOR_CONTROL_PORT", help="Tor control port")
+        int | None, typer.Option(help="Tor control port (overrides TOR__CONTROL_PORT)")
     ] = None,
     tor_cookie_path: Annotated[
         Path | None,
         typer.Option(
-            envvar="TOR_COOKIE_PATH",
-            help="Path to Tor cookie auth file",
+            help="Path to Tor cookie auth file (overrides TOR__COOKIE_PATH)",
         ),
     ] = None,
     disable_tor_control: Annotated[
@@ -447,22 +442,19 @@ def start(
     onion_serving_host: Annotated[
         str | None,
         typer.Option(
-            envvar="ONION_SERVING_HOST",
-            help="Bind address for incoming connections",
+            help="Bind address for incoming connections (overrides MAKER__ONION_SERVING_HOST)",
         ),
     ] = None,
     onion_serving_port: Annotated[
         int | None,
         typer.Option(
-            envvar="ONION_SERVING_PORT",
-            help="Port for incoming .onion connections",
+            help="Port for incoming .onion connections (overrides MAKER__ONION_SERVING_PORT)",
         ),
     ] = None,
     tor_target_host: Annotated[
         str | None,
         typer.Option(
-            envvar="TOR_TARGET_HOST",
-            help="Target hostname for Tor hidden service",
+            help="Target hostname for Tor hidden service (overrides TOR__TARGET_HOST)",
         ),
     ] = None,
     fidelity_bond_locktimes: Annotated[

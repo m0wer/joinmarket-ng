@@ -515,7 +515,11 @@ async def _show_wallet_info(
     from jmwallet.backends.bitcoin_core import BitcoinCoreBackend
     from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
     from jmwallet.backends.neutrino import NeutrinoBackend
-    from jmwallet.history import get_address_history_types, get_used_addresses
+    from jmwallet.history import (
+        get_address_history_types,
+        get_used_addresses,
+        update_all_pending_transactions,
+    )
     from jmwallet.wallet.service import WalletService
 
     network = backend_settings.network
@@ -612,6 +616,10 @@ async def _show_wallet_info(
         else:
             # Use standard sync (scantxoutset for full_node, BIP157/158 for neutrino)
             await wallet.sync_all(fidelity_bond_addresses or None)
+
+        # Update any pending transaction statuses
+        # This safeguards against one-shot coinjoins that exited before confirmation
+        await update_all_pending_transactions(backend, data_dir)
 
         from jmcore.bitcoin import format_amount
 

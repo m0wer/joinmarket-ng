@@ -331,10 +331,10 @@ def coinjoin(
         ),
     ] = None,
     tor_socks_host: Annotated[
-        str | None, typer.Option(envvar="TOR_SOCKS_HOST", help="Tor SOCKS proxy host")
+        str | None, typer.Option(help="Tor SOCKS proxy host (overrides TOR__SOCKS_HOST)")
     ] = None,
     tor_socks_port: Annotated[
-        int | None, typer.Option(envvar="TOR_SOCKS_PORT", help="Tor SOCKS proxy port")
+        int | None, typer.Option(help="Tor SOCKS proxy port (overrides TOR__SOCKS_PORT)")
     ] = None,
     max_abs_fee: Annotated[
         int | None, typer.Option("--max-abs-fee", help="Max absolute fee in sats")
@@ -643,10 +643,10 @@ def tumble(
         ),
     ] = None,
     tor_socks_host: Annotated[
-        str | None, typer.Option(envvar="TOR_SOCKS_HOST", help="Tor SOCKS proxy host")
+        str | None, typer.Option(help="Tor SOCKS proxy host (overrides TOR__SOCKS_HOST)")
     ] = None,
     tor_socks_port: Annotated[
-        int | None, typer.Option(envvar="TOR_SOCKS_PORT", help="Tor SOCKS proxy port")
+        int | None, typer.Option(help="Tor SOCKS proxy port (overrides TOR__SOCKS_PORT)")
     ] = None,
     log_level: Annotated[str, typer.Option("--log-level", "-l", help="Log level")] = "INFO",
 ) -> None:

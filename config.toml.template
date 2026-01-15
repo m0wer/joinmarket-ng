@@ -14,15 +14,17 @@
 # ============================================================================
 
 # [tor]
+# SOCKS proxy settings
 # socks_host = "127.0.0.1"
 # socks_port = 9050
 
-# [tor_control]
-# enabled = true
-# port = 9051
+# Control port settings (for hidden services)
+# control_enabled = true
+# control_host = "127.0.0.1"  # Defaults to socks_host if not set
+# control_port = 9051
 # cookie_path = "/var/run/tor/control.authcookie"  # Auto-detected if not set
 # password = ""  # Use cookie auth by default
-# Note: Control host defaults to same as tor.socks_host
+# target_host = "127.0.0.1"  # Target host for hidden service mapping
 
 # ============================================================================
 # Bitcoin Backend Settings

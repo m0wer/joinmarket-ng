@@ -81,6 +81,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Environment Variable Naming Standardization**: Standardized environment variable naming to use double underscore (`__`) for nested settings, following pydantic-settings convention.
+  - Old format: `TOR_SOCKS_HOST`, `NOTIFY_URLS`
+  - New format: `TOR__SOCKS_HOST`, `NOTIFICATIONS__URLS`
+  - Consolidated `TorSettings` and `TorControlSettings` into a single `TorSettings` model
+  - Tor control settings now use `TOR__CONTROL_ENABLED`, `TOR__CONTROL_HOST`, `TOR__CONTROL_PORT`, `TOR__COOKIE_PATH`
+  - Updated all Docker Compose files to use the new format
+  - Config template no longer shows separate `[tor_control]` section (now part of `[tor]`)
 - **Installation path**: Virtual environment now lives at `~/.joinmarket-ng/venv/` (was `jmvenv/` in repo)
 - **Documentation**: Updated all READMEs to use config file approach instead of .env files
 - **Directory connections now parallel**: Taker and orderbook watcher connect to all directory servers concurrently instead of sequentially.

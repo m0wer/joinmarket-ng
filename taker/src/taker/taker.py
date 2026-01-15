@@ -1139,6 +1139,76 @@ class Taker:
                     f"{age_hours:.1f} hours (may be in mempool, waiting for confirmation)"
                 )
 
+    async def _update_pending_transaction_now(
+        self, txid: str, destination_address: str | None = None
+    ) -> None:
+        """
+        Immediately check and update a pending transaction's status.
+
+        This is called right after recording a new transaction in history to check
+        if it's already visible in mempool (for full nodes) or confirmed (for Neutrino).
+        This is important for one-shot coinjoin CLI calls that exit immediately after
+        broadcast without waiting for the background monitor.
+
+        Args:
+            txid: Transaction ID to check
+            destination_address: Optional destination address (needed for Neutrino)
+        """
+        try:
+            has_mempool = self.backend.has_mempool_access()
+
+            if has_mempool:
+                # Full node: can check mempool directly
+                tx_info = await self.backend.get_transaction(txid)
+                if tx_info is not None:
+                    confirmations = tx_info.confirmations
+                    if confirmations >= 0:
+                        # Transaction is in mempool (0 confs) or confirmed (>0 confs)
+                        # Mark as success even with 0 confs (mempool visible)
+                        update_transaction_confirmation(
+                            txid=txid,
+                            confirmations=max(confirmations, 1),
+                            data_dir=self.config.data_dir,
+                        )
+                        if confirmations > 0:
+                            logger.info(
+                                f"CoinJoin {txid[:16]}... already confirmed "
+                                f"({confirmations} confirmation{'s' if confirmations != 1 else ''})"
+                            )
+                        else:
+                            logger.info(f"CoinJoin {txid[:16]}... visible in mempool")
+            else:
+                # Neutrino: can only check confirmed blocks, not mempool
+                # For Neutrino, we need to wait for block confirmation
+                # This will be handled by the background monitor on next startup
+                if destination_address:
+                    try:
+                        current_height = await self.backend.get_block_height()
+                    except Exception:
+                        current_height = None
+
+                    verified = await self.backend.verify_tx_output(
+                        txid=txid,
+                        vout=0,  # CJ outputs are typically first
+                        address=destination_address,
+                        start_height=current_height,
+                    )
+
+                    if verified:
+                        update_transaction_confirmation(
+                            txid=txid,
+                            confirmations=1,
+                            data_dir=self.config.data_dir,
+                        )
+                        logger.info(f"CoinJoin {txid[:16]}... confirmed via Neutrino block filters")
+                    else:
+                        logger.debug(
+                            f"CoinJoin {txid[:16]}... not yet confirmed "
+                            "(may be in mempool, Neutrino will verify on next block)"
+                        )
+        except Exception as e:
+            logger.debug(f"Could not update transaction status immediately: {e}")
+
     async def _periodic_rescan(self) -> None:
         """Background task to periodically rescan wallet.
 
@@ -2065,6 +2135,10 @@ class Taker:
                     f"Recorded CoinJoin in history: {len(maker_nicks)} makers, "
                     f"fees={total_maker_fees + mining_fee} sats"
                 )
+
+                # Immediately check if tx is confirmed/in mempool and update history
+                # This is important for one-shot coinjoin CLI calls that exit immediately
+                await self._update_pending_transaction_now(self.txid, self.cj_destination)
             except Exception as e:
                 logger.warning(f"Failed to record CoinJoin history: {e}")
 

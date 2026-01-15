@@ -50,7 +50,6 @@ class TestConfigTemplate:
 
         # Check sections exist
         assert "[tor]" in template
-        assert "[tor_control]" in template
         assert "[bitcoin]" in template
         assert "[network_config]" in template
         assert "[wallet]" in template

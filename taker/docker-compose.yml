@@ -6,18 +6,18 @@ services:
     container_name: joinmarket_taker
     environment:
       - MNEMONIC_FILE=/home/jm/.joinmarket-ng/wallets/taker.mnemonic
-      - BACKEND_TYPE=descriptor_wallet
-      - BITCOIN_RPC_URL=http://bitcoind:8332
-      - BITCOIN_RPC_USER=rpcuser
-      - BITCOIN_RPC_PASSWORD=rpcpassword
-      - NETWORK=mainnet
-      - TOR_SOCKS_HOST=tor
-      - TOR_SOCKS_PORT=9050
+      - BITCOIN__BACKEND_TYPE=descriptor_wallet
+      - BITCOIN__RPC_URL=http://bitcoind:8332
+      - BITCOIN__RPC_USER=rpcuser
+      - BITCOIN__RPC_PASSWORD=rpcpassword
+      - NETWORK_CONFIG__NETWORK=mainnet
+      - TOR__SOCKS_HOST=tor
+      - TOR__SOCKS_PORT=9050
       # CoinJoin configuration
       - COINJOIN_AMOUNT=1000000
-      - MIN_MAKERS=4
-      - MAX_CJ_FEE_REL=0.001
-      - MAX_CJ_FEE_ABS=5000
+      - TAKER__MINIMUM_MAKERS=4
+      - TAKER__MAX_CJ_FEE_REL=0.001
+      - TAKER__MAX_CJ_FEE_ABS=5000
     volumes:
       - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
     networks:

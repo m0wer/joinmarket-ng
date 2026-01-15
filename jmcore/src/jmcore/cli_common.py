@@ -244,16 +244,16 @@ def resolve_tor_settings(
     resolved_socks_port = socks_port if socks_port is not None else settings.tor.socks_port
 
     # Control port settings
-    control_enabled = not disable_control and settings.tor_control.enabled
+    control_enabled = not disable_control and settings.tor.control_enabled
 
-    resolved_control_host = control_host if control_host is not None else "127.0.0.1"
-    resolved_control_port = control_port if control_port is not None else settings.tor_control.port
+    resolved_control_host = control_host if control_host is not None else settings.tor.control_host
+    resolved_control_port = control_port if control_port is not None else settings.tor.control_port
 
     resolved_cookie_path: Path | None = None
     if cookie_path is not None:
         resolved_cookie_path = cookie_path
-    elif settings.tor_control.cookie_path:
-        resolved_cookie_path = Path(settings.tor_control.cookie_path)
+    elif settings.tor.cookie_path:
+        resolved_cookie_path = Path(settings.tor.cookie_path)
 
     return ResolvedTorSettings(
         socks_host=resolved_socks_host,
