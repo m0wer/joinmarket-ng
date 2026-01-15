@@ -1228,3 +1228,208 @@ async def test_blacklist_rejection_doesnt_ignore_maker(
 
     # Now maker should be ignored for non-blacklist failures
     assert maker_nick in taker.orderbook_manager.ignored_makers
+
+
+class TestUpdatePendingTransactionNow:
+    """Tests for immediate pending transaction update on coinjoin completion."""
+
+    @pytest.fixture
+    def temp_data_dir(self, tmp_path):
+        """Create a temporary data directory."""
+        return tmp_path
+
+    @pytest.fixture
+    def taker_with_backend(self, mock_wallet, mock_backend, mock_config, temp_data_dir):
+        """Create a taker with a mock backend and temp data dir."""
+        mock_config.data_dir = temp_data_dir
+        mock_backend.has_mempool_access = Mock(return_value=True)
+        return Taker(mock_wallet, mock_backend, mock_config)
+
+    @pytest.mark.asyncio
+    async def test_update_pending_tx_with_mempool_access(self, taker_with_backend, temp_data_dir):
+        """Test that pending transaction is updated when mempool access is available."""
+        from jmwallet.backends.base import Transaction
+        from jmwallet.history import (
+            append_history_entry,
+            create_taker_history_entry,
+            get_pending_transactions,
+            read_history,
+        )
+
+        taker = taker_with_backend
+        txid = "a" * 64
+        destination = "bcrt1qdest"
+
+        # Create and append a pending history entry
+        entry = create_taker_history_entry(
+            maker_nicks=["J5TestMaker"],
+            cj_amount=100000,
+            total_maker_fees=250,
+            mining_fee=500,
+            destination=destination,
+            source_mixdepth=0,
+            selected_utxos=[("b" * 64, 0)],
+            txid=txid,
+        )
+        append_history_entry(entry, data_dir=temp_data_dir)
+
+        # Verify it's pending
+        pending = get_pending_transactions(data_dir=temp_data_dir)
+        assert len(pending) == 1
+        assert pending[0].txid == txid
+
+        # Mock backend to return transaction in mempool (0 confirmations)
+        taker.backend.get_transaction = AsyncMock(
+            return_value=Transaction(
+                txid=txid,
+                raw="",
+                confirmations=0,
+            )
+        )
+
+        # Call the update method
+        await taker._update_pending_transaction_now(txid, destination)
+
+        # Verify transaction is no longer pending
+        pending = get_pending_transactions(data_dir=temp_data_dir)
+        assert len(pending) == 0
+
+        # Verify history shows it as confirmed
+        history = read_history(data_dir=temp_data_dir)
+        assert len(history) == 1
+        assert history[0].success is True
+        assert history[0].confirmations >= 1
+
+    @pytest.mark.asyncio
+    async def test_update_pending_tx_with_confirmations(self, taker_with_backend, temp_data_dir):
+        """Test that confirmation count is properly recorded."""
+        from jmwallet.backends.base import Transaction
+        from jmwallet.history import (
+            append_history_entry,
+            create_taker_history_entry,
+            read_history,
+        )
+
+        taker = taker_with_backend
+        txid = "c" * 64
+        destination = "bcrt1qdest2"
+
+        # Create and append a pending history entry
+        entry = create_taker_history_entry(
+            maker_nicks=["J5TestMaker"],
+            cj_amount=200000,
+            total_maker_fees=500,
+            mining_fee=1000,
+            destination=destination,
+            source_mixdepth=1,
+            selected_utxos=[("d" * 64, 1)],
+            txid=txid,
+        )
+        append_history_entry(entry, data_dir=temp_data_dir)
+
+        # Mock backend to return transaction with 3 confirmations
+        taker.backend.get_transaction = AsyncMock(
+            return_value=Transaction(
+                txid=txid,
+                raw="",
+                confirmations=3,
+            )
+        )
+
+        # Call the update method
+        await taker._update_pending_transaction_now(txid, destination)
+
+        # Verify history shows correct confirmation count
+        history = read_history(data_dir=temp_data_dir)
+        assert len(history) == 1
+        assert history[0].confirmations == 3
+        assert history[0].success is True
+
+    @pytest.mark.asyncio
+    async def test_update_pending_tx_without_mempool_access(
+        self, mock_wallet, mock_backend, mock_config, temp_data_dir
+    ):
+        """Test behavior when backend has no mempool access (Neutrino)."""
+        from jmwallet.history import (
+            append_history_entry,
+            create_taker_history_entry,
+            get_pending_transactions,
+        )
+
+        mock_config.data_dir = temp_data_dir
+        mock_backend.has_mempool_access = Mock(return_value=False)
+        mock_backend.get_block_height = AsyncMock(return_value=100)
+        # Simulate unconfirmed transaction (verify_tx_output returns False)
+        mock_backend.verify_tx_output = AsyncMock(return_value=False)
+
+        taker = Taker(mock_wallet, mock_backend, mock_config)
+        txid = "e" * 64
+        destination = "bcrt1qdest3"
+
+        # Create and append a pending history entry
+        entry = create_taker_history_entry(
+            maker_nicks=["J5TestMaker"],
+            cj_amount=50000,
+            total_maker_fees=100,
+            mining_fee=200,
+            destination=destination,
+            source_mixdepth=0,
+            selected_utxos=[("f" * 64, 0)],
+            txid=txid,
+        )
+        append_history_entry(entry, data_dir=temp_data_dir)
+
+        # Call the update method - should not update since not confirmed
+        await taker._update_pending_transaction_now(txid, destination)
+
+        # Transaction should still be pending (Neutrino can't see mempool)
+        pending = get_pending_transactions(data_dir=temp_data_dir)
+        assert len(pending) == 1
+
+    @pytest.mark.asyncio
+    async def test_update_pending_tx_neutrino_confirmed(
+        self, mock_wallet, mock_backend, mock_config, temp_data_dir
+    ):
+        """Test Neutrino backend with confirmed transaction."""
+        from jmwallet.history import (
+            append_history_entry,
+            create_taker_history_entry,
+            get_pending_transactions,
+            read_history,
+        )
+
+        mock_config.data_dir = temp_data_dir
+        mock_backend.has_mempool_access = Mock(return_value=False)
+        mock_backend.get_block_height = AsyncMock(return_value=100)
+        # Simulate confirmed transaction (verify_tx_output returns True)
+        mock_backend.verify_tx_output = AsyncMock(return_value=True)
+
+        taker = Taker(mock_wallet, mock_backend, mock_config)
+        txid = "g" * 64
+        destination = "bcrt1qdest4"
+
+        # Create and append a pending history entry
+        entry = create_taker_history_entry(
+            maker_nicks=["J5TestMaker"],
+            cj_amount=75000,
+            total_maker_fees=150,
+            mining_fee=300,
+            destination=destination,
+            source_mixdepth=2,
+            selected_utxos=[("h" * 64, 0)],
+            txid=txid,
+        )
+        append_history_entry(entry, data_dir=temp_data_dir)
+
+        # Call the update method
+        await taker._update_pending_transaction_now(txid, destination)
+
+        # Verify transaction is no longer pending
+        pending = get_pending_transactions(data_dir=temp_data_dir)
+        assert len(pending) == 0
+
+        # Verify history shows it as confirmed
+        history = read_history(data_dir=temp_data_dir)
+        assert len(history) == 1
+        assert history[0].success is True
+        assert history[0].confirmations == 1

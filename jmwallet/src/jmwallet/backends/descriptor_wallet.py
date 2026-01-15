@@ -953,6 +953,34 @@ class DescriptorWalletBackend(BlockchainBackend):
                 ) from e
             raise
 
+    async def get_addresses_with_history(self) -> set[str]:
+        """
+        Get all addresses that have ever received transactions.
+
+        Uses listtransactions to find all addresses that have had any activity,
+        including addresses that have been fully spent and now have zero balance.
+        This is important for tracking address usage to prevent reuse.
+
+        Returns:
+            Set of addresses that have ever received funds
+        """
+        addresses: set[str] = set()
+        try:
+            # listtransactions params: label, count, skip, include_watchonly
+            # Get a large number of transactions (up to 10000)
+            txs = await self._rpc_call("listtransactions", ["*", 10000, 0, True])
+
+            for tx in txs:
+                # Each transaction entry has an 'address' field for the receiving address
+                if "address" in tx and tx.get("category") in ("receive", "send", "generate"):
+                    addresses.add(tx["address"])
+
+            logger.debug(f"Found {len(addresses)} addresses with transaction history")
+            return addresses
+        except Exception as e:
+            logger.warning(f"Failed to get addresses with history: {e}")
+            return addresses
+
     async def unload_wallet(self) -> None:
         """Unload the wallet from Bitcoin Core."""
         if self._wallet_loaded:
