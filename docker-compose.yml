@@ -317,8 +317,8 @@ services:
       - TAKER__MAX_CJ_FEE_REL=0.01
       - TAKER__MAX_CJ_FEE_ABS=100000
       # Tor configuration for direct connections to makers
-      - TOR_SOCKS_HOST=jm-tor
-      - TOR_SOCKS_PORT=9050
+      - TOR__SOCKS_HOST=jm-tor
+      - TOR__SOCKS_PORT=9050
     volumes:
       - taker-reference-data:/home/jm/.joinmarket-ng
     networks:
@@ -404,8 +404,8 @@ services:
       # Tor configuration for direct connections
       - TOR__SOCKS_HOST=jm-tor
       - TOR__SOCKS_PORT=9050
-      - TOR_CONTROL_HOST=jm-tor
-      - TOR_CONTROL_PORT=9051
+      - TOR__CONTROL_HOST=jm-tor
+      - TOR__CONTROL_PORT=9051
       - MAKER__ONION_SERVING_HOST=0.0.0.0
       - MAKER__ONION_SERVING_PORT=5000
     volumes:
@@ -459,8 +459,8 @@ services:
       # Tor configuration for direct connections
       - TOR__SOCKS_HOST=jm-tor
       - TOR__SOCKS_PORT=9050
-      - TOR_CONTROL_HOST=jm-tor
-      - TOR_CONTROL_PORT=9051
+      - TOR__CONTROL_HOST=jm-tor
+      - TOR__CONTROL_PORT=9051
       - MAKER__ONION_SERVING_HOST=0.0.0.0
       - MAKER__ONION_SERVING_PORT=5000
     volumes:
@@ -517,8 +517,8 @@ services:
       # Tor configuration for direct connections
       - TOR__SOCKS_HOST=jm-tor
       - TOR__SOCKS_PORT=9050
-      - TOR_CONTROL_HOST=jm-tor
-      - TOR_CONTROL_PORT=9051
+      - TOR__CONTROL_HOST=jm-tor
+      - TOR__CONTROL_PORT=9051
       - MAKER__ONION_SERVING_HOST=0.0.0.0
       - MAKER__ONION_SERVING_PORT=5000
     volumes:

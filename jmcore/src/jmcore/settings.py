@@ -29,8 +29,8 @@ Usage:
     print(settings.bitcoin.rpc_url)
 
 Environment Variable Naming:
-    - Use uppercase with underscores
-    - Nested settings use double underscore: TOR__SOCKS_HOST, BITCOIN__RPC_URL
+    - Use uppercase with double underscore for nested settings
+    - Examples: TOR__SOCKS_HOST, BITCOIN__RPC_URL, MAKER__MIN_SIZE
     - Maps to TOML sections: TOR__SOCKS_HOST -> [tor] socks_host
 """
 
@@ -69,8 +69,9 @@ DEFAULT_DIRECTORY_SERVERS: dict[str, list[str]] = {
 
 
 class TorSettings(BaseModel):
-    """Tor proxy configuration."""
+    """Tor proxy and control port configuration."""
 
+    # SOCKS proxy settings
     socks_host: str = Field(
         default="127.0.0.1",
         description="Tor SOCKS5 proxy host",
@@ -82,15 +83,16 @@ class TorSettings(BaseModel):
         description="Tor SOCKS5 proxy port",
     )
 
-
-class TorControlSettings(BaseModel):
-    """Tor control port configuration for hidden service management."""
-
-    enabled: bool = Field(
+    # Control port settings
+    control_enabled: bool = Field(
         default=True,
         description="Enable Tor control port integration for ephemeral hidden services",
     )
-    port: int = Field(
+    control_host: str = Field(
+        default="127.0.0.1",
+        description="Tor control port host",
+    )
+    control_port: int = Field(
         default=9051,
         ge=1,
         le=65535,
@@ -103,6 +105,12 @@ class TorControlSettings(BaseModel):
     password: SecretStr | None = Field(
         default=None,
         description="Tor control port password (use cookie auth instead if possible)",
+    )
+
+    # Hidden service target (for makers)
+    target_host: str = Field(
+        default="127.0.0.1",
+        description="Target host for Tor hidden service (usually container name in Docker)",
     )
 
 
@@ -294,10 +302,6 @@ class MakerSettings(BaseModel):
         ge=0,
         le=65535,
         description="Port for incoming onion connections",
-    )
-    tor_target_host: str = Field(
-        default="127.0.0.1",
-        description="Target host for Tor hidden service",
     )
     # Rate limiting
     message_rate_limit: int = Field(
@@ -545,7 +549,6 @@ class JoinMarketSettings(BaseSettings):
 
     # Nested settings groups
     tor: TorSettings = Field(default_factory=TorSettings)
-    tor_control: TorControlSettings = Field(default_factory=TorControlSettings)
     bitcoin: BitcoinSettings = Field(default_factory=BitcoinSettings)
     network_config: NetworkSettings = Field(default_factory=NetworkSettings)
     wallet: WalletSettings = Field(default_factory=WalletSettings)
@@ -572,7 +575,7 @@ class JoinMarketSettings(BaseSettings):
 
         Priority (highest to lowest):
         1. init_settings (CLI arguments passed to constructor)
-        2. env_settings (environment variables)
+        2. env_settings (environment variables with __ delimiter)
         3. toml_settings (config.toml file)
         4. defaults (in field definitions)
         """
@@ -747,8 +750,7 @@ def generate_config_template() -> str:
     lines.append("")
 
     # Add all sections
-    add_section("Tor Proxy Settings", TorSettings, "tor")
-    add_section("Tor Control Port Settings", TorControlSettings, "tor_control")
+    add_section("Tor Settings", TorSettings, "tor")
     add_section("Bitcoin Backend Settings", BitcoinSettings, "bitcoin")
     add_section("Network Settings", NetworkSettings, "network_config")
     add_section("Wallet Settings", WalletSettings, "wallet")
@@ -817,7 +819,6 @@ def reset_settings() -> None:
 __all__ = [
     "JoinMarketSettings",
     "TorSettings",
-    "TorControlSettings",
     "BitcoinSettings",
     "NetworkSettings",
     "WalletSettings",

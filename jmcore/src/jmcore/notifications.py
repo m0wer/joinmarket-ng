@@ -127,79 +127,25 @@ class NotificationConfig(BaseModel):
 
 def load_notification_config() -> NotificationConfig:
     """
-    Load notification configuration from environment variables.
+    Load notification configuration from the unified settings system.
 
-    Environment variables:
-    - NOTIFY_URLS: Comma-separated Apprise URLs
-    - NOTIFY_ENABLED: "true"/"false" (default: true if NOTIFY_URLS is set)
-    - NOTIFY_TITLE_PREFIX: Title prefix (default: "JoinMarket")
-    - NOTIFY_INCLUDE_AMOUNTS: Include amounts (default: true)
-    - NOTIFY_INCLUDE_TXIDS: Include txids (default: false)
-    - NOTIFY_INCLUDE_NICK: Include peer nicks (default: true)
-    - NOTIFY_STARTUP: Notify on startup (default: true)
-    - NOTIFY_USE_TOR: Route through Tor SOCKS proxy (default: true)
-      - TOR_SOCKS_HOST: Tor proxy host (default: 127.0.0.1)
-      - TOR_SOCKS_PORT: Tor proxy port (default: 9050)
-    - NOTIFY_<EVENT>: Per-event toggles (e.g., NOTIFY_FILL, NOTIFY_SIGNING)
+    This function uses JoinMarketSettings which loads from:
+    1. Environment variables (NOTIFICATIONS__*, TOR__*)
+    2. Config file (~/.joinmarket-ng/config.toml)
+    3. Default values
     """
-    urls_str = os.environ.get("NOTIFY_URLS", "")
-    # Strip whitespace and quotes from URLs (quotes may be present from shell escaping)
-    urls_raw = [url.strip().strip('"').strip("'") for url in urls_str.split(",") if url.strip()]
-    # Wrap in SecretStr
-    urls = [SecretStr(url) for url in urls_raw]
+    from jmcore.settings import JoinMarketSettings
 
-    # Notifications are enabled if URLs are provided and not explicitly disabled
-    enabled_str = os.environ.get("NOTIFY_ENABLED", "").lower()
-    if enabled_str == "false":
-        enabled = False
-    elif enabled_str == "true":
-        enabled = True
-    else:
-        enabled = bool(urls)
+    settings = JoinMarketSettings()
+    config = convert_settings_to_notification_config(settings)
 
-    def get_bool_env(key: str, default: bool) -> bool:
-        val = os.environ.get(key, "").lower()
-        if val == "true":
-            return True
-        elif val == "false":
-            return False
-        return default
-
-    config = NotificationConfig(
-        enabled=enabled,
-        urls=urls,
-        title_prefix=os.environ.get("NOTIFY_TITLE_PREFIX", "JoinMarket NG"),
-        include_amounts=get_bool_env("NOTIFY_INCLUDE_AMOUNTS", True),
-        include_txids=get_bool_env("NOTIFY_INCLUDE_TXIDS", False),
-        include_nick=get_bool_env("NOTIFY_INCLUDE_NICK", True),
-        use_tor=get_bool_env("NOTIFY_USE_TOR", True),
-        tor_socks_host=os.environ.get("TOR_SOCKS_HOST", "127.0.0.1"),
-        tor_socks_port=int(os.environ.get("TOR_SOCKS_PORT", "9050")),
-        notify_fill=get_bool_env("NOTIFY_FILL", True),
-        notify_rejection=get_bool_env("NOTIFY_REJECTION", True),
-        notify_signing=get_bool_env("NOTIFY_SIGNING", True),
-        notify_mempool=get_bool_env("NOTIFY_MEMPOOL", True),
-        notify_confirmed=get_bool_env("NOTIFY_CONFIRMED", True),
-        notify_nick_change=get_bool_env("NOTIFY_NICK_CHANGE", True),
-        notify_disconnect=get_bool_env("NOTIFY_DISCONNECT", True),
-        notify_coinjoin_start=get_bool_env("NOTIFY_COINJOIN_START", True),
-        notify_coinjoin_complete=get_bool_env("NOTIFY_COINJOIN_COMPLETE", True),
-        notify_coinjoin_failed=get_bool_env("NOTIFY_COINJOIN_FAILED", True),
-        notify_peer_events=get_bool_env("NOTIFY_PEER_EVENTS", False),
-        notify_rate_limit=get_bool_env("NOTIFY_RATE_LIMIT", True),
-        notify_startup=get_bool_env("NOTIFY_STARTUP", True),
-    )
-
-    # Log configuration status at INFO level
+    # Log notification configuration status
     if config.enabled:
         logger.info(
             f"Notifications enabled with {len(config.urls)} URL(s), use_tor={config.use_tor}"
         )
     else:
-        if urls:
-            logger.info("Notifications disabled (NOTIFY_ENABLED=false)")
-        else:
-            logger.info("Notifications disabled (NOTIFY_URLS not set)")
+        logger.info("Notifications disabled (no URLs configured)")
 
     return config
 
@@ -222,8 +168,9 @@ def convert_settings_to_notification_config(settings: JoinMarketSettings) -> Not
     # Convert URL strings to SecretStr
     urls = [SecretStr(url) for url in ns.urls]
 
-    # Notifications are enabled if explicitly enabled or if URLs are provided
-    enabled = ns.enabled or bool(ns.urls)
+    # Notifications are enabled if URLs are provided (auto-enable) or explicitly enabled
+    # The enabled flag is primarily for explicit control when URLs are managed elsewhere
+    enabled = bool(ns.urls) or ns.enabled
 
     return NotificationConfig(
         enabled=enabled,

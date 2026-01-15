@@ -44,11 +44,11 @@ class TorControlConfig(BaseModel):
         CookieAuthentication 1
         CookieAuthFile /var/lib/tor/control_auth_cookie
 
-    Auto-detects configuration from environment variables:
-        TOR_CONTROL_HOST - Tor control host (default: 127.0.0.1)
-        TOR_CONTROL_PORT - Tor control port (default: 9051)
-        TOR_COOKIE_PATH - Cookie auth file path
-        TOR_PASSWORD - Tor control password (not recommended)
+    Environment variables (via pydantic-settings):
+        TOR__CONTROL_HOST - Tor control host (default: 127.0.0.1)
+        TOR__CONTROL_PORT - Tor control port (default: 9051)
+        TOR__COOKIE_PATH - Cookie auth file path
+        TOR__PASSWORD - Tor control password (not recommended)
     """
 
     enabled: bool = Field(default=True, description="Enable Tor control port integration")
@@ -70,33 +70,28 @@ def create_tor_control_config_from_env() -> TorControlConfig:
     """
     Create TorControlConfig from environment variables with smart defaults.
 
-    Environment variables:
-        TOR_CONTROL_HOST - Tor control host (default: 127.0.0.1 or tor if exists)
-        TOR_CONTROL_PORT - Tor control port (default: 9051)
-        TOR_COOKIE_PATH - Cookie auth file path
-        TOR_PASSWORD - Tor control password
+    This is a legacy function for direct env var access. Prefer using
+    JoinMarketSettings which handles TOR__* env vars through pydantic-settings.
+
+    Environment variables (legacy format):
+        TOR__CONTROL_HOST - Tor control host (default: 127.0.0.1)
+        TOR__CONTROL_PORT - Tor control port (default: 9051)
+        TOR__COOKIE_PATH - Cookie auth file path
+        TOR__PASSWORD - Tor control password
 
     Auto-detection:
-        - If TOR_COOKIE_PATH is set, use it
+        - If TOR__COOKIE_PATH is set, use it
         - Otherwise try common paths: /var/lib/tor/control_auth_cookie, /run/tor/control.authcookie
     """
-    import os
+    from jmcore.settings import get_settings
 
-    # Try to detect if we're in a docker environment with a tor container
-    host = os.environ.get("TOR_CONTROL_HOST", "127.0.0.1")
-    # If TOR_SOCKS_HOST is set to "tor", likely docker - try that for control too
-    if not os.environ.get("TOR_CONTROL_HOST") and os.environ.get("TOR_SOCKS_HOST") == "tor":
-        host = "tor"
-
-    port = int(os.environ.get("TOR_CONTROL_PORT", "9051"))
-    password = os.environ.get("TOR_PASSWORD")
+    settings = get_settings()
+    tor = settings.tor
 
     # Try to find cookie path
-    cookie_path_str = os.environ.get("TOR_COOKIE_PATH")
     cookie_path: Path | None = None
-
-    if cookie_path_str:
-        cookie_path = Path(cookie_path_str)
+    if tor.cookie_path:
+        cookie_path = Path(tor.cookie_path)
     else:
         # Try common paths
         common_paths = [
@@ -110,11 +105,11 @@ def create_tor_control_config_from_env() -> TorControlConfig:
                 break
 
     return TorControlConfig(
-        enabled=True,
-        host=host,
-        port=port,
+        enabled=tor.control_enabled,
+        host=tor.control_host,
+        port=tor.control_port,
         cookie_path=cookie_path,
-        password=SecretStr(password) if password else None,
+        password=tor.password,
     )
 
 

@@ -204,8 +204,7 @@ Environment variables use uppercase with double underscore (`__`) for nested set
 
 | Section | Description |
 |---------|-------------|
-| `[tor]` | Tor SOCKS proxy settings |
-| `[tor_control]` | Tor control port for hidden services |
+| `[tor]` | Tor SOCKS proxy and control port settings |
 | `[bitcoin]` | Bitcoin backend settings (RPC, Neutrino) |
 | `[network]` | Protocol network and directory servers |
 | `[wallet]` | HD wallet structure settings |
