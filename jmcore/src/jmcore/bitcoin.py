@@ -133,39 +133,41 @@ def calculate_relative_fee(amount_sats: int, fee_rate: str) -> int:
     """
     Calculate relative fee in satoshis from a fee rate string.
 
+    Uses Decimal arithmetic with banker's rounding (ROUND_HALF_EVEN) to match
+    the reference JoinMarket implementation. This is critical for sweep mode
+    where the maker expects the exact same fee calculation.
+
     Args:
         amount_sats: Amount in satoshis
         fee_rate: Fee rate as decimal string (e.g., "0.001" = 0.1%)
 
     Returns:
-        Fee in satoshis (rounded down)
+        Fee in satoshis (rounded to nearest integer)
 
     Examples:
         >>> calculate_relative_fee(100_000_000, "0.001")
         100000  # 0.1% of 1 BTC
         >>> calculate_relative_fee(50_000_000, "0.002")
         100000  # 0.2% of 0.5 BTC
+        >>> calculate_relative_fee(9994243, "0.000022")
+        220  # matches reference implementation's Decimal rounding
     """
+    from decimal import Decimal
+
     validate_satoshi_amount(amount_sats)
 
-    # Parse fee rate as numerator/denominator (avoids float/Decimal)
+    # Handle integer strings like "0" or "1"
     if "." not in fee_rate:
         try:
-            # Handle integer strings like "0" or "1"
             val = int(fee_rate)
             return int(amount_sats * val)
         except ValueError as e:
             raise ValueError(f"Fee rate must be decimal string or integer, got {fee_rate}") from e
 
-    parts = fee_rate.split(".")
-    if len(parts) != 2:
-        raise ValueError(f"Invalid fee rate format: {fee_rate}")
-
-    numerator = int(parts[0] + parts[1])  # "0.001" -> 1
-    denominator = 10 ** len(parts[1])  # 3 decimals -> 1000
-
-    # Integer division (rounds down)
-    return (amount_sats * numerator) // denominator
+    # Use Decimal for exact arithmetic, matching reference implementation
+    # Reference uses: int((Decimal(cjfee) * Decimal(cj_amount)).quantize(Decimal(1)))
+    # quantize(Decimal(1)) uses ROUND_HALF_EVEN (banker's rounding) by default
+    return int((Decimal(fee_rate) * Decimal(amount_sats)).quantize(Decimal(1)))
 
 
 def calculate_sweep_amount(available_sats: int, relative_fees: list[str]) -> int:
