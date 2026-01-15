@@ -236,6 +236,17 @@ socks_port = 9055
         # TOML value is used when no env override
         assert settings.tor.socks_port == 9055
 
+    def test_invalid_toml_exits(self, temp_data_dir: Path) -> None:
+        """Test that invalid TOML syntax causes exit."""
+        config_path = temp_data_dir / "config.toml"
+        # Missing closing bracket
+        config_path.write_text('[bitcoin\nbackend_type = "neutrino"')
+
+        with pytest.raises(SystemExit) as exc_info:
+            JoinMarketSettings()
+
+        assert exc_info.value.code == 1
+
 
 class TestDirectoryServers:
     """Tests for directory server configuration."""

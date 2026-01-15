@@ -8,6 +8,8 @@ import sys
 from urllib.error import URLError
 from urllib.request import urlopen
 
+from jmcore.settings import get_settings
+
 
 def format_status_output(stats: dict) -> str:
     lines = [
@@ -151,12 +153,20 @@ def health_command(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
+    # Load settings to get defaults from config
+    settings = get_settings()
+
     parser = argparse.ArgumentParser(description="JoinMarket Directory Server CLI")
     parser.add_argument(
-        "--host", default="127.0.0.1", help="Health check server host (default: 127.0.0.1)"
+        "--host",
+        default=settings.directory_server.health_check_host,
+        help=f"Health check server host (default: {settings.directory_server.health_check_host})",
     )
     parser.add_argument(
-        "--port", type=int, default=8080, help="Health check server port (default: 8080)"
+        "--port",
+        type=int,
+        default=settings.directory_server.health_check_port,
+        help=f"Health check server port (default: {settings.directory_server.health_check_port})",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")

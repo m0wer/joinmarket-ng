@@ -811,10 +811,13 @@ def clear_ignored_makers(
     ] = None,
 ) -> None:
     """Clear the list of ignored makers."""
-    from jmcore.paths import get_default_data_dir, get_ignored_makers_path
+    from jmcore.paths import get_ignored_makers_path
+    from jmcore.settings import get_settings
 
+    # Load settings to get data_dir from config if not provided
     if data_dir is None:
-        data_dir = get_default_data_dir()
+        settings = get_settings()
+        data_dir = settings.get_data_dir()
 
     ignored_makers_path = get_ignored_makers_path(data_dir)
 

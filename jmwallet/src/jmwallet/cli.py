@@ -1007,7 +1007,7 @@ def generate_bond_address(
         typer.Option("--locktime-date", "-d", help="Locktime as YYYY-MM (must be 1st of month)"),
     ] = None,
     index: Annotated[int, typer.Option("--index", "-i", help="Address index")] = 0,
-    network: Annotated[str, typer.Option("--network", "-n")] = "mainnet",
+    network: Annotated[str | None, typer.Option("--network", "-n")] = None,
     data_dir: Annotated[
         Path | None,
         typer.Option(
@@ -1022,7 +1022,7 @@ def generate_bond_address(
     log_level: Annotated[str, typer.Option("--log-level", "-l")] = "INFO",
 ) -> None:
     """Generate a fidelity bond (timelocked P2WSH) address."""
-    setup_logging(log_level)
+    settings = setup_cli(log_level)
 
     try:
         resolved_mnemonic = _resolve_mnemonic(mnemonic, mnemonic_file, password, True)
@@ -1032,6 +1032,12 @@ def generate_bond_address(
 
     # Resolve BIP39 passphrase
     resolved_bip39_passphrase = _resolve_bip39_passphrase(bip39_passphrase, prompt_bip39_passphrase)
+
+    # Resolve network from config if not provided
+    resolved_network = network if network is not None else settings.network_config.network.value
+
+    # Resolve data directory from config if not provided
+    resolved_data_dir = data_dir if data_dir is not None else settings.get_data_dir()
 
     # Parse and validate locktime
     from jmcore.timenumber import is_valid_locktime, parse_locktime_date
@@ -1069,7 +1075,6 @@ def generate_bond_address(
         logger.warning("Locktime is in the past - the bond will be immediately spendable")
 
     from jmcore.btc_script import disassemble_script, mk_freeze_script
-    from jmcore.paths import get_default_data_dir
 
     from jmwallet.wallet.address import script_to_p2wsh_address
     from jmwallet.wallet.bip32 import HDKey, mnemonic_to_seed
@@ -1083,20 +1088,17 @@ def generate_bond_address(
     seed = mnemonic_to_seed(resolved_mnemonic, resolved_bip39_passphrase)
     master_key = HDKey.from_seed(seed)
 
-    coin_type = 0 if network == "mainnet" else 1
+    coin_type = 0 if resolved_network == "mainnet" else 1
     path = f"m/84'/{coin_type}'/0'/{FIDELITY_BOND_BRANCH}/{index}"
 
     key = master_key.derive(path)
     pubkey_hex = key.get_public_key_bytes(compressed=True).hex()
 
     witness_script = mk_freeze_script(pubkey_hex, locktime)
-    address = script_to_p2wsh_address(witness_script, network)
+    address = script_to_p2wsh_address(witness_script, resolved_network)
 
     locktime_dt = datetime.fromtimestamp(locktime)
     disassembled = disassemble_script(witness_script)
-
-    # Resolve data directory
-    resolved_data_dir = data_dir if data_dir else get_default_data_dir()
 
     # Save to registry unless --no-save
     saved = False
@@ -1115,7 +1117,7 @@ def generate_bond_address(
                 path=path,
                 pubkey_hex=pubkey_hex,
                 witness_script=witness_script,
-                network=network,
+                network=resolved_network,
             )
             registry.add_bond(bond_info)
             save_registry(registry, resolved_data_dir)
@@ -1127,7 +1129,7 @@ def generate_bond_address(
     print(f"\nAddress:      {address}")
     print(f"Locktime:     {locktime} ({locktime_dt.strftime('%Y-%m-%d %H:%M:%S')})")
     print(f"Index:        {index}")
-    print(f"Network:      {network}")
+    print(f"Network:      {resolved_network}")
     print(f"Path:         {path}")
     print()
     print("-" * 80)
