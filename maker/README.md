@@ -66,7 +66,7 @@ nano ~/.joinmarket-ng/config.toml
 
 ```toml
 [bitcoin]
-backend_type = "full_node"
+backend_type = "descriptor_wallet"
 rpc_url = "http://127.0.0.1:8332"
 rpc_user = "your_rpc_user"
 rpc_password = "your_rpc_password"
@@ -378,10 +378,10 @@ docker-compose logs -f maker
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BACKEND_TYPE` | `full_node` | Backend type: `full_node`, `descriptor_wallet`, or `neutrino` |
-| `BITCOIN_RPC_URL` | `http://localhost:8332` | Bitcoin Core RPC URL (full_node only) |
-| `BITCOIN_RPC_USER` | - | Bitcoin Core RPC username (full_node only) |
-| `BITCOIN_RPC_PASSWORD` | - | Bitcoin Core RPC password (full_node only) |
+| `BACKEND_TYPE` | `descriptor_wallet` | Backend type: `descriptor_wallet`, `full_node`, or `neutrino` |
+| `BITCOIN_RPC_URL` | `http://localhost:8332` | Bitcoin Core RPC URL (descriptor_wallet and full_node) |
+| `BITCOIN_RPC_USER` | - | Bitcoin Core RPC username (descriptor_wallet and full_node) |
+| `BITCOIN_RPC_PASSWORD` | - | Bitcoin Core RPC password (descriptor_wallet and full_node) |
 | `NEUTRINO_URL` | `http://localhost:8334` | Neutrino REST API URL (neutrino only) |
 
 ### Network Configuration
@@ -432,7 +432,7 @@ jm-maker start --help
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--mnemonic-file` | - | Path to encrypted wallet file |
-| `--backend-type` | full_node | Backend: full_node, descriptor_wallet, or neutrino |
+| `--backend-type` | descriptor_wallet | Backend: descriptor_wallet, full_node, or neutrino |
 | `--cj-fee-relative` | 0.001 | Relative fee (0.001 = 0.1%) - auto-selects sw0reloffer |
 | `--cj-fee-absolute` | - | Absolute fee in sats - auto-selects sw0absoffer |
 | `--min-size` | 100000 | Minimum CoinJoin size in sats |
