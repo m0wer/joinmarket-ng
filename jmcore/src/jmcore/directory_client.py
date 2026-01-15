@@ -206,6 +206,13 @@ class DirectoryClient:
         self.directory_neutrino_compat: bool = False
         self.directory_peerlist_features: bool = False  # True if directory supports F: suffix
 
+        # Directory metadata from handshake
+        self.directory_motd: str | None = None
+        self.directory_nick: str | None = None
+        self.directory_proto_ver_min: int | None = None
+        self.directory_proto_ver_max: int | None = None
+        self.directory_features: dict[str, bool] = {}
+
         # Timing intervals
         self.peerlist_check_interval = 1800.0
         self.orderbook_refresh_interval = 1800.0
@@ -332,6 +339,13 @@ class DirectoryClient:
         # Check if directory supports peerlist_features (extended peerlist with F: suffix)
         dir_features = handshake_response.get("features", {})
         self.directory_peerlist_features = dir_features.get(FEATURE_PEERLIST_FEATURES, False)
+
+        # Store directory metadata
+        self.directory_motd = handshake_response.get("motd")
+        self.directory_nick = handshake_response.get("nick")
+        self.directory_proto_ver_min = dir_ver_min
+        self.directory_proto_ver_max = dir_ver_max
+        self.directory_features = dir_features
 
         logger.info(
             f"Handshake successful with {self.host}:{self.port} (nick: {self.nick}, "

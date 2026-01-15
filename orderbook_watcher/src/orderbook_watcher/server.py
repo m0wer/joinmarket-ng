@@ -67,7 +67,7 @@ class OrderbookServer:
 
     def _format_orderbook(self, orderbook: OrderBook) -> dict[str, Any]:
         offers_by_directory = orderbook.get_offers_by_directory()
-        directory_stats = {}
+        directory_stats: dict[str, dict[str, Any]] = {}
         for node, offers in offers_by_directory.items():
             bond_offers = [o for o in offers if o.fidelity_bond_data]
             directory_stats[node] = {
@@ -80,9 +80,23 @@ class OrderbookServer:
             if node_str not in directory_stats:
                 directory_stats[node_str] = {"offer_count": 0, "bond_offer_count": 0}
 
+        # Add connection status and directory metadata
         for status_node_id, status in self.aggregator.node_statuses.items():
             if status_node_id in directory_stats:
                 directory_stats[status_node_id].update(status.to_dict(orderbook.timestamp))
+
+        # Add directory metadata (MOTD, version, features)
+        for node_id, client in self.aggregator.clients.items():
+            if node_id in directory_stats:
+                directory_stats[node_id].update(
+                    {
+                        "motd": client.directory_motd,
+                        "nick": client.directory_nick,
+                        "proto_ver_min": client.directory_proto_ver_min,
+                        "proto_ver_max": client.directory_proto_ver_max,
+                        "features": client.directory_features,
+                    }
+                )
 
         grouped_offers: dict[tuple[str, int], dict[str, Any]] = {}
         for offer in orderbook.offers:

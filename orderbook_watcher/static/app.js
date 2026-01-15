@@ -166,6 +166,51 @@ function updateDirectoryBreakdown() {
             infoContainer.appendChild(uptime);
         }
 
+        // Add directory metadata display (version, features, MOTD)
+        if (data.proto_ver_min !== undefined || data.features || data.motd) {
+            const metadataContainer = document.createElement('div');
+            metadataContainer.className = 'directory-metadata';
+
+            // Protocol version
+            if (data.proto_ver_min !== undefined) {
+                const version = document.createElement('span');
+                version.className = 'directory-version';
+                if (data.proto_ver_min === data.proto_ver_max) {
+                    version.textContent = `v${data.proto_ver_min}`;
+                } else {
+                    version.textContent = `v${data.proto_ver_min}-${data.proto_ver_max}`;
+                }
+                version.title = 'Protocol version';
+                metadataContainer.appendChild(version);
+            }
+
+            // Features
+            if (data.features) {
+                const featureKeys = Object.keys(data.features).filter(k => data.features[k]);
+                if (featureKeys.length > 0) {
+                    const features = document.createElement('span');
+                    features.className = 'directory-features';
+                    features.textContent = featureKeys.map(f =>
+                        f.replace('_', '-').substring(0, 8)
+                    ).join(', ');
+                    features.title = `Directory features: ${featureKeys.join(', ')}`;
+                    metadataContainer.appendChild(features);
+                }
+            }
+
+            // MOTD (shortened, with full text in tooltip)
+            if (data.motd) {
+                const motd = document.createElement('span');
+                motd.className = 'directory-motd';
+                const shortMotd = data.motd.length > 30 ? data.motd.substring(0, 30) + '...' : data.motd;
+                motd.textContent = shortMotd;
+                motd.title = data.motd;
+                metadataContainer.appendChild(motd);
+            }
+
+            infoContainer.appendChild(metadataContainer);
+        }
+
         item.appendChild(nameContainer);
         item.appendChild(infoContainer);
         breakdown.appendChild(item);
