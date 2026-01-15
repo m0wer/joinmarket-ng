@@ -75,8 +75,8 @@ class OrderbookServer:
                 "bond_offer_count": len(bond_offers),
             }
 
-        for node_id in self.aggregator.directory_nodes:
-            node_str = f"{node_id[0]}:{node_id[1]}"
+        for node_tuple in self.aggregator.directory_nodes:
+            node_str = f"{node_tuple[0]}:{node_tuple[1]}"
             if node_str not in directory_stats:
                 directory_stats[node_str] = {"offer_count": 0, "bond_offer_count": 0}
 
@@ -86,9 +86,9 @@ class OrderbookServer:
                 directory_stats[status_node_id].update(status.to_dict(orderbook.timestamp))
 
         # Add directory metadata (MOTD, version, features)
-        for node_id, client in self.aggregator.clients.items():
-            if node_id in directory_stats:
-                directory_stats[node_id].update(
+        for node_str, client in self.aggregator.clients.items():
+            if node_str in directory_stats:
+                directory_stats[node_str].update(
                     {
                         "motd": client.directory_motd,
                         "nick": client.directory_nick,
