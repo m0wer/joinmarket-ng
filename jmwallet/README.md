@@ -298,10 +298,10 @@ For detailed help on any command, see the auto-generated help sections below.
 │                                             word)                            │
 │                                             [env var: BIP39_PASSPHRASE]      │
 │ --prompt-bip39-passphrase                   Prompt for BIP39 passphrase      │
-│ --network                  -n      TEXT     [default: mainnet]               │
-│ --backend                  -b      TEXT     [default: descriptor_wallet]     │
+│ --network                  -n      TEXT     Bitcoin network                  │
+│ --backend                  -b      TEXT     Backend: full_node |             │
+│                                             descriptor_wallet | neutrino     │
 │ --rpc-url                          TEXT     [env var: BITCOIN_RPC_URL]       │
-│                                             [default: http://127.0.0.1:8332] │
 │ --rpc-user                         TEXT     [env var: BITCOIN_RPC_USER]      │
 │ --rpc-password                     TEXT     [env var: BITCOIN_RPC_PASSWORD]  │
 │ --locktime                 -L      INTEGER  Locktime(s) to scan for          │
@@ -376,16 +376,13 @@ For detailed help on any command, see the auto-generated help sections below.
 │                                             3-block estimation.              │
 │ --block-target                     INTEGER  Target blocks for fee estimation │
 │                                             (1-1008). Defaults to 3.         │
-│ --network                  -n      TEXT     [default: mainnet]               │
+│ --network                  -n      TEXT     Bitcoin network                  │
 │ --backend                  -b      TEXT     Backend: full_node |             │
 │                                             descriptor_wallet | neutrino     │
-│                                             [default: descriptor_wallet]     │
 │ --rpc-url                          TEXT     [env var: BITCOIN_RPC_URL]       │
-│                                             [default: http://127.0.0.1:8332] │
 │ --rpc-user                         TEXT     [env var: BITCOIN_RPC_USER]      │
 │ --rpc-password                     TEXT     [env var: BITCOIN_RPC_PASSWORD]  │
 │ --neutrino-url                     TEXT     [env var: NEUTRINO_URL]          │
-│                                             [default: http://127.0.0.1:8334] │
 │ --broadcast                                 Broadcast the transaction        │
 │                                             [default: True]                  │
 │ --yes                      -y               Skip confirmation prompt         │
@@ -512,16 +509,13 @@ For detailed help on any command, see the auto-generated help sections below.
 │                                             word)                            │
 │                                             [env var: BIP39_PASSPHRASE]      │
 │ --prompt-bip39-passphrase                   Prompt for BIP39 passphrase      │
-│ --network                  -n      TEXT     [default: mainnet]               │
+│ --network                  -n      TEXT     Bitcoin network                  │
 │ --backend                  -b      TEXT     Backend: full_node |             │
 │                                             descriptor_wallet | neutrino     │
-│                                             [default: descriptor_wallet]     │
 │ --rpc-url                          TEXT     [env var: BITCOIN_RPC_URL]       │
-│                                             [default: http://127.0.0.1:8332] │
 │ --rpc-user                         TEXT     [env var: BITCOIN_RPC_USER]      │
 │ --rpc-password                     TEXT     [env var: BITCOIN_RPC_PASSWORD]  │
 │ --neutrino-url                     TEXT     [env var: NEUTRINO_URL]          │
-│                                             [default: http://127.0.0.1:8334] │
 │ --max-index                -i      INTEGER  Max address index per locktime   │
 │                                             to scan (default 1)              │
 │                                             [default: 1]                     │
@@ -551,16 +545,13 @@ For detailed help on any command, see the auto-generated help sections below.
 │ --bip39-passphrase                 TEXT  BIP39 passphrase (13th/25th word)   │
 │                                          [env var: BIP39_PASSPHRASE]         │
 │ --prompt-bip39-passphrase                Prompt for BIP39 passphrase         │
-│ --network                  -n      TEXT  [default: mainnet]                  │
+│ --network                  -n      TEXT                                      │
 │ --backend                  -b      TEXT  Backend: full_node |                │
 │                                          descriptor_wallet | neutrino        │
-│                                          [default: descriptor_wallet]        │
 │ --rpc-url                          TEXT  [env var: BITCOIN_RPC_URL]          │
-│                                          [default: http://127.0.0.1:8332]    │
 │ --rpc-user                         TEXT  [env var: BITCOIN_RPC_USER]         │
 │ --rpc-password                     TEXT  [env var: BITCOIN_RPC_PASSWORD]     │
 │ --neutrino-url                     TEXT  [env var: NEUTRINO_URL]             │
-│                                          [default: http://127.0.0.1:8334]    │
 │ --data-dir                         PATH  Data directory (default:            │
 │                                          ~/.joinmarket-ng or                 │
 │                                          $JOINMARKET_DATA_DIR)               │

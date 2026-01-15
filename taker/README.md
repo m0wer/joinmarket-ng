@@ -442,9 +442,10 @@ Use env vars for RPC credentials (see jmwallet README).
 │ --help          Show this message and exit.                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ Commands ───────────────────────────────────────────────────────────────────╮
-│ coinjoin      Execute a single CoinJoin transaction.                         │
-│ tumble        Run a tumbler schedule of CoinJoins.                           │
-│ config-init   Initialize the config file with default settings.              │
+│ coinjoin               Execute a single CoinJoin transaction.                │
+│ tumble                 Run a tumbler schedule of CoinJoins.                  │
+│ clear-ignored-makers   Clear the list of ignored makers.                     │
+│ config-init            Initialize the config file with default settings.     │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -563,6 +564,9 @@ Use env vars for RPC credentials (see jmwallet README).
 │                                                             fee              │
 │                                                             [env var:        │
 │                                                             BONDLESS_REQUIR… │
+│    --select-utxos   -s                                      Interactively    │
+│                                                             select UTXOs     │
+│                                                             (fzf-like TUI)   │
 │    --yes            -y                                      Skip             │
 │                                                             confirmation     │
 │                                                             prompt           │
@@ -634,6 +638,24 @@ Use env vars for RPC credentials (see jmwallet README).
 │                                                     [default: INFO]          │
 │ --help                                              Show this message and    │
 │                                                     exit.                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-taker clear-ignored-makers --help</code></summary>
+
+```
+
+ Usage: jm-taker clear-ignored-makers [OPTIONS]
+
+ Clear the list of ignored makers.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --data-dir  -d      PATH  Data directory for JoinMarket files                │
+│                           [env var: JOINMARKET_DATA_DIR]                     │
+│ --help                    Show this message and exit.                        │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
