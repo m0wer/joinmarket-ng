@@ -20,7 +20,10 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+import tempfile
+import threading
 import time
+from pathlib import Path
 
 import pytest
 from loguru import logger
@@ -36,6 +39,9 @@ from tests.e2e.test_reference_coinjoin import (
 # Timeouts for reference maker tests
 YIELDGEN_STARTUP_TIMEOUT = 120  # Time for yieldgenerator to start and announce offers
 COINJOIN_TIMEOUT = 300  # Time for CoinJoin to complete
+
+# Directory for yieldgenerator log files
+YIELDGEN_LOG_DIR = Path(tempfile.gettempdir()) / "jm-yieldgen-logs"
 
 
 def is_jam_maker_running(maker_id: int = 1) -> bool:
@@ -299,6 +305,42 @@ def fund_jam_maker_wallet(address: str, amount_btc: float = 2.0) -> bool:
     return True
 
 
+def clear_taker_ignored_makers() -> bool:
+    """
+    Clear the taker's ignored makers list.
+
+    Makers get added to the ignored list when CoinJoin attempts fail.
+    This needs to be cleared between test runs to ensure makers are available.
+
+    Returns:
+        True if successful or file didn't exist
+    """
+    compose_file = get_compose_file()
+    cmd = [
+        "docker",
+        "compose",
+        "-f",
+        str(compose_file),
+        "run",
+        "--rm",
+        "-T",
+        "taker-reference",
+        "rm",
+        "-f",
+        "/home/jm/.joinmarket-ng/ignored_makers.txt",
+    ]
+
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=30, check=False
+    )
+    if result.returncode == 0:
+        logger.info("Cleared taker ignored makers list")
+        return True
+    else:
+        logger.warning(f"Could not clear taker ignored makers list: {result.stderr}")
+        return False
+
+
 def clear_podle_blacklist(maker_id: int) -> bool:
     """
     Clear the PoDLE commitment blacklist for a maker.
@@ -390,11 +432,42 @@ def cleanup_yieldgenerator(maker_id: int, wallet_name: str) -> None:
     time.sleep(1)
 
 
+def _stream_output_to_file(
+    process: subprocess.Popen[bytes], log_file: Path, maker_id: int
+) -> None:
+    """
+    Stream process output to a log file in a background thread.
+
+    Args:
+        process: The subprocess to read from
+        log_file: Path to write logs to
+        maker_id: Maker ID for logging context
+    """
+    try:
+        with open(log_file, "wb") as f:
+            if process.stdout is None:
+                return
+            while True:
+                line = process.stdout.readline()
+                if not line and process.poll() is not None:
+                    break
+                if line:
+                    f.write(line)
+                    f.flush()
+    except Exception as e:
+        logger.warning(
+            f"Error streaming yieldgenerator output for maker{maker_id}: {e}"
+        )
+
+
 def start_yieldgenerator(
     maker_id: int, wallet_name: str, password: str
 ) -> subprocess.Popen[bytes] | None:
     """
     Start a yieldgenerator bot in the background.
+
+    Output is streamed to a log file in YIELDGEN_LOG_DIR for debugging.
+    Use get_yieldgenerator_logs() to retrieve the logs.
 
     Args:
         maker_id: The maker container ID (1 or 2)
@@ -406,6 +479,12 @@ def start_yieldgenerator(
     """
     # Clean up any leftover processes or lock files from previous runs
     cleanup_yieldgenerator(maker_id, wallet_name)
+
+    # Ensure log directory exists
+    YIELDGEN_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_file = YIELDGEN_LOG_DIR / f"yieldgenerator-maker{maker_id}.log"
+    # Clear previous log file
+    log_file.write_text("")
 
     compose_file = get_compose_file()
     cmd = [
@@ -424,16 +503,72 @@ def start_yieldgenerator(
     ]
 
     logger.info(f"Starting yieldgenerator for jam-maker{maker_id}...")
+    logger.info(f"Yieldgenerator logs will be written to: {log_file}")
     try:
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
+
+        # Start a background thread to stream output to the log file
+        log_thread = threading.Thread(
+            target=_stream_output_to_file,
+            args=(process, log_file, maker_id),
+            daemon=True,
+        )
+        log_thread.start()
+
         return process
     except Exception as e:
         logger.error(f"Failed to start yieldgenerator: {e}")
         return None
+
+
+def get_yieldgenerator_logs(maker_id: int, tail_lines: int | None = None) -> str:
+    """
+    Get the yieldgenerator log output for a maker.
+
+    Args:
+        maker_id: The maker container ID (1 or 2)
+        tail_lines: If provided, only return the last N lines
+
+    Returns:
+        Log content as string, or empty string if no logs found
+    """
+    log_file = YIELDGEN_LOG_DIR / f"yieldgenerator-maker{maker_id}.log"
+    if not log_file.exists():
+        return ""
+
+    try:
+        content = log_file.read_text()
+        if tail_lines is not None:
+            lines = content.splitlines()
+            content = "\n".join(lines[-tail_lines:])
+        return content
+    except Exception as e:
+        logger.warning(f"Failed to read yieldgenerator logs for maker{maker_id}: {e}")
+        return ""
+
+
+def log_all_yieldgenerator_output(tail_lines: int = 100) -> None:
+    """
+    Log the yieldgenerator output for all makers.
+
+    This is useful for debugging test failures.
+
+    Args:
+        tail_lines: Number of lines to show from each maker's log
+    """
+    for maker_id in [1, 2]:
+        logs = get_yieldgenerator_logs(maker_id, tail_lines=tail_lines)
+        if logs:
+            logger.info(
+                f"=== Yieldgenerator logs for jam-maker{maker_id} (last {tail_lines} lines) ==="
+            )
+            logger.info(logs)
+        else:
+            logger.warning(f"No yieldgenerator logs found for jam-maker{maker_id}")
 
 
 def wait_for_yieldgenerator_ready(
@@ -586,14 +721,19 @@ def running_yieldgenerators(funded_jam_makers):
     """
     Start yieldgenerator bots for both makers.
 
-    Clears PoDLE blacklists before starting to ensure fresh test state.
-    Yields the maker info, then stops the bots on cleanup.
+    Clears PoDLE blacklists and ignored makers list before starting to ensure
+    fresh test state. Yields the maker info, then stops the bots on cleanup.
     """
     # Clear PoDLE blacklists before starting - essential for repeated test runs
     # Without this, commitments from previous runs will be rejected
     logger.info("Clearing PoDLE blacklists from previous test runs...")
     for maker_id in [1, 2]:
         clear_podle_blacklist(maker_id)
+
+    # Clear taker's ignored makers list - makers get added here when CoinJoin fails
+    # This ensures all makers are available for the test
+    logger.info("Clearing taker ignored makers list...")
+    clear_taker_ignored_makers()
 
     processes = []
     started_makers = []
@@ -757,19 +897,19 @@ async def test_our_taker_with_reference_makers(
     ]
     has_failure = any(ind in output_lower for ind in failure_indicators)
 
-    # Check maker logs for activity
-    logger.info("Checking jam-maker logs for CoinJoin activity...")
-    for maker_id in [1, 2]:
-        result_logs = run_compose_cmd(
-            ["logs", "--tail=50", f"jam-maker{maker_id}"], check=False
-        )
-        logger.debug(f"jam-maker{maker_id} logs:\n{result_logs.stdout[-2000:]}")
+    # Check yieldgenerator logs for activity (docker logs only shows container startup)
+    logger.info("Checking yieldgenerator logs for CoinJoin activity...")
+    log_all_yieldgenerator_output(tail_lines=50)
 
     if has_failure and not has_success:
+        maker_output = ""
+        for maker_id in [1, 2]:
+            maker_output += get_yieldgenerator_logs(maker_id, tail_lines=100)
         pytest.fail(
             f"CoinJoin failed.\n"
             f"Exit code: {result.returncode}\n"
-            f"Output: {output_combined[-3000:]}"
+            f"Output: {output_combined[-3000:]}\n"
+            f"Yieldgenerator logs:\n{maker_output[-3000:]}"
         )
 
     # For now, we accept if the taker at least tried to connect
@@ -779,7 +919,9 @@ async def test_our_taker_with_reference_makers(
     assert has_success or connected_to_directory, (
         f"Taker did not successfully run.\n"
         f"Exit code: {result.returncode}\n"
-        f"Output: {output_combined[-3000:]}"
+        f"Output: {output_combined[-3000:]}\n"
+        f"Yieldgenerator logs:\n"
+        + "\n".join(get_yieldgenerator_logs(m, tail_lines=50) for m in [1, 2])
     )
 
     if has_success:
@@ -1036,22 +1178,28 @@ async def test_our_taker_uses_direct_connections_with_reference_makers(
     if has_success:
         logger.info("CoinJoin completed successfully!")
 
+    # Log yieldgenerator output for debugging
+    log_all_yieldgenerator_output(tail_lines=50)
+
     # Verify both success and direct connection usage
     # We allow the test to pass if at least one direct connection was established
     # even if the full CoinJoin didn't complete (due to test env flakiness),
     # but strictly we want both.
+    maker_logs = "\n".join(get_yieldgenerator_logs(m, tail_lines=100) for m in [1, 2])
 
     assert has_success, (
         f"CoinJoin failed.\n"
         f"Exit code: {result.returncode}\n"
-        f"Output: {output_combined[-3000:]}"
+        f"Output: {output_combined[-3000:]}\n"
+        f"Yieldgenerator logs:\n{maker_logs[-3000:]}"
     )
 
     assert has_direct_conn, (
         f"Taker did not establish direct connections.\n"
         f"Direct connections are enabled by default and should occur when Tor is available.\n"
         f"Check that taker-reference has TOR__SOCKS_HOST configured.\n"
-        f"Output: {output_combined[-3000:]}"
+        f"Output: {output_combined[-3000:]}\n"
+        f"Yieldgenerator logs:\n{maker_logs[-3000:]}"
     )
 
 
@@ -1074,6 +1222,12 @@ async def test_sweep_coinjoin_with_reference_makers(
 
     The sweep mode is triggered by using amount=0 which means "sweep the entire
     mixdepth".
+
+    For sweep mode to work with PoDLE, we need:
+    1. A UTXO that's at least 20% of the CoinJoin amount (for PoDLE commitment)
+    2. We fund mixdepth 2 (clean, unused by other tests) with 0.1 BTC
+    3. We sweep mixdepth 2, using ALL its UTXOs
+    4. The sweep output goes to mixdepth 3 automatically
     """
     compose_file = reference_maker_services["compose_file"]
 
@@ -1086,14 +1240,15 @@ async def test_sweep_coinjoin_with_reference_makers(
     if not _wait_for_node_sync(max_attempts=30):
         pytest.fail("Bitcoin nodes failed to sync")
 
-    # Fund the taker wallet with a smaller amount for sweep testing
-    # This simulates the bug scenario where we have just enough for a sweep
-    taker_address = "bcrt1q6rz28mcfaxtmd6v789l9rrlrusdprr9pz3cppk"
-    logger.info(f"Funding taker wallet at {taker_address} for sweep test...")
-    # Fund with 0.5 BTC - enough for a sweep but not excessive
-    funded = fund_jam_maker_wallet(taker_address, 0.5)
+    # Fund mixdepth 2 with 0.1 BTC for the sweep test
+    # Mixdepth 2 is clean/unused by other tests, so we get a predictable sweep amount
+    # The single UTXO is large enough for PoDLE (needs >=20% of CJ amount)
+    # Address derived from default mnemonic: m/84'/1'/2'/0/0 (BIP84 standard path)
+    mixdepth2_address = "bcrt1qzva4erlxzvafm2n3fa64ffg5j6t6ttxv6zrmmg"
+    logger.info(f"Funding mixdepth 2 for sweep test at {mixdepth2_address}...")
+    funded = fund_jam_maker_wallet(mixdepth2_address, 0.1)
     if not funded:
-        pytest.fail("Failed to fund taker wallet")
+        pytest.fail("Failed to fund mixdepth 2")
 
     # Wait for confirmations
     await asyncio.sleep(5)
@@ -1106,6 +1261,8 @@ async def test_sweep_coinjoin_with_reference_makers(
     dest_address = result.stdout.strip()
 
     # Run the taker with amount=0 to trigger sweep mode
+    # Sweep from mixdepth 1 (which we just funded with 1.0 BTC)
+    # instead of mixdepth 0 (which has ~6.9 BTC from previous tests)
     cmd = [
         "docker",
         "compose",
@@ -1116,7 +1273,7 @@ async def test_sweep_coinjoin_with_reference_makers(
         "-e",
         "COINJOIN_AMOUNT=0",  # 0 = sweep mode
         "-e",
-        "MIN_MAKERS=1",  # Single maker for faster test
+        "MIN_MAKERS=2",  # Minimum 2 makers required (config setting)
         "-e",
         "MAX_CJ_FEE_REL=0.01",
         "-e",
@@ -1131,9 +1288,9 @@ async def test_sweep_coinjoin_with_reference_makers(
         "--destination",
         dest_address,
         "--counterparties",
-        "1",  # Single maker to speed up the test
+        "2",  # Need at least minimum_makers (2) for sweep
         "--mixdepth",
-        "0",
+        "2",  # Sweep from clean mixdepth 2
         "--network",
         "testnet",
         "--bitcoin-network",
@@ -1192,14 +1349,14 @@ async def test_sweep_coinjoin_with_reference_makers(
     has_wrong_change = any(ind in output_lower for ind in wrong_change_indicators)
 
     # Check maker logs for the specific error
-    logger.info("Checking jam-maker logs for 'wrong change' errors...")
+    # Note: The docker logs only show container startup, not the yieldgenerator command output.
+    # Use the yieldgenerator logs captured by start_yieldgenerator() instead.
+    logger.info("Checking yieldgenerator logs for errors...")
+    log_all_yieldgenerator_output(tail_lines=100)
+
     maker_output = ""
     for maker_id in [1, 2]:
-        result_logs = run_compose_cmd(
-            ["logs", "--tail=100", f"jam-maker{maker_id}"], check=False
-        )
-        maker_output += result_logs.stdout
-        logger.debug(f"jam-maker{maker_id} logs:\n{result_logs.stdout[-2000:]}")
+        maker_output += get_yieldgenerator_logs(maker_id, tail_lines=100)
 
     maker_has_wrong_change = "wrong change" in maker_output.lower()
 
@@ -1215,7 +1372,8 @@ async def test_sweep_coinjoin_with_reference_makers(
     assert has_success, (
         f"Sweep CoinJoin did not complete successfully.\n"
         f"Exit code: {result.returncode}\n"
-        f"Output: {output_combined[-3000:]}"
+        f"Output: {output_combined[-3000:]}\n"
+        f"Yieldgenerator logs:\n{maker_output[-3000:]}"
     )
 
     logger.info("SUCCESS: Sweep CoinJoin completed with reference makers!")
