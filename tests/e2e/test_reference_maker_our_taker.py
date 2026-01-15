@@ -852,6 +852,7 @@ async def test_our_taker_with_reference_makers(
         "0.01",
         "--log-level",
         "DEBUG",
+        "--yes",
     ]
 
     logger.info(f"Taker command: {' '.join(cmd)}")
@@ -948,26 +949,13 @@ async def test_yieldgenerator_starts_and_announces_offers(
     - It can connect to our directory server
     - It can announce offers to the directory
     """
-    import fcntl
-    import os
-    import select
-
     maker = funded_jam_makers[0]
+    maker_id = maker["maker_id"]
 
-    process = start_yieldgenerator(
-        maker["maker_id"], maker["wallet_name"], maker["password"]
-    )
+    process = start_yieldgenerator(maker_id, maker["wallet_name"], maker["password"])
     assert process is not None, "Should be able to start yieldgenerator"
-    assert process.stdout is not None, "Process should have stdout"
 
     try:
-        # Make stdout non-blocking so we can read it while process runs
-        fd = process.stdout.fileno()
-        fl = fcntl.fcntl(fd, fcntl.F_GETFL)
-        fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
-
-        # Collect output over time while waiting for startup
-        output_bytes = b""
         start_time = time.time()
         timeout_secs = 60  # Total time to wait for startup indicators
 
@@ -983,34 +971,24 @@ async def test_yieldgenerator_starts_and_announces_offers(
             "starting yield generator",  # At least started
         ]
 
+        # Poll log file for startup indicators (output is streamed to file by background thread)
         while time.time() - start_time < timeout_secs:
             # Check if process is still running
             if process.poll() is not None:
-                # Process exited - read any remaining output
-                remaining = process.stdout.read()
-                if remaining:
-                    output_bytes += remaining
                 break
 
-            # Read available output without blocking
-            if select.select([process.stdout], [], [], 1.0)[0]:
-                try:
-                    chunk = process.stdout.read()
-                    if chunk:
-                        output_bytes += chunk
-                except BlockingIOError:
-                    pass
+            # Read from log file (written by background thread in start_yieldgenerator)
+            output = get_yieldgenerator_logs(maker_id)
+            output_lower = output.lower()
 
-            # Check if we have startup indicators yet
-            output = output_bytes.decode("utf-8", errors="replace").lower()
-            if any(ind in output for ind in startup_indicators):
+            if any(ind in output_lower for ind in startup_indicators):
                 logger.info("Found startup indicators in yieldgenerator output")
                 break
 
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
 
-        # Decode collected output
-        output = output_bytes.decode("utf-8", errors="replace")
+        # Final read of log file
+        output = get_yieldgenerator_logs(maker_id)
         output_lower = output.lower()
 
         logger.info(f"Yieldgenerator output (last 3000 chars):\n{output[-3000:]}")
