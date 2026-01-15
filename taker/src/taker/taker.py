@@ -3318,12 +3318,85 @@ class Taker:
         return success_count
 
     async def _broadcast_self(self) -> str:
-        """Broadcast transaction via our own backend."""
+        """
+        Broadcast transaction via our own backend.
+
+        Handles the case where a maker may have already broadcast the transaction,
+        which would cause our broadcast to fail with "inputs already spent" or
+        "already in mempool". In these cases, we verify the transaction exists
+        and treat it as success.
+        """
+        from taker.tx_builder import CoinJoinTxBuilder
+
         try:
             txid = await self.backend.broadcast_transaction(self.final_tx.hex())
             logger.info(f"Broadcast via self successful: {txid}")
             return txid
         except Exception as e:
+            error_str = str(e).lower()
+
+            # Check if error indicates the transaction was already broadcast
+            # This can happen in multi-node setups where a maker broadcast to a
+            # different node that hasn't synced with ours yet, but then syncs
+            # before we try to self-broadcast.
+            already_broadcast_indicators = [
+                "bad-txns-inputs-missingorspent",  # Inputs already spent
+                "txn-already-in-mempool",  # Already in our mempool
+                "txn-mempool-conflict",  # Conflicts with mempool tx
+                "missing-inputs",  # Alternative wording for spent inputs
+            ]
+
+            if any(ind in error_str for ind in already_broadcast_indicators):
+                logger.info(
+                    f"Self-broadcast rejected ({e}), checking if transaction "
+                    "was already broadcast by a maker..."
+                )
+
+                # Calculate expected txid and verify the CoinJoin output exists
+                builder = CoinJoinTxBuilder(self.config.bitcoin_network or self.config.network)
+                expected_txid = builder.get_txid(self.final_tx)
+
+                # Get taker's CJ output index for verification
+                taker_cj_vout = self._get_taker_cj_output_index()
+                if taker_cj_vout is None:
+                    logger.warning("Could not find taker CJ output index for verification")
+                    return ""
+
+                # Get block height for verification hint
+                try:
+                    current_height = await self.backend.get_block_height()
+                except Exception:
+                    current_height = None
+
+                # Verify the CoinJoin output exists (transaction was broadcast)
+                cj_verified = await self.backend.verify_tx_output(
+                    txid=expected_txid,
+                    vout=taker_cj_vout,
+                    address=self.cj_destination,
+                    start_height=current_height,
+                )
+
+                if cj_verified:
+                    logger.info(f"Transaction was already broadcast by maker: {expected_txid}")
+                    return expected_txid
+
+                # Not verified - could be a race condition or actual failure
+                # Wait a bit and try once more (transaction might be propagating)
+                await asyncio.sleep(3)
+                cj_verified = await self.backend.verify_tx_output(
+                    txid=expected_txid,
+                    vout=taker_cj_vout,
+                    address=self.cj_destination,
+                    start_height=current_height,
+                )
+
+                if cj_verified:
+                    logger.info(f"Transaction confirmed after propagation delay: {expected_txid}")
+                    return expected_txid
+
+                logger.warning(f"Self-broadcast failed and transaction not found: {e}")
+                return ""
+
             logger.warning(f"Self-broadcast failed: {e}")
             return ""
 
