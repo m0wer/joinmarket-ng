@@ -270,6 +270,26 @@ get_latest_version() {
     fi
 }
 
+# Resolve a version/tag/branch to a commit hash
+resolve_to_commit_hash() {
+    local ref="$1"
+
+    if command -v curl &> /dev/null; then
+        # Try to get commit hash from GitHub API
+        # First try as a branch
+        local commit_hash=$(curl -sL "https://api.github.com/repos/${GITHUB_REPO}/commits/${ref}" 2>/dev/null | \
+            grep '"sha":' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+
+        if [ -n "$commit_hash" ] && [ "$commit_hash" != "sha" ]; then
+            echo "$commit_hash"
+            return 0
+        fi
+    fi
+
+    # Fallback: return original ref (could be a tag or commit hash already)
+    echo "$ref"
+}
+
 # Create or update virtual environment
 setup_virtualenv() {
     print_header "Setting Up Virtual Environment"
@@ -367,7 +387,13 @@ update_packages() {
 
     print_info "Updating to version $VERSION..."
 
-    local git_base="git+https://github.com/${GITHUB_REPO}.git@${VERSION}"
+    # Resolve to commit hash to ensure pip detects changes
+    local commit_hash=$(resolve_to_commit_hash "$VERSION")
+    if [ "$commit_hash" != "$VERSION" ]; then
+        print_info "Resolved to commit: ${commit_hash:0:8}..."
+    fi
+
+    local git_base="git+https://github.com/${GITHUB_REPO}.git@${commit_hash}"
 
     # Update core libraries
     print_info "Updating jmcore..."
