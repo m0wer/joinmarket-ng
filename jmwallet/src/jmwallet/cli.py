@@ -2764,6 +2764,468 @@ async def _sync_bonds_async(
     print(f"Active (funded & not expired): {len(active)}")
 
 
+# ============================================================================
+# Cold Wallet Fidelity Bond Support
+# ============================================================================
+
+
+@app.command("create-bond-address")
+def create_bond_address(
+    pubkey: Annotated[str, typer.Argument(help="Public key (hex, 33 bytes compressed)")],
+    locktime: Annotated[
+        int, typer.Option("--locktime", "-L", help="Locktime as Unix timestamp")
+    ] = 0,
+    locktime_date: Annotated[
+        str | None,
+        typer.Option(
+            "--locktime-date", "-d", help="Locktime as date (YYYY-MM, must be 1st of month)"
+        ),
+    ] = None,
+    network: Annotated[str, typer.Option("--network", "-n")] = "mainnet",
+    data_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-dir",
+            help="Data directory (default: ~/.joinmarket-ng or $JOINMARKET_DATA_DIR)",
+        ),
+    ] = None,
+    no_save: Annotated[
+        bool,
+        typer.Option("--no-save", help="Do not save the bond to the registry"),
+    ] = False,
+    log_level: Annotated[str, typer.Option("--log-level", "-l")] = "INFO",
+) -> None:
+    """
+    Create a fidelity bond address from a public key (cold wallet workflow).
+
+    This command creates a timelocked P2WSH bond address from a public key WITHOUT
+    requiring your mnemonic or private keys. Use this for true cold storage security.
+
+    WORKFLOW:
+    1. Use Sparrow Wallet (or similar) with your hardware wallet
+    2. Navigate to your wallet's receive addresses
+    3. Find or create an address at the fidelity bond derivation path (m/84'/0'/0'/2/0)
+    4. Copy the public key from the address details
+    5. Use this command with the public key to create the bond address
+    6. Fund the bond address from any wallet
+    7. Use 'prepare-certificate-message' and hardware wallet signing for certificates
+
+    Your hardware wallet never needs to be connected to this online tool.
+    """
+    setup_logging(log_level)
+
+    # Validate pubkey
+    try:
+        pubkey_bytes = bytes.fromhex(pubkey)
+        if len(pubkey_bytes) != 33:
+            raise ValueError("Public key must be 33 bytes (compressed)")
+        # Verify it's a valid compressed pubkey (starts with 02 or 03)
+        if pubkey_bytes[0] not in (0x02, 0x03):
+            raise ValueError("Invalid compressed public key format")
+    except ValueError as e:
+        logger.error(f"Invalid public key: {e}")
+        raise typer.Exit(1)
+
+    # Parse locktime
+    from jmcore.timenumber import is_valid_locktime, parse_locktime_date
+
+    if locktime_date:
+        try:
+            locktime = parse_locktime_date(locktime_date)
+        except ValueError as e:
+            logger.error(f"Invalid locktime date: {e}")
+            logger.info("Use format: YYYY-MM or YYYY-MM-DD (must be 1st of month)")
+            logger.info("Valid range: 2020-01 to 2099-12")
+            raise typer.Exit(1)
+
+    if locktime <= 0:
+        logger.error("Locktime is required. Use --locktime or --locktime-date")
+        raise typer.Exit(1)
+
+    # Validate locktime is a valid timenumber (1st of month, midnight UTC)
+    if not is_valid_locktime(locktime):
+        from jmcore.timenumber import get_nearest_valid_locktime
+
+        suggested = get_nearest_valid_locktime(locktime, round_up=True)
+        suggested_dt = datetime.fromtimestamp(suggested)
+        logger.warning(
+            f"Locktime {locktime} is not a valid fidelity bond locktime "
+            f"(must be 1st of month at midnight UTC)"
+        )
+        logger.info(f"Suggested locktime: {suggested} ({suggested_dt.strftime('%Y-%m-%d')})")
+        logger.info("Use --locktime-date YYYY-MM for correct format")
+        raise typer.Exit(1)
+
+    # Validate locktime is in the future
+    if locktime <= datetime.now().timestamp():
+        logger.warning("Locktime is in the past - the bond will be immediately spendable")
+
+    from jmcore.btc_script import disassemble_script, mk_freeze_script
+    from jmcore.paths import get_default_data_dir
+
+    from jmwallet.wallet.address import script_to_p2wsh_address
+    from jmwallet.wallet.bond_registry import (
+        create_bond_info,
+        load_registry,
+        save_registry,
+    )
+
+    # Create the witness script from the public key
+    witness_script = mk_freeze_script(pubkey, locktime)
+    address = script_to_p2wsh_address(witness_script, network)
+
+    locktime_dt = datetime.fromtimestamp(locktime)
+    disassembled = disassemble_script(witness_script)
+
+    # Resolve data directory
+    resolved_data_dir = data_dir if data_dir else get_default_data_dir()
+
+    # Save to registry unless --no-save
+    saved = False
+    existing = False
+    if not no_save:
+        registry = load_registry(resolved_data_dir)
+        existing_bond = registry.get_bond_by_address(address)
+        if existing_bond:
+            existing = True
+            logger.info(f"Bond already exists in registry (created: {existing_bond.created_at})")
+        else:
+            # For bonds created from pubkey, we don't have the derivation path or index
+            # So we use placeholder values
+            bond_info = create_bond_info(
+                address=address,
+                locktime=locktime,
+                index=-1,  # Unknown index for pubkey-based bonds
+                path="external",  # Path is unknown when created from pubkey
+                pubkey_hex=pubkey,
+                witness_script=witness_script,
+                network=network,
+            )
+            registry.add_bond(bond_info)
+            save_registry(registry, resolved_data_dir)
+            saved = True
+
+    print("\n" + "=" * 80)
+    print("FIDELITY BOND ADDRESS (created from public key)")
+    print("=" * 80)
+    print(f"\nAddress:      {address}")
+    print(f"Locktime:     {locktime} ({locktime_dt.strftime('%Y-%m-%d %H:%M:%S')})")
+    print(f"Network:      {network}")
+    print(f"Public Key:   {pubkey}")
+    print()
+    print("-" * 80)
+    print("WITNESS SCRIPT (redeemScript)")
+    print("-" * 80)
+    print(f"Hex:          {witness_script.hex()}")
+    print(f"Disassembled: {disassembled}")
+    print("-" * 80)
+    if saved:
+        print(f"\nSaved to registry: {resolved_data_dir / 'fidelity_bonds.json'}")
+    elif existing:
+        print("\nBond already in registry (not updated)")
+    elif no_save:
+        print("\nNot saved to registry (--no-save)")
+    print("\n" + "=" * 80)
+    print("HOW TO GET PUBLIC KEY FROM SPARROW WALLET:")
+    print("=" * 80)
+    print("  1. Open Sparrow Wallet with your hardware wallet")
+    print("  2. Go to Addresses tab")
+    print("  3. Navigate to the fidelity bond path: m/84'/0'/0'/2/0")
+    print("     (Or use the address you want for the bond)")
+    print("  4. Right-click the address and select 'Copy Public Key'")
+    print("  5. Use the copied public key with this command")
+    print()
+    print("IMPORTANT:")
+    print("  - Funds sent to this address are LOCKED until the locktime!")
+    print("  - Make sure you can sign with this key in your hardware wallet")
+    print("  - Your private keys never leave the hardware wallet")
+    print("=" * 80 + "\n")
+
+
+@app.command("generate-hot-keypair")
+def generate_hot_keypair(
+    log_level: Annotated[str, typer.Option("--log-level")] = "INFO",
+) -> None:
+    """
+    Generate a hot wallet keypair for fidelity bond certificates.
+
+    This generates a random keypair that will be used for signing nick messages
+    in the fidelity bond proof. The private key stays in the hot wallet, while
+    the public key is used to create a certificate signed by the cold wallet.
+
+    The certificate chain is:
+      UTXO keypair (cold) -> signs -> certificate (hot) -> signs -> nick proofs
+
+    SECURITY:
+    - The hot wallet private key should be stored securely
+    - If compromised, an attacker can impersonate your bond until cert expires
+    - But they CANNOT spend your bond funds (those remain in cold storage)
+    """
+    setup_logging(log_level)
+
+    from coincurve import PrivateKey
+
+    # Generate a random private key
+    privkey = PrivateKey()
+    pubkey = privkey.public_key.format(compressed=True)
+
+    print("\n" + "=" * 80)
+    print("HOT WALLET KEYPAIR FOR FIDELITY BOND CERTIFICATE")
+    print("=" * 80)
+    print(f"\nPrivate Key (hex): {privkey.secret.hex()}")
+    print(f"Public Key (hex):  {pubkey.hex()}")
+    print("\n" + "=" * 80)
+    print("NEXT STEPS:")
+    print("  1. Store the private key securely (you will need it for import-certificate)")
+    print("  2. Use the public key with 'prepare-certificate-message'")
+    print("  3. Sign the certificate message with your hardware wallet")
+    print("  4. Import the certificate with 'import-certificate'")
+    print("\nSECURITY:")
+    print("  - This is the HOT wallet key - it will be used to sign nick proofs")
+    print("  - If this key is compromised, attacker can impersonate your bond")
+    print("  - But your BOND FUNDS remain safe in cold storage!")
+    print("=" * 80 + "\n")
+
+
+@app.command("prepare-certificate-message")
+def prepare_certificate_message(
+    bond_address: Annotated[str, typer.Argument(help="Bond P2WSH address")],
+    cert_pubkey: Annotated[
+        str,
+        typer.Option("--cert-pubkey", help="Certificate public key (hex)"),
+    ],
+    cert_expiry_blocks: Annotated[
+        int,
+        typer.Option("--cert-expiry-blocks", help="Certificate expiry in blocks"),
+    ] = 104832,  # ~2 years (52 * 2016)
+    data_dir_opt: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-dir",
+            help="Data directory (default: ~/.joinmarket-ng or $JOINMARKET_DATA_DIR)",
+        ),
+    ] = None,
+    log_level: Annotated[str, typer.Option("--log-level")] = "INFO",
+) -> None:
+    """
+    Prepare certificate message for signing with hardware wallet (cold wallet support).
+
+    This generates the message that needs to be signed by the bond UTXO's private key.
+    The message can then be signed using a hardware wallet via tools like Sparrow Wallet.
+
+    IMPORTANT: This command does NOT require your mnemonic or private keys.
+    It only prepares the message that you will sign with your hardware wallet.
+
+    The certificate message format is:
+      "fidelity-bond-cert|<cert_pubkey>|<cert_expiry>"
+
+    Where cert_expiry is the number of 2016-block periods (difficulty adjustment periods).
+    """
+    setup_logging(log_level)
+
+    if not cert_pubkey:
+        logger.error("--cert-pubkey is required")
+        raise typer.Exit(1)
+
+    # Validate cert_pubkey
+    try:
+        cert_pubkey_bytes = bytes.fromhex(cert_pubkey)
+        if len(cert_pubkey_bytes) != 33:
+            raise ValueError("Certificate pubkey must be 33 bytes (compressed)")
+        if cert_pubkey_bytes[0] not in (0x02, 0x03):
+            raise ValueError("Invalid compressed public key format")
+    except ValueError as e:
+        logger.error(f"Invalid certificate pubkey: {e}")
+        raise typer.Exit(1)
+
+    # Calculate cert_expiry as 2016-block periods
+    cert_expiry = cert_expiry_blocks // 2016
+
+    # Create certificate message (binary format - matches reference implementation)
+    cert_msg = b"fidelity-bond-cert|" + cert_pubkey_bytes + b"|" + str(cert_expiry).encode("ascii")
+
+    # Also create the human-readable hex version for display
+    cert_msg_hex = cert_msg.hex()
+
+    # Save message to file for easier signing workflows
+    from jmcore.paths import get_default_data_dir
+
+    data_dir = data_dir_opt if data_dir_opt else get_default_data_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    message_file = data_dir / "certificate_message.txt"
+    message_file.write_text(cert_msg_hex)
+
+    print("\n" + "=" * 80)
+    print("FIDELITY BOND CERTIFICATE MESSAGE")
+    print("=" * 80)
+    print(f"\nBond Address:          {bond_address}")
+    print(f"Certificate Pubkey:    {cert_pubkey}")
+    weeks = cert_expiry_blocks // 2016 * 2
+    print(f"Cert Expiry:           {cert_expiry} periods ({cert_expiry_blocks} blks, ~{weeks} wk)")
+    print("\n" + "-" * 80)
+    print("MESSAGE TO SIGN (hex format):")
+    print("-" * 80)
+    print(cert_msg_hex)
+    print("-" * 80)
+    print(f"\nMessage saved to: {message_file}")
+    print("\n" + "=" * 80)
+    print("HOW TO SIGN THIS MESSAGE:")
+    print("=" * 80)
+    print()
+    print("This certificate message needs to be signed by the bond UTXO's private key")
+    print("using Bitcoin message signing format.")
+    print()
+    print("OPTION 1: Sparrow Wallet with Hardware Wallet (Recommended)")
+    print("  1. Open Sparrow Wallet and connect your hardware wallet")
+    print("  2. Go to Tools -> Sign/Verify Message")
+    print("  3. Select the address that corresponds to your bond's public key")
+    print("     (NOT the bond P2WSH address - the underlying P2WPKH address)")
+    print("  4. Paste the hex message above into the 'Message' field")
+    print("  5. Click 'Sign Message' - hardware wallet will prompt for confirmation")
+    print("  6. Copy the resulting signature")
+    print()
+    print("OPTION 2: Command-line with bitcoin-cli (if you have the private key)")
+    print("  bitcoin-cli signmessagewithprivkey '<privkey_wif>' '<message_hex>'")
+    print()
+    print("After signing, use 'jm-wallet import-certificate' with the signature.")
+    print("=" * 80 + "\n")
+
+
+@app.command("import-certificate")
+def import_certificate(
+    address: Annotated[str, typer.Argument(help="Bond address")],
+    cert_pubkey: Annotated[str, typer.Option("--cert-pubkey", help="Certificate pubkey (hex)")],
+    cert_privkey: Annotated[
+        str, typer.Option("--cert-privkey", help="Certificate private key (hex)")
+    ],
+    cert_signature: Annotated[
+        str, typer.Option("--cert-signature", help="Certificate signature (base64 or hex)")
+    ],
+    cert_expiry: Annotated[int, typer.Option("--cert-expiry", help="Certificate expiry (periods)")],
+    data_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-dir",
+            help="Data directory (default: ~/.joinmarket-ng or $JOINMARKET_DATA_DIR)",
+        ),
+    ] = None,
+    skip_verification: Annotated[
+        bool,
+        typer.Option("--skip-verification", help="Skip signature verification (not recommended)"),
+    ] = False,
+    log_level: Annotated[str, typer.Option("--log-level")] = "INFO",
+) -> None:
+    """
+    Import a certificate signature for a fidelity bond (cold wallet support).
+
+    This imports a certificate generated with 'prepare-certificate-message' into the
+    bond registry, allowing the hot wallet to use it for making offers.
+
+    You need to provide:
+    - cert_pubkey: Hot wallet public key (from generate-hot-keypair)
+    - cert_privkey: Hot wallet private key (from generate-hot-keypair)
+    - cert_signature: Certificate signature from hardware wallet (base64 or hex)
+    - cert_expiry: Certificate expiry in periods (from prepare-certificate-message)
+
+    The signature must have been created by signing the certificate message with
+    the bond UTXO's private key (in your hardware wallet).
+    """
+    setup_logging(log_level)
+
+    from coincurve import PrivateKey
+    from jmcore.crypto import bitcoin_message_hash_bytes, verify_raw_ecdsa
+    from jmcore.paths import get_default_data_dir
+
+    from jmwallet.wallet.bond_registry import load_registry, save_registry
+
+    # Validate inputs
+    try:
+        cert_pubkey_bytes = bytes.fromhex(cert_pubkey)
+        if len(cert_pubkey_bytes) != 33:
+            raise ValueError("Certificate pubkey must be 33 bytes")
+        if cert_pubkey_bytes[0] not in (0x02, 0x03):
+            raise ValueError("Invalid compressed public key format")
+
+        cert_privkey_bytes = bytes.fromhex(cert_privkey)
+        if len(cert_privkey_bytes) != 32:
+            raise ValueError("Certificate privkey must be 32 bytes")
+
+        # Try to decode signature - accept both base64 and hex
+        try:
+            cert_sig_bytes = base64.b64decode(cert_signature)
+        except Exception:
+            cert_sig_bytes = bytes.fromhex(cert_signature)
+
+        # Verify that privkey matches pubkey
+        privkey = PrivateKey(cert_privkey_bytes)
+        derived_pubkey = privkey.public_key.format(compressed=True)
+        if derived_pubkey != cert_pubkey_bytes:
+            raise ValueError("Certificate privkey does not match cert_pubkey!")
+
+    except ValueError as e:
+        logger.error(f"Invalid input: {e}")
+        raise typer.Exit(1)
+
+    # Load registry
+    resolved_data_dir = data_dir if data_dir else get_default_data_dir()
+    registry = load_registry(resolved_data_dir)
+
+    # Find bond by address
+    bond = registry.get_bond_by_address(address)
+    if not bond:
+        logger.error(f"Bond not found for address: {address}")
+        logger.info("Make sure you have created the bond with 'create-bond-address' first")
+        raise typer.Exit(1)
+
+    # Verify certificate signature (unless skipped)
+    if not skip_verification:
+        try:
+            # Reconstruct the certificate message
+            cert_msg = (
+                b"fidelity-bond-cert|" + cert_pubkey_bytes + b"|" + str(cert_expiry).encode("ascii")
+            )
+            msg_hash = bitcoin_message_hash_bytes(cert_msg)
+
+            # Get the bond's utxo pubkey to verify
+            utxo_pubkey = bytes.fromhex(bond.pubkey)
+
+            # Verify signature
+            if not verify_raw_ecdsa(msg_hash, cert_sig_bytes, utxo_pubkey):
+                logger.error("Certificate signature verification failed!")
+                logger.error("The signature does not match the bond's public key.")
+                logger.info("Make sure you signed the message with the correct key.")
+                raise typer.Exit(1)
+
+            logger.info("Certificate signature verified successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to verify certificate: {e}")
+            raise typer.Exit(1)
+    else:
+        logger.warning("Skipping signature verification - use at your own risk!")
+
+    # Update bond with certificate
+    bond.cert_pubkey = cert_pubkey
+    bond.cert_privkey = cert_privkey
+    bond.cert_signature = cert_sig_bytes.hex()  # Store as hex for consistency
+    bond.cert_expiry = cert_expiry
+
+    save_registry(registry, resolved_data_dir)
+
+    print("\n" + "=" * 80)
+    print("CERTIFICATE IMPORTED SUCCESSFULLY")
+    print("=" * 80)
+    print(f"\nBond Address:          {address}")
+    print(f"Certificate Pubkey:    {cert_pubkey}")
+    print(f"Certificate Expiry:    {cert_expiry} periods ({cert_expiry * 2016} blocks)")
+    print(f"\nRegistry updated: {resolved_data_dir / 'fidelity_bonds.json'}")
+    print("\n" + "=" * 80)
+    print("NEXT STEPS:")
+    print("  The maker bot will automatically use this certificate when creating")
+    print("  fidelity bond proofs. Your cold wallet private key is never needed!")
+    print("=" * 80 + "\n")
+
+
 def main() -> None:
     """CLI entry point."""
     app()

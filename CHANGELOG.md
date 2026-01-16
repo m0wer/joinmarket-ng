@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **External Wallet Fidelity Bonds (Cold Storage Support)**: Added support for fidelity bonds with external wallet (hardware wallet/cold storage) private keys. The bond UTXO private key never needs to touch an internet-connected device. Instead, users create a certificate chain where the cold wallet signs a certificate authorizing a hot wallet keypair to sign nick proofs on its behalf.
+  - New CLI commands:
+    - `jm-wallet create-bond-address <pubkey>`: Create bond address from public key (no mnemonic needed)
+    - `jm-wallet generate-hot-keypair`: Generate hot wallet keypair for certificate
+    - `jm-wallet prepare-certificate-message`: Create message for hardware wallet signing
+    - `jm-wallet import-certificate`: Import signed certificate into bond registry
+  - Certificate chain: `UTXO keypair (cold) -> signs -> certificate (hot) -> signs -> nick proofs`
+  - Security benefits: Bond funds remain completely safe in cold storage; certificate has configurable expiry (~2 years default); if hot wallet is compromised, only certificate is at risk
+  - Compatible with hardware wallets via Sparrow Wallet message signing
+
 - **Multi-Offer Support (Dual Offers)**: Makers can now advertise both relative and absolute fee offers simultaneously with different offer IDs. This allows makers to serve different types of takers (those preferring percentage-based fees vs fixed fees) from a single instance.
   - New `--dual-offers` CLI flag for `jm-maker start` creates both offer types automatically
   - Each offer type gets a unique offer ID (0 for relative, 1 for absolute)
