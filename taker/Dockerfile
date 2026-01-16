@@ -3,14 +3,18 @@
 # =============================================================================
 FROM python:3.14-slim AS builder
 
+# Reproducible builds: Use SOURCE_DATE_EPOCH for consistent timestamps
+ARG SOURCE_DATE_EPOCH
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+
 WORKDIR /build
 
-# Install build dependencies
+# Install build dependencies (sorted alphabetically for reproducibility)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    git \
     libffi-dev \
     libsodium-dev \
-    git \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
@@ -45,6 +49,10 @@ RUN pip install --no-cache-dir --user /build/taker
 # Production stage: Minimal runtime image
 # =============================================================================
 FROM python:3.14-slim AS production
+
+# Reproducible builds: Use SOURCE_DATE_EPOCH for consistent timestamps
+ARG SOURCE_DATE_EPOCH
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
 WORKDIR /app
 

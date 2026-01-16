@@ -1969,6 +1969,129 @@ If any check fails, the maker refuses to sign and logs the specific failure reas
 
 ---
 
+## Reproducible Builds
+
+JoinMarket NG supports reproducible Docker builds, allowing anyone to verify that released images were built from the published source code. This is critical for security-sensitive software handling Bitcoin transactions.
+
+### Why Reproducible Builds Matter
+
+Reproducible builds provide assurance that:
+- Binary releases match the source code (no backdoors injected during CI)
+- Multiple parties can independently verify the same build produces identical results
+- Users don't need to trust the build infrastructure or release maintainers
+
+For Bitcoin privacy software like JoinMarket, this is especially important as compromised builds could:
+- Leak private keys or transaction data
+- Introduce subtle privacy degradation
+- Create transactions that lose funds
+
+### How It Works
+
+Our reproducible builds use several techniques:
+
+1. **SOURCE_DATE_EPOCH**: All timestamps in Docker images use the git commit timestamp, not build time
+2. **Pinned dependencies**: `requirements.txt` files lock exact package versions
+3. **Deterministic ordering**: Package installations are sorted alphabetically
+4. **BuildKit reproducibility**: Uses Docker BuildKit features for consistent layer hashes
+
+### Building Locally
+
+To reproduce a release build locally:
+
+```bash
+# Get the release info
+VERSION=1.0.0
+git checkout $VERSION
+SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)
+
+# Build with the same timestamp
+docker buildx build \
+  --file ./maker/Dockerfile \
+  --build-arg SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH \
+  --output type=docker \
+  .
+```
+
+### Verifying Releases
+
+Each release includes a manifest file with:
+- Git commit hash
+- SOURCE_DATE_EPOCH used for the build
+- Docker image digests (sha256)
+
+Use the verification script to check a release:
+
+```bash
+# Basic verification (checks signatures and digests)
+./scripts/verify-release.sh 1.0.0
+
+# Full verification with local reproduction
+./scripts/verify-release.sh 1.0.0 --reproduce
+
+# Require multiple signatures
+./scripts/verify-release.sh 1.0.0 --min-sigs 2
+```
+
+### Signing a Release
+
+Trusted parties can sign releases to attest they've verified the build:
+
+```bash
+# Sign a release (optionally verify reproducibility first)
+./scripts/sign-release.sh 1.0.0 --verify-first
+
+# Use a specific GPG key
+./scripts/sign-release.sh 1.0.0 --key ABCD1234...
+```
+
+After signing:
+1. Your signature is saved to `signatures/<version>/<fingerprint>.sig`
+2. Commit and push (or create a PR if you don't have write access)
+3. Add your key to `signatures/trusted-keys.txt` to be included in automated verification
+
+### Verifying Signatures
+
+To verify that trusted parties have signed a release:
+
+```bash
+# Check signatures (downloads manifest, imports trusted keys, verifies)
+./scripts/verify-release.sh 1.0.0
+```
+
+The script will:
+1. Download the release manifest from GitHub releases
+2. Import trusted keys from `signatures/trusted-keys.txt`
+3. Verify all signatures in `signatures/<version>/`
+4. Check Docker image digests match the manifest
+
+### Trusted Keys
+
+The list of trusted signers is maintained in `signatures/trusted-keys.txt`. To add your key:
+
+1. Generate a GPG key if you don't have one: `gpg --full-generate-key`
+2. Upload to a keyserver: `gpg --keyserver hkps://keys.openpgp.org --send-keys <fingerprint>`
+3. Submit a PR adding your fingerprint to `signatures/trusted-keys.txt`
+
+### CI/CD Integration
+
+The release workflow automatically:
+1. Builds images with `SOURCE_DATE_EPOCH` set to the git commit timestamp
+2. Generates a release manifest with all image digests
+3. Uploads the manifest to GitHub releases
+
+Maintainers should then sign the manifest and push their signatures.
+
+### Limitations
+
+Perfect bit-for-bit reproducibility depends on:
+- Same BuildKit version
+- Same base image version (pinned in Dockerfiles)
+- Same host architecture for single-arch builds
+
+Multi-architecture builds may have slight variations due to platform-specific compilation. The verification process checks the manifest digests match the registry, not that you can reproduce the exact same bytes locally.
+
+---
+
 ## References
 
 - [Original JoinMarket Implementation](https://github.com/JoinMarket-Org/joinmarket-clientserver/)
@@ -1977,3 +2100,5 @@ If any check fails, the maker refuses to sign and logs the specific failure reas
 - [Fidelity Bonds Design](https://gist.github.com/chris-belcher/18ea0e6acdb885a2bfbdee43dcd6b5af)
 - [BIP157 - Client Side Block Filtering](https://github.com/bitcoin/bips/blob/master/bip-0157.mediawiki)
 - [BIP158 - Compact Block Filters](https://github.com/bitcoin/bips/blob/master/bip-0158.mediawiki)
+- [Reproducible Builds](https://reproducible-builds.org/)
+- [Docker Reproducible Builds](https://docs.docker.com/build/ci/github-actions/reproducible-builds/)

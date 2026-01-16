@@ -103,6 +103,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Get Git commit timestamp for reproducible builds
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> $GITHUB_ENV
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -129,6 +132,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -145,3 +149,82 @@ jobs:
           build-args: |
             BUILDKIT_INLINE_CACHE=1
             VERSION=${{ needs.create-release.outputs.version }}
+            SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
+        env:
+          SOURCE_DATE_EPOCH: ${{ env.SOURCE_DATE_EPOCH }}
+
+      - name: Export image digest
+        run: |
+          mkdir -p /tmp/digests
+          echo "${{ steps.build.outputs.digest }}" > /tmp/digests/${{ matrix.image }}${{ matrix.tag_suffix || '' }}.txt
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.image }}${{ matrix.tag_suffix || '' }}
+          path: /tmp/digests/
+          retention-days: 1
+
+  # ==========================================================================
+  # Generate release manifest with image digests for reproducible verification
+  # ==========================================================================
+  generate-manifest:
+    needs: [create-release, publish-docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download all digest artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - name: Generate release manifest
+        run: |
+          VERSION=${{ needs.create-release.outputs.version }}
+          COMMIT_SHA=${{ github.sha }}
+          SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)
+          BUILD_DATE=$(date -u -d @$SOURCE_DATE_EPOCH +"%Y-%m-%dT%H:%M:%SZ")
+
+          # Create manifest file
+          cat > release-manifest-${VERSION}.txt << EOF
+          # JoinMarket NG Release Manifest
+          # Version: ${VERSION}
+          # Commit: ${COMMIT_SHA}
+          # Build Date: ${BUILD_DATE}
+          # SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH}
+          #
+          # This manifest contains cryptographic digests of all release artifacts.
+          # Use these to verify the integrity and authenticity of downloaded images.
+          #
+          # Verification instructions: See DOCS.md#reproducible-builds
+
+          ## Git Commit
+          commit: ${COMMIT_SHA}
+          source_date_epoch: ${SOURCE_DATE_EPOCH}
+
+          ## Docker Images
+          EOF
+
+          # Add all image digests
+          for digest_file in /tmp/digests/*.txt; do
+            if [ -f "$digest_file" ]; then
+              image_name=$(basename "$digest_file" .txt)
+              digest=$(cat "$digest_file")
+              echo "${image_name}: ${digest}" >> release-manifest-${VERSION}.txt
+            fi
+          done
+
+          cat release-manifest-${VERSION}.txt
+
+      - name: Upload manifest to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=${{ needs.create-release.outputs.version }}
+          gh release upload ${VERSION} release-manifest-${VERSION}.txt --clobber
