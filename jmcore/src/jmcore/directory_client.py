@@ -153,6 +153,7 @@ class DirectoryClient:
         max_message_size: int = 2097152,
         on_disconnect: Callable[[], None] | None = None,
         neutrino_compat: bool = False,
+        peerlist_timeout: float = 60.0,
     ) -> None:
         """
         Initialize DirectoryClient.
@@ -169,6 +170,7 @@ class DirectoryClient:
             max_message_size: Maximum message size in bytes
             on_disconnect: Callback when connection drops
             neutrino_compat: Advertise support for Neutrino-compatible UTXO metadata
+            peerlist_timeout: Timeout for first PEERLIST chunk (default 60s, subsequent chunks use 5s)
         """
         self.host = host
         self.port = port
@@ -225,7 +227,10 @@ class DirectoryClient:
         self._peerlist_supported: bool | None = None  # None = unknown, True/False = known
         self._last_peerlist_request_time: float = 0.0
         self._peerlist_min_interval: float = 60.0  # Minimum seconds between peerlist requests
-        self._peerlist_timeout: float = 120.0  # Longer timeout for peerlist (can be large over Tor)
+        self._peerlist_timeout: float = peerlist_timeout  # Timeout for first peerlist chunk
+        self._peerlist_chunk_timeout: float = (
+            5.0  # Timeout between chunks (end of chunked response)
+        )
         self._peerlist_timeout_count: int = 0  # Track consecutive timeouts
 
         # Message buffer for messages received while waiting for specific responses
@@ -361,8 +366,9 @@ class DirectoryClient:
         Note: Reference implementation directories do NOT support GETPEERLIST.
         This method shares peerlist support tracking with get_peerlist_with_features().
 
-        For directories that announced peerlist_features during handshake, we use
-        a longer timeout and don't permanently disable requests on timeout.
+        The directory may send multiple PEERLIST messages (chunked response) to
+        avoid overwhelming slow Tor connections. This method accumulates peers
+        from all chunks.
 
         Returns:
             List of active peer nicks. Returns empty list if directory doesn't
@@ -395,77 +401,104 @@ class DirectoryClient:
         await self.connection.send(json.dumps(getpeerlist_msg).encode("utf-8"))
 
         start_time = asyncio.get_event_loop().time()
-        response = None
 
-        # Use longer timeout for directories that support peerlist_features
-        # (the peerlist can be large and slow to transmit over Tor)
-        peerlist_timeout = (
+        # Timeout for waiting for the first PEERLIST response
+        first_response_timeout = (
             self._peerlist_timeout if self.directory_peerlist_features else self.timeout
         )
 
+        # Timeout between chunks - when this expires after receiving at least one
+        # PEERLIST message, we know the directory has finished sending all chunks
+        inter_chunk_timeout = self._peerlist_chunk_timeout
+
+        # Accumulate peers from multiple PEERLIST chunks
+        all_peers: list[str] = []
+        chunks_received = 0
+        got_first_response = False
+
         while True:
             elapsed = asyncio.get_event_loop().time() - start_time
-            if elapsed > peerlist_timeout:
-                self._handle_peerlist_timeout()
-                return []
+
+            # Determine timeout for this receive
+            if not got_first_response:
+                remaining = first_response_timeout - elapsed
+                if remaining <= 0:
+                    self._handle_peerlist_timeout()
+                    return []
+                receive_timeout = remaining
+            else:
+                receive_timeout = inter_chunk_timeout
 
             try:
                 response_data = await asyncio.wait_for(
-                    self.connection.receive(), timeout=peerlist_timeout - elapsed
+                    self.connection.receive(), timeout=receive_timeout
                 )
                 response = json.loads(response_data.decode("utf-8"))
                 msg_type = response.get("type")
-                logger.debug(f"Received response type: {msg_type}")
 
                 if msg_type == MessageType.PEERLIST.value:
-                    break
+                    got_first_response = True
+                    chunks_received += 1
+                    peerlist_str = response.get("line", "")
 
-                # Buffer unexpected messages (like PUBMSG offers) for later processing
-                # instead of discarding them
+                    # Parse this chunk
+                    chunk_peers: list[str] = []
+                    if peerlist_str:
+                        for entry in peerlist_str.split(","):
+                            if not entry or not entry.strip():
+                                continue
+                            if NICK_PEERLOCATOR_SEPARATOR not in entry:
+                                logger.debug(f"Skipping metadata entry in peerlist: '{entry}'")
+                                continue
+                            try:
+                                nick, location, disconnected, _features = parse_peerlist_entry(
+                                    entry
+                                )
+                                logger.debug(
+                                    f"Parsed peer: {nick} at {location}, "
+                                    f"disconnected={disconnected}"
+                                )
+                                if not disconnected:
+                                    chunk_peers.append(nick)
+                            except ValueError as e:
+                                logger.warning(f"Failed to parse peerlist entry '{entry}': {e}")
+                                continue
+
+                    all_peers.extend(chunk_peers)
+                    logger.debug(
+                        f"Received PEERLIST chunk {chunks_received} with "
+                        f"{len(chunk_peers)} peers (total: {len(all_peers)})"
+                    )
+                    continue
+
+                # Buffer unexpected messages
                 logger.trace(
                     f"Buffering unexpected message type {msg_type} while waiting for PEERLIST"
                 )
                 await self._message_buffer.put(response)
+
             except TimeoutError:
-                self._handle_peerlist_timeout()
-                return []
-            except Exception as e:
-                logger.warning(f"Error receiving/parsing message while waiting for PEERLIST: {e}")
-                if asyncio.get_event_loop().time() - start_time > peerlist_timeout:
+                if not got_first_response:
                     self._handle_peerlist_timeout()
                     return []
+                # Inter-chunk timeout means we're done
+                break
 
-        peerlist_str = response["line"]
-        logger.debug(f"Peerlist string: {peerlist_str}")
+            except Exception as e:
+                logger.warning(f"Error receiving/parsing message while waiting for PEERLIST: {e}")
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if not got_first_response and elapsed > first_response_timeout:
+                    self._handle_peerlist_timeout()
+                    return []
+                if got_first_response:
+                    break
 
         # Mark peerlist as supported since we got a valid response
         self._peerlist_supported = True
         self._peerlist_timeout_count = 0
 
-        if not peerlist_str:
-            return []
-
-        peers = []
-        for entry in peerlist_str.split(","):
-            # Skip empty entries
-            if not entry or not entry.strip():
-                continue
-            # Skip entries without separator - these are metadata (e.g., 'peerlist_features')
-            # from the reference implementation, not actual peer entries
-            if NICK_PEERLOCATOR_SEPARATOR not in entry:
-                logger.debug(f"Skipping metadata entry in peerlist: '{entry}'")
-                continue
-            try:
-                nick, location, disconnected, _features = parse_peerlist_entry(entry)
-                logger.debug(f"Parsed peer: {nick} at {location}, disconnected={disconnected}")
-                if not disconnected:
-                    peers.append(nick)
-            except ValueError as e:
-                logger.warning(f"Failed to parse peerlist entry '{entry}': {e}")
-                continue
-
-        logger.info(f"Received {len(peers)} active peers from {self.host}:{self.port}")
-        return peers
+        logger.info(f"Received {len(all_peers)} active peers from {self.host}:{self.port}")
+        return all_peers
 
     async def get_peerlist_with_features(self) -> list[tuple[str, str, FeatureSet]]:
         """
@@ -478,9 +511,10 @@ class DirectoryClient:
         This method tracks whether the directory supports it and skips requests
         to unsupported directories to avoid spamming warnings in their logs.
 
-        For directories that announced peerlist_features during handshake, we use
-        a longer timeout and don't permanently disable requests on timeout (the
-        peerlist may simply be large and slow to transmit over Tor).
+        The directory may send multiple PEERLIST messages (chunked response) to
+        avoid overwhelming slow Tor connections. This method accumulates peers
+        from all chunks until no more PEERLIST messages arrive within the
+        inter-chunk timeout.
 
         Returns:
             List of (nick, location, features) tuples for active peers.
@@ -514,51 +548,89 @@ class DirectoryClient:
         await self.connection.send(json.dumps(getpeerlist_msg).encode("utf-8"))
 
         start_time = asyncio.get_event_loop().time()
-        response = None
 
+        # Timeout for waiting for the first PEERLIST response
         # Use longer timeout for directories that support peerlist_features
-        # (the peerlist can be large and slow to transmit over Tor)
-        peerlist_timeout = (
+        first_response_timeout = (
             self._peerlist_timeout if self.directory_peerlist_features else self.timeout
         )
 
+        # Timeout between chunks - when this expires after receiving at least one
+        # PEERLIST message, we know the directory has finished sending all chunks
+        inter_chunk_timeout = self._peerlist_chunk_timeout
+
+        # Accumulate peers from multiple PEERLIST chunks
+        all_peers: list[tuple[str, str, FeatureSet]] = []
+        chunks_received = 0
+        got_first_response = False
+
         while True:
             elapsed = asyncio.get_event_loop().time() - start_time
-            if elapsed > peerlist_timeout:
-                self._handle_peerlist_timeout()
-                return []
+
+            # Determine timeout for this receive
+            if not got_first_response:
+                # Waiting for first PEERLIST - use full timeout
+                remaining = first_response_timeout - elapsed
+                if remaining <= 0:
+                    self._handle_peerlist_timeout()
+                    return []
+                receive_timeout = remaining
+            else:
+                # Already received at least one chunk - use shorter inter-chunk timeout
+                receive_timeout = inter_chunk_timeout
 
             try:
                 response_data = await asyncio.wait_for(
-                    self.connection.receive(), timeout=peerlist_timeout - elapsed
+                    self.connection.receive(), timeout=receive_timeout
                 )
                 response = json.loads(response_data.decode("utf-8"))
                 msg_type = response.get("type")
-                logger.debug(f"Received response type: {msg_type}")
 
                 if msg_type == MessageType.PEERLIST.value:
-                    break
+                    got_first_response = True
+                    chunks_received += 1
+                    peerlist_str = response.get("line", "")
+                    chunk_peers = self._handle_peerlist_response(peerlist_str)
+                    all_peers.extend(chunk_peers)
+                    logger.debug(
+                        f"Received PEERLIST chunk {chunks_received} with "
+                        f"{len(chunk_peers)} peers (total: {len(all_peers)})"
+                    )
+                    # Continue to check for more chunks
+                    continue
 
                 # Buffer unexpected messages (like PUBMSG offers) for later processing
-                # instead of discarding them
                 logger.trace(
                     f"Buffering unexpected message type {msg_type} while waiting for PEERLIST"
                 )
                 await self._message_buffer.put(response)
+
             except TimeoutError:
-                self._handle_peerlist_timeout()
-                return []
-            except Exception as e:
-                logger.warning(f"Error receiving/parsing message while waiting for PEERLIST: {e}")
-                if asyncio.get_event_loop().time() - start_time > peerlist_timeout:
+                if not got_first_response:
+                    # Never received any PEERLIST - this is a real timeout
                     self._handle_peerlist_timeout()
                     return []
+                # Received at least one chunk, inter-chunk timeout means we're done
+                logger.debug(
+                    f"Peerlist complete: received {len(all_peers)} peers "
+                    f"in {chunks_received} chunks"
+                )
+                break
+
+            except Exception as e:
+                logger.warning(f"Error receiving/parsing message while waiting for PEERLIST: {e}")
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if not got_first_response and elapsed > first_response_timeout:
+                    self._handle_peerlist_timeout()
+                    return []
+                # If we already have some data, return what we have
+                if got_first_response:
+                    break
 
         # Success - reset timeout counter and mark as supported
         self._peerlist_timeout_count = 0
         self._peerlist_supported = True
-        peerlist_str = response["line"]
-        return self._handle_peerlist_response(peerlist_str)
+        return all_peers
 
     def _handle_peerlist_timeout(self) -> None:
         """Handle timeout when waiting for PEERLIST response."""

@@ -251,48 +251,74 @@ class MessageRouter:
             logger.trace(f"Failed to send PONG: {e}")
 
     async def send_peerlist(
-        self, to_key: str, network: NetworkType, include_features: bool = False
+        self,
+        to_key: str,
+        network: NetworkType,
+        include_features: bool = False,
+        chunk_size: int = 20,
     ) -> None:
         """
-        Send peerlist to a peer.
+        Send peerlist to a peer in chunks.
+
+        Sends multiple PEERLIST messages to avoid overwhelming slow Tor connections.
+        Each chunk contains up to `chunk_size` peer entries. Clients should accumulate
+        entries from multiple PEERLIST messages.
 
         Args:
             to_key: Key of the peer to send to
             network: Network to filter peers by
             include_features: If True, include F: suffix with features for each peer.
                              This is enabled when the requesting peer supports peerlist_features.
+            chunk_size: Maximum number of peer entries per PEERLIST message (default: 20)
         """
         logger.trace(
             f"send_peerlist called for {to_key}, network={network}, "
             f"include_features={include_features}"
         )
 
-        # Always send a response, even if empty - clients wait for PEERLIST response
+        # Build list of entries
+        entries: list[str] = []
         if include_features:
             peers_with_features = self.peer_registry.get_peerlist_with_features(network)
-            if not peers_with_features:
-                peerlist_msg = ""
-            else:
-                entries = [
-                    create_peerlist_entry(nick, loc, features=features)
-                    for nick, loc, features in peers_with_features
-                ]
-                peerlist_msg = ",".join(entries)
+            entries = [
+                create_peerlist_entry(nick, loc, features=features)
+                for nick, loc, features in peers_with_features
+            ]
         else:
             peers = self.peer_registry.get_peerlist_for_network(network)
-            if not peers:
-                peerlist_msg = ""
-            else:
-                entries = [create_peerlist_entry(nick, loc) for nick, loc in peers]
-                peerlist_msg = ",".join(entries)
+            entries = [create_peerlist_entry(nick, loc) for nick, loc in peers]
 
-        envelope = MessageEnvelope(message_type=MessageType.PEERLIST, payload=peerlist_msg)
+        # Always send at least one response (even if empty) - clients wait for PEERLIST
+        if not entries:
+            envelope = MessageEnvelope(message_type=MessageType.PEERLIST, payload="")
+            try:
+                await self.send_callback(to_key, envelope.to_bytes())
+                logger.trace(f"Sent empty peerlist to {to_key}")
+            except Exception as e:
+                logger.warning(f"Failed to send peerlist to {to_key}: {e}")
+            return
 
-        try:
-            await self.send_callback(to_key, envelope.to_bytes())
-            logger.trace(f"Sent peerlist to {to_key} (include_features={include_features})")
-        except Exception as e:
-            logger.warning(f"Failed to send peerlist to {to_key}: {e}")
+        # Send entries in chunks
+        chunks_sent = 0
+        for i in range(0, len(entries), chunk_size):
+            chunk = entries[i : i + chunk_size]
+            peerlist_msg = ",".join(chunk)
+            envelope = MessageEnvelope(message_type=MessageType.PEERLIST, payload=peerlist_msg)
+
+            try:
+                await self.send_callback(to_key, envelope.to_bytes())
+                chunks_sent += 1
+                # Small delay between chunks to avoid overwhelming the connection
+                if i + chunk_size < len(entries):
+                    await asyncio.sleep(0.05)
+            except Exception as e:
+                logger.warning(f"Failed to send peerlist chunk {chunks_sent + 1} to {to_key}: {e}")
+                return
+
+        logger.trace(
+            f"Sent peerlist to {to_key} ({len(entries)} peers in {chunks_sent} chunks, "
+            f"include_features={include_features})"
+        )
 
     async def _send_peer_location(self, to_location: str, peer_info: PeerInfo) -> None:
         if peer_info.onion_address == "NOT-SERVING-ONION":

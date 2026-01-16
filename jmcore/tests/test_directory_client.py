@@ -11,6 +11,7 @@ from jmcore.protocol import FEATURE_PEERLIST_FEATURES
 @pytest.mark.asyncio
 async def test_get_peerlist_with_features_logs_correctly():
     """Test that get_peerlist_with_features logs the correct message."""
+
     from loguru import logger
 
     # Capture logs
@@ -20,16 +21,20 @@ async def test_get_peerlist_with_features_logs_correctly():
     # Mock the connection
     mock_connection = AsyncMock()
 
-    # Setup the response
+    # Setup the response - use side_effect to return data then timeout
     response_data = {
         "type": MessageType.PEERLIST.value,
         "line": f"nick1;location1;F:{FEATURE_PEERLIST_FEATURES}",
     }
-    mock_connection.receive.return_value = json.dumps(response_data).encode("utf-8")
+    mock_connection.receive.side_effect = [
+        json.dumps(response_data).encode("utf-8"),
+        TimeoutError(),  # Signal end of chunks
+    ]
 
     # Initialize client
     client = DirectoryClient("host", 1234, "mainnet")
     client.connection = mock_connection
+    client._peerlist_chunk_timeout = 0.1  # Very short for testing
 
     # Run the method
     peers = await client.get_peerlist_with_features()
@@ -119,6 +124,7 @@ async def test_peerlist_timeout_without_announced_features_disables():
 @pytest.mark.asyncio
 async def test_peerlist_success_resets_timeout_count():
     """Test that successful peerlist response resets the timeout counter."""
+
     # Mock the connection
     mock_connection = AsyncMock()
 
@@ -127,13 +133,17 @@ async def test_peerlist_success_resets_timeout_count():
     client.connection = mock_connection
     client.directory_peerlist_features = True
     client._peerlist_timeout_count = 5  # Simulate previous timeouts
+    client._peerlist_chunk_timeout = 0.1  # Very short for testing
 
-    # Setup successful response
+    # Setup successful response - use side_effect for chunked handling
     response_data = {
         "type": MessageType.PEERLIST.value,
         "line": "nick1;location1",
     }
-    mock_connection.receive.return_value = json.dumps(response_data).encode("utf-8")
+    mock_connection.receive.side_effect = [
+        json.dumps(response_data).encode("utf-8"),
+        TimeoutError(),  # Signal end of chunks
+    ]
 
     # Run the method
     await client.get_peerlist_with_features()
@@ -343,3 +353,171 @@ def test_peerlist_response_updates_cached_offer_features():
 
     # Verify cached offer's features were updated (THE FIX)
     assert offer.features == {"neutrino_compat": True}
+
+
+@pytest.mark.asyncio
+async def test_get_peerlist_with_features_handles_chunked_response():
+    """
+    Test that get_peerlist_with_features accumulates peers from multiple PEERLIST chunks.
+    """
+    # Mock the connection
+    mock_connection = AsyncMock()
+
+    # Setup chunked responses - 3 chunks with 2 peers each
+    chunk1 = {
+        "type": MessageType.PEERLIST.value,
+        "line": "nick1;loc1.onion:5222,nick2;loc2.onion:5222",
+    }
+    chunk2 = {
+        "type": MessageType.PEERLIST.value,
+        "line": "nick3;loc3.onion:5222,nick4;loc4.onion:5222",
+    }
+    chunk3 = {
+        "type": MessageType.PEERLIST.value,
+        "line": "nick5;loc5.onion:5222,nick6;loc6.onion:5222",
+    }
+
+    # Return chunks, then timeout to signal end
+
+    mock_connection.receive.side_effect = [
+        json.dumps(chunk1).encode("utf-8"),
+        json.dumps(chunk2).encode("utf-8"),
+        json.dumps(chunk3).encode("utf-8"),
+        TimeoutError(),  # Signal end of chunks
+    ]
+
+    # Initialize client with short chunk timeout for fast tests
+    client = DirectoryClient("host", 1234, "mainnet")
+    client.connection = mock_connection
+    client._peerlist_chunk_timeout = 0.1  # Very short for testing
+
+    # Run the method
+    peers = await client.get_peerlist_with_features()
+
+    # Should have accumulated all 6 peers from 3 chunks
+    assert len(peers) == 6
+    nicks = [p[0] for p in peers]
+    assert "nick1" in nicks
+    assert "nick6" in nicks
+
+
+@pytest.mark.asyncio
+async def test_get_peerlist_handles_chunked_response():
+    """
+    Test that get_peerlist accumulates peers from multiple PEERLIST chunks.
+    """
+
+    mock_connection = AsyncMock()
+
+    # Two chunks with peers
+    chunk1 = {
+        "type": MessageType.PEERLIST.value,
+        "line": "peer1;onion1.onion:5222,peer2;onion2.onion:5222",
+    }
+    chunk2 = {"type": MessageType.PEERLIST.value, "line": "peer3;onion3.onion:5222"}
+
+    mock_connection.receive.side_effect = [
+        json.dumps(chunk1).encode("utf-8"),
+        json.dumps(chunk2).encode("utf-8"),
+        TimeoutError(),
+    ]
+
+    client = DirectoryClient("host", 1234, "mainnet")
+    client.connection = mock_connection
+    client._peerlist_chunk_timeout = 0.1  # Very short for testing
+
+    peers = await client.get_peerlist()
+
+    assert peers is not None
+    assert len(peers) == 3
+    assert "peer1" in peers
+    assert "peer2" in peers
+    assert "peer3" in peers
+
+
+@pytest.mark.asyncio
+async def test_get_peerlist_single_chunk_backward_compatible():
+    """
+    Test that get_peerlist still works with single-chunk responses (backward compatibility).
+    """
+
+    mock_connection = AsyncMock()
+
+    # Single chunk with all peers (old behavior)
+    response = {
+        "type": MessageType.PEERLIST.value,
+        "line": "nick1;loc1.onion:5222,nick2;loc2.onion:5222",
+    }
+
+    mock_connection.receive.side_effect = [
+        json.dumps(response).encode("utf-8"),
+        TimeoutError(),  # End of chunks
+    ]
+
+    client = DirectoryClient("host", 1234, "mainnet")
+    client.connection = mock_connection
+    client._peerlist_chunk_timeout = 0.1  # Very short for testing
+
+    peers = await client.get_peerlist()
+
+    assert peers is not None
+    assert len(peers) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_peerlist_empty_first_chunk():
+    """
+    Test that empty first chunk is handled correctly.
+    """
+
+    mock_connection = AsyncMock()
+
+    # Empty first chunk (edge case)
+    response = {"type": MessageType.PEERLIST.value, "line": ""}
+
+    mock_connection.receive.side_effect = [
+        json.dumps(response).encode("utf-8"),
+        TimeoutError(),
+    ]
+
+    client = DirectoryClient("host", 1234, "mainnet")
+    client.connection = mock_connection
+    client._peerlist_chunk_timeout = 0.1  # Very short for testing
+
+    peers = await client.get_peerlist()
+
+    assert peers is not None
+    assert len(peers) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_peerlist_with_features_buffers_unexpected_messages():
+    """
+    Test that unexpected messages during peerlist reception are buffered, not lost.
+    """
+
+    mock_connection = AsyncMock()
+
+    # Interleaved with PUBMSG
+    pubmsg = {"type": MessageType.PUBMSG.value, "line": "maker!PUBLIC!offer some_offer_data"}
+    chunk1 = {"type": MessageType.PEERLIST.value, "line": "nick1;loc1.onion:5222"}
+
+    mock_connection.receive.side_effect = [
+        json.dumps(pubmsg).encode("utf-8"),  # Unexpected PUBMSG
+        json.dumps(chunk1).encode("utf-8"),
+        TimeoutError(),
+    ]
+
+    client = DirectoryClient("host", 1234, "mainnet")
+    client.connection = mock_connection
+    client._peerlist_chunk_timeout = 0.1  # Very short for testing
+
+    peers = await client.get_peerlist_with_features()
+
+    # Should have the peer from the chunk
+    assert len(peers) == 1
+
+    # PUBMSG should be in the buffer
+    assert not client._message_buffer.empty()
+    buffered_msg = await client._message_buffer.get()
+    assert buffered_msg["type"] == MessageType.PUBMSG.value
