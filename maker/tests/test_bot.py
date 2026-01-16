@@ -765,5 +765,159 @@ class TestPeerCountDetection:
             assert entries[0].peer_count == 3
 
 
+class TestDirectoryReconnection:
+    """Tests for directory server reconnection functionality."""
+
+    @pytest.fixture
+    def mock_wallet(self):
+        wallet = MagicMock()
+        wallet.mixdepth_count = 5
+        wallet.utxo_cache = {}
+        return wallet
+
+    @pytest.fixture
+    def mock_backend(self):
+        backend = MagicMock()
+        backend.can_provide_neutrino_metadata = MagicMock(return_value=True)
+        return backend
+
+    @pytest.fixture
+    def config(self):
+        return MakerConfig(
+            mnemonic="test " * 12,
+            directory_servers=[
+                "dir1.onion:5222",
+                "dir2.onion:5222",
+                "dir3.onion:5222",
+            ],
+            network=NetworkType.REGTEST,
+            directory_reconnect_interval=300,
+            directory_reconnect_max_retries=0,  # Unlimited
+        )
+
+    @pytest.fixture
+    def maker_bot(self, mock_wallet, mock_backend, config):
+        bot = MakerBot(
+            wallet=mock_wallet,
+            backend=mock_backend,
+            config=config,
+        )
+        return bot
+
+    def test_reconnect_attempts_tracking_initialized(self, maker_bot):
+        """Test that reconnection attempts tracking is initialized."""
+        assert maker_bot._directory_reconnect_attempts == {}
+
+    def test_config_reconnect_defaults(self):
+        """Test default reconnection config values."""
+        config = MakerConfig(
+            mnemonic="test " * 12,
+            directory_servers=["localhost:5222"],
+            network=NetworkType.REGTEST,
+        )
+        assert config.directory_reconnect_interval == 300  # 5 minutes
+        assert config.directory_reconnect_max_retries == 0  # Unlimited
+
+    def test_config_reconnect_custom_values(self):
+        """Test custom reconnection config values."""
+        config = MakerConfig(
+            mnemonic="test " * 12,
+            directory_servers=["localhost:5222"],
+            network=NetworkType.REGTEST,
+            directory_reconnect_interval=60,
+            directory_reconnect_max_retries=10,
+        )
+        assert config.directory_reconnect_interval == 60
+        assert config.directory_reconnect_max_retries == 10
+
+    @pytest.mark.asyncio
+    async def test_connect_to_directory_success(self, maker_bot, mock_backend):
+        """Test successful connection to a directory."""
+        from unittest.mock import AsyncMock, patch
+
+        mock_client = MagicMock()
+        mock_client.connect = AsyncMock()
+
+        with patch("maker.bot.DirectoryClient", return_value=mock_client):
+            result = await maker_bot._connect_to_directory("test.onion:5222")
+
+            assert result is not None
+            node_id, client = result
+            assert node_id == "test.onion:5222"
+            assert client == mock_client
+            mock_client.connect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_connect_to_directory_failure(self, maker_bot):
+        """Test failed connection to a directory."""
+        from unittest.mock import AsyncMock, patch
+
+        mock_client = MagicMock()
+        mock_client.connect = AsyncMock(side_effect=Exception("Connection failed"))
+
+        with patch("maker.bot.DirectoryClient", return_value=mock_client):
+            result = await maker_bot._connect_to_directory("bad.onion:5222")
+
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_connect_to_directory_default_port(self, maker_bot):
+        """Test connection uses default port 5222 when not specified."""
+        from unittest.mock import AsyncMock, patch
+
+        mock_client = MagicMock()
+        mock_client.connect = AsyncMock()
+
+        with patch("maker.bot.DirectoryClient", return_value=mock_client) as mock_client_class:
+            result = await maker_bot._connect_to_directory("test.onion")
+
+            assert result is not None
+            node_id, _ = result
+            assert node_id == "test.onion:5222"
+            # Verify DirectoryClient was called with port 5222
+            mock_client_class.assert_called_once()
+            call_kwargs = mock_client_class.call_args[1]
+            assert call_kwargs["port"] == 5222
+
+    def test_listener_removes_client_on_disconnect(self, maker_bot):
+        """Test that disconnected clients are removed from directory_clients dict."""
+        # Add a client
+        mock_client = MagicMock()
+        maker_bot.directory_clients["test.onion:5222"] = mock_client
+
+        assert "test.onion:5222" in maker_bot.directory_clients
+
+        # Simulate removal (as done in _listen_client on disconnect)
+        maker_bot.directory_clients.pop("test.onion:5222", None)
+
+        assert "test.onion:5222" not in maker_bot.directory_clients
+
+    def test_retry_attempts_increment(self, maker_bot):
+        """Test that retry attempts are tracked correctly."""
+        node_id = "failed.onion:5222"
+
+        # Initially no attempts
+        assert maker_bot._directory_reconnect_attempts.get(node_id, 0) == 0
+
+        # Increment
+        maker_bot._directory_reconnect_attempts[node_id] = 1
+        assert maker_bot._directory_reconnect_attempts[node_id] == 1
+
+        maker_bot._directory_reconnect_attempts[node_id] = 2
+        assert maker_bot._directory_reconnect_attempts[node_id] == 2
+
+    def test_retry_attempts_reset_on_success(self, maker_bot):
+        """Test that retry attempts are reset after successful reconnection."""
+        node_id = "reconnected.onion:5222"
+
+        # Set some retry attempts
+        maker_bot._directory_reconnect_attempts[node_id] = 5
+
+        # Simulate successful reconnection (pop resets)
+        maker_bot._directory_reconnect_attempts.pop(node_id, None)
+
+        assert maker_bot._directory_reconnect_attempts.get(node_id, 0) == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

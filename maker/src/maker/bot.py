@@ -325,6 +325,10 @@ class MakerBot:
         # This prevents processing duplicates and avoids false rate limit violations
         self._message_deduplicator = MessageDeduplicator(window_seconds=30.0)
 
+        # Track failed directory reconnection attempts
+        # Key: node_id (host:port), Value: number of reconnection attempts
+        self._directory_reconnect_attempts: dict[str, int] = {}
+
     async def _setup_tor_hidden_service(self) -> str | None:
         """
         Create an ephemeral hidden service via Tor control port.
@@ -736,6 +740,10 @@ class MakerBot:
             conn_status_task = asyncio.create_task(self._periodic_directory_connection_status())
             self.listen_tasks.append(conn_status_task)
 
+            # Start periodic directory reconnection task
+            reconnect_task = asyncio.create_task(self._periodic_directory_reconnect())
+            self.listen_tasks.append(reconnect_task)
+
             # Wait for all listening tasks to complete
             await asyncio.gather(*self.listen_tasks, return_exceptions=True)
 
@@ -1046,6 +1054,151 @@ class MakerBot:
 
         logger.info("Directory connection status task stopped")
 
+    async def _connect_to_directory(self, dir_server: str) -> tuple[str, DirectoryClient] | None:
+        """
+        Connect to a single directory server.
+
+        Args:
+            dir_server: Server address in format "host:port" or "host"
+
+        Returns:
+            Tuple of (node_id, client) if successful, None on failure
+        """
+        try:
+            parts = dir_server.split(":")
+            host = parts[0]
+            port = int(parts[1]) if len(parts) > 1 else 5222
+            node_id = f"{host}:{port}"
+
+            # Determine location for handshake
+            onion_host = self.config.onion_host
+            if onion_host:
+                location = f"{onion_host}:{self.config.onion_serving_port}"
+            else:
+                location = "NOT-SERVING-ONION"
+
+            # Check neutrino compatibility
+            neutrino_compat = self.backend.can_provide_neutrino_metadata()
+
+            # Create DirectoryClient with SOCKS config for Tor connections
+            client = DirectoryClient(
+                host=host,
+                port=port,
+                network=self.config.network.value,
+                nick_identity=self.nick_identity,
+                location=location,
+                socks_host=self.config.socks_host,
+                socks_port=self.config.socks_port,
+                neutrino_compat=neutrino_compat,
+            )
+
+            await client.connect()
+            return (node_id, client)
+
+        except Exception as e:
+            logger.debug(f"Failed to connect to {dir_server}: {e}")
+            return None
+
+    async def _periodic_directory_reconnect(self) -> None:
+        """
+        Background task to periodically reconnect to failed directory servers.
+
+        Attempts to reconnect to disconnected directories at configured intervals.
+        On successful reconnection:
+        - Starts a listener task for the directory
+        - Announces current offers to the newly connected directory
+        """
+        # Wait for initial connections to settle
+        await asyncio.sleep(60)
+
+        logger.info(
+            f"Directory reconnection task started "
+            f"(interval: {self.config.directory_reconnect_interval}s)"
+        )
+
+        while self.running:
+            try:
+                await asyncio.sleep(self.config.directory_reconnect_interval)
+
+                # Find disconnected directories
+                connected_servers = set(self.directory_clients.keys())
+                disconnected_servers = []
+                for server in self.config.directory_servers:
+                    parts = server.split(":")
+                    host = parts[0]
+                    port = int(parts[1]) if len(parts) > 1 else 5222
+                    node_id = f"{host}:{port}"
+                    if node_id not in connected_servers:
+                        disconnected_servers.append((server, node_id))
+
+                if not disconnected_servers:
+                    continue
+
+                logger.info(
+                    f"Attempting to reconnect to {len(disconnected_servers)} "
+                    f"disconnected director{'y' if len(disconnected_servers) == 1 else 'ies'}..."
+                )
+
+                for dir_server, node_id in disconnected_servers:
+                    # Check retry limit
+                    max_retries = self.config.directory_reconnect_max_retries
+                    attempts = self._directory_reconnect_attempts.get(node_id, 0)
+
+                    if max_retries > 0 and attempts >= max_retries:
+                        logger.debug(f"Skipping {node_id}: max retries ({max_retries}) reached")
+                        continue
+
+                    # Attempt reconnection
+                    result = await self._connect_to_directory(dir_server)
+
+                    if result:
+                        new_node_id, client = result
+                        self.directory_clients[new_node_id] = client
+
+                        # Reset retry counter on success
+                        self._directory_reconnect_attempts.pop(node_id, None)
+
+                        logger.info(f"Reconnected to directory: {dir_server}")
+
+                        # Announce offers to newly connected directory
+                        for offer in self.current_offers:
+                            try:
+                                offer_msg = self._format_offer_announcement(
+                                    offer, include_bond=False
+                                )
+                                await client.send_public_message(offer_msg)
+                            except Exception as e:
+                                logger.warning(f"Failed to announce offer to {new_node_id}: {e}")
+
+                        # Start listener task
+                        task = asyncio.create_task(self._listen_client(new_node_id, client))
+                        self.listen_tasks.append(task)
+
+                        # Notify reconnection
+                        connected_count = len(self.directory_clients)
+                        total_count = len(self.config.directory_servers)
+                        asyncio.create_task(
+                            get_notifier().notify_directory_reconnect(
+                                new_node_id, connected_count, total_count
+                            )
+                        )
+                    else:
+                        # Increment retry counter
+                        self._directory_reconnect_attempts[node_id] = attempts + 1
+                        logger.debug(
+                            f"Reconnection to {dir_server} failed "
+                            f"(attempt {attempts + 1}"
+                            f"{f'/{max_retries}' if max_retries > 0 else ''})"
+                        )
+
+            except asyncio.CancelledError:
+                logger.info("Directory reconnection task cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in directory reconnection task: {e}")
+
+        logger.info("Directory reconnection task stopped")
+
     async def _monitor_pending_transactions(self) -> None:
         """
         Background task to monitor pending transactions and update their status.
@@ -1271,14 +1424,24 @@ class MakerBot:
                 logger.info(f"Listener for {node_id} cancelled")
                 break
             except DirectoryClientError as e:
-                # Connection lost - exit listener, let reconnection logic handle it
+                # Connection lost - remove from directory_clients so reconnection task can handle it
                 logger.warning(f"Connection lost on {node_id}: {e}")
+
+                # Remove from connected clients
+                self.directory_clients.pop(node_id, None)
+
+                # Close the client gracefully
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+
                 # Fire-and-forget notification for directory disconnect
-                connected_count = len(self.directory_clients) - 1  # We're about to be removed
+                connected_count = len(self.directory_clients)
                 total_count = len(self.config.directory_servers)
                 asyncio.create_task(
                     get_notifier().notify_directory_disconnect(
-                        node_id, connected_count, total_count, reconnecting=False
+                        node_id, connected_count, total_count, reconnecting=True
                     )
                 )
                 if connected_count == 0:

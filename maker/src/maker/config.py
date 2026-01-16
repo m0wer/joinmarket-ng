@@ -249,6 +249,18 @@ class MakerConfig(WalletConfig):
         description="Ban duration in seconds (default: 1 hour)",
     )
 
+    # Directory reconnection configuration
+    directory_reconnect_interval: int = Field(
+        default=300,
+        ge=60,
+        description="Interval between reconnection attempts for failed directories (5 min)",
+    )
+    directory_reconnect_max_retries: int = Field(
+        default=0,
+        ge=0,
+        description="Maximum reconnection attempts per directory (0 = unlimited)",
+    )
+
     model_config = {"frozen": False}
 
     @model_validator(mode="after")

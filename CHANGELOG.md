@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Directory Server Auto-Reconnection**: Makers now automatically attempt to reconnect to disconnected directory servers. This improves maker uptime and resilience against temporary network issues or directory server restarts. Previously, if a maker lost connection to a directory server during startup or due to network issues, it would remain disconnected indefinitely.
+  - New config options: `directory_reconnect_interval` (default: 300s/5min) and `directory_reconnect_max_retries` (default: 0 = unlimited)
+  - On successful reconnection, offers are automatically re-announced to the reconnected directory
+  - Notifications are sent for both disconnections and successful reconnections
+
 - **External Wallet Fidelity Bonds (Cold Storage Support)**: Added support for fidelity bonds with external wallet (hardware wallet/cold storage) private keys. The bond UTXO private key never needs to touch an internet-connected device. Instead, users create a certificate chain where the cold wallet signs a certificate authorizing a hot wallet keypair to sign nick proofs on its behalf.
   - New CLI commands:
     - `jm-wallet create-bond-address <pubkey>`: Create bond address from public key (no mnemonic needed)
