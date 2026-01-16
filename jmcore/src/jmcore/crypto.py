@@ -84,6 +84,38 @@ def bitcoin_message_hash(message: str) -> bytes:
     return hashlib.sha256(hashlib.sha256(full_msg).digest()).digest()
 
 
+def bitcoin_message_hash_bytes(message: bytes) -> bytes:
+    """
+    Hash a raw bytes message using Bitcoin's message signing format.
+
+    Format: SHA256(SHA256("\\x18Bitcoin Signed Message:\\n" + varint(len) + message))
+
+    This is the same as bitcoin_message_hash but takes raw bytes instead of a string.
+    Used for certificate messages that contain binary data (pubkeys).
+
+    Args:
+        message: Raw message bytes (NOT pre-hashed)
+
+    Returns:
+        32-byte message hash
+    """
+    prefix = b"\x18Bitcoin Signed Message:\n"
+    msg_len = len(message)
+
+    # Encode length as Bitcoin varint
+    if msg_len < 253:
+        varint = bytes([msg_len])
+    elif msg_len < 0x10000:
+        varint = b"\xfd" + msg_len.to_bytes(2, "little")
+    elif msg_len < 0x100000000:
+        varint = b"\xfe" + msg_len.to_bytes(4, "little")
+    else:
+        varint = b"\xff" + msg_len.to_bytes(8, "little")
+
+    full_msg = prefix + varint + message
+    return hashlib.sha256(hashlib.sha256(full_msg).digest()).digest()
+
+
 def ecdsa_sign(message: str, private_key_bytes: bytes) -> str:
     """
     Sign a message with ECDSA using Bitcoin message format.

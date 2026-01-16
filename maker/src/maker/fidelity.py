@@ -38,6 +38,12 @@ class FidelityBondInfo:
     bond_value: int
     pubkey: bytes | None = None
     private_key: PrivateKey | None = None
+    # Certificate fields (for cold wallet support)
+    # When set, the bond proof uses the certificate chain instead of self-signing
+    cert_pubkey: bytes | None = None  # Hot wallet certificate public key
+    cert_privkey: PrivateKey | None = None  # Hot wallet private key for signing nicks
+    cert_signature: bytes | None = None  # Certificate signature by UTXO key
+    cert_expiry: int | None = None  # Certificate expiry in 2016-block periods
 
 
 def _parse_locktime_from_path(path: str) -> int | None:
@@ -74,6 +80,9 @@ async def find_fidelity_bonds(
     Path format: m/84'/coin'/0'/2/index:locktime
     They use a CLTV script: <locktime> OP_CLTV OP_DROP <pubkey> OP_CHECKSIG
 
+    This function also loads certificate information from the bond registry if available,
+    allowing for cold wallet support where the bond UTXO private key is kept offline.
+
     Args:
         wallet: WalletService instance
         mixdepth: Mixdepth to search for bonds (default 0)
@@ -82,6 +91,22 @@ async def find_fidelity_bonds(
         List of FidelityBondInfo for each bond found
     """
     bonds: list[FidelityBondInfo] = []
+
+    # Try to load bond registry for certificate information
+    from jmwallet.wallet.bond_registry import BondRegistry
+
+    registry: BondRegistry | None = None
+    try:
+        from pathlib import Path
+
+        from jmcore.paths import get_default_data_dir
+        from jmwallet.wallet.bond_registry import load_registry
+
+        data_dir = get_default_data_dir()
+        registry = load_registry(Path(data_dir))
+        logger.debug(f"Loaded bond registry with {len(registry.bonds)} bonds")
+    except Exception as e:
+        logger.debug(f"Could not load bond registry: {e}")
 
     utxos = wallet.utxo_cache.get(mixdepth, [])
     if not utxos:
@@ -125,6 +150,29 @@ async def find_fidelity_bonds(
             locktime=locktime,
         )
 
+        # Check registry for certificate information (cold wallet support)
+        cert_pubkey: bytes | None = None
+        cert_privkey: PrivateKey | None = None
+        cert_signature: bytes | None = None
+        cert_expiry: int | None = None
+
+        if registry is not None:
+            registry_bond = registry.get_bond_by_address(utxo_info.address)
+            if registry_bond and registry_bond.has_certificate:
+                try:
+                    cert_pubkey = bytes.fromhex(registry_bond.cert_pubkey)  # type: ignore
+                    cert_privkey = PrivateKey(
+                        bytes.fromhex(registry_bond.cert_privkey)  # type: ignore
+                    )
+                    cert_signature = bytes.fromhex(registry_bond.cert_signature)  # type: ignore
+                    cert_expiry = registry_bond.cert_expiry
+                    logger.debug(
+                        f"Found certificate for bond {utxo_info.address[:20]}... "
+                        f"(expiry: {cert_expiry} periods)"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to parse certificate for {utxo_info.address}: {e}")
+
         bonds.append(
             FidelityBondInfo(
                 txid=utxo_info.txid,
@@ -135,6 +183,10 @@ async def find_fidelity_bonds(
                 bond_value=bond_value,
                 pubkey=pubkey,
                 private_key=private_key,
+                cert_pubkey=cert_pubkey,
+                cert_privkey=cert_privkey,
+                cert_signature=cert_signature,
+                cert_expiry=cert_expiry,
             )
         )
 
@@ -203,9 +255,9 @@ def create_fidelity_bond_proof(
     The proof structure (252 bytes total):
     - 72 bytes: Nick signature (signs "taker_nick|maker_nick" with Bitcoin message format)
     - 72 bytes: Certificate signature (signs cert message with Bitcoin message format)
-    - 33 bytes: Certificate public key (same as utxo_pub for self-signed)
+    - 33 bytes: Certificate public key (hot wallet key or same as utxo_pub for self-signed)
     - 2 bytes: Certificate expiry (retarget period number when cert becomes invalid)
-    - 33 bytes: UTXO public key
+    - 33 bytes: UTXO public key (cold wallet key)
     - 32 bytes: TXID (little-endian)
     - 4 bytes: Vout (little-endian)
     - 4 bytes: Locktime (little-endian)
@@ -218,8 +270,12 @@ def create_fidelity_bond_proof(
 
     Both signatures use Bitcoin message signing format (double SHA256 with prefix).
 
+    This function supports two modes:
+    1. **Self-signed mode** (hot wallet): bond.private_key is available, signs everything
+    2. **Certificate mode** (cold wallet): bond.cert_* fields are set, uses pre-signed cert
+
     Args:
-        bond: FidelityBondInfo with UTXO details and private key
+        bond: FidelityBondInfo with UTXO details and either private key or certificate
         maker_nick: Maker's JoinMarket nick
         taker_nick: Target taker's nick (for ownership proof)
         current_block_height: Current blockchain height (for calculating cert expiry)
@@ -227,36 +283,78 @@ def create_fidelity_bond_proof(
     Returns:
         Base64-encoded proof string, or None if signing fails
     """
-    if not bond.private_key or not bond.pubkey:
-        logger.error("Bond missing private key or pubkey")
+    if not bond.pubkey:
+        logger.error("Bond missing pubkey")
         return None
 
     try:
-        # For self-signed certificates, cert_pub == utxo_pub
-        cert_pub = bond.pubkey
-        utxo_pub = bond.pubkey
-
-        # Calculate certificate expiry as retarget period number
-        # Reference: yieldgenerator.py line 139
-        # cert_expiry =
-        # ((blocks + BLOCK_COUNT_SAFETY) // RETARGET_INTERVAL) + CERT_MAX_VALIDITY_TIME
-        cert_expiry_encoded = (
-            (current_block_height + BLOCK_COUNT_SAFETY) // RETARGET_INTERVAL
-        ) + CERT_MAX_VALIDITY_TIME
-
-        # 1. Nick signature: proves the maker controls the certificate key
-        # Signs "(taker_nick|maker_nick)" using Bitcoin message format
-        nick_msg = (taker_nick + "|" + maker_nick).encode("ascii")
-        nick_sig = _sign_message_bitcoin(bond.private_key, nick_msg)
-        nick_sig_padded = _pad_signature(nick_sig, 72)
-
-        # 2. Certificate signature: self-signed certificate
-        # Signs "fidelity-bond-cert|<cert_pub>|<cert_expiry_encoded>" using Bitcoin message format
-        cert_msg = (
-            b"fidelity-bond-cert|" + cert_pub + b"|" + str(cert_expiry_encoded).encode("ascii")
+        # Determine if we're using a certificate (cold wallet) or self-signing (hot wallet)
+        use_certificate = (
+            bond.cert_pubkey is not None
+            and bond.cert_privkey is not None
+            and bond.cert_signature is not None
+            and bond.cert_expiry is not None
         )
-        cert_sig = _sign_message_bitcoin(bond.private_key, cert_msg)
-        cert_sig_padded = _pad_signature(cert_sig, 72)
+
+        if use_certificate:
+            # COLD WALLET MODE: Use pre-signed certificate
+            # These assertions are safe because use_certificate already checks they're not None
+            assert bond.cert_pubkey is not None
+            assert bond.cert_signature is not None
+            assert bond.cert_expiry is not None
+            assert bond.cert_privkey is not None
+
+            cert_pub = bond.cert_pubkey
+            cert_sig = bond.cert_signature
+            cert_expiry_encoded = bond.cert_expiry
+            utxo_pub = bond.pubkey
+
+            logger.debug(
+                f"Using certificate mode for bond proof (cert_expiry={cert_expiry_encoded})"
+            )
+
+            # Sign nick message with hot wallet cert_privkey
+            nick_msg = (taker_nick + "|" + maker_nick).encode("ascii")
+            nick_sig = _sign_message_bitcoin(bond.cert_privkey, nick_msg)
+            nick_sig_padded = _pad_signature(nick_sig, 72)
+
+            # Use pre-signed certificate signature
+            cert_sig_padded = _pad_signature(cert_sig, 72)
+
+        else:
+            # HOT WALLET MODE (SELF-SIGNED): traditional single-key mode
+            if not bond.private_key:
+                logger.error("Bond missing private key (required for self-signed mode)")
+                return None
+
+            cert_pub = bond.pubkey
+            utxo_pub = bond.pubkey
+
+            # Calculate certificate expiry as retarget period number
+            # Reference: yieldgenerator.py line 139
+            # cert_expiry =
+            # ((blocks + BLOCK_COUNT_SAFETY) // RETARGET_INTERVAL) + CERT_MAX_VALIDITY_TIME
+            cert_expiry_encoded = (
+                (current_block_height + BLOCK_COUNT_SAFETY) // RETARGET_INTERVAL
+            ) + CERT_MAX_VALIDITY_TIME
+
+            logger.debug(
+                f"Using self-signed mode for bond proof (cert_expiry={cert_expiry_encoded})"
+            )
+
+            # 1. Nick signature: proves the maker controls the certificate key
+            # Signs "(taker_nick|maker_nick)" using Bitcoin message format
+            nick_msg = (taker_nick + "|" + maker_nick).encode("ascii")
+            nick_sig = _sign_message_bitcoin(bond.private_key, nick_msg)
+            nick_sig_padded = _pad_signature(nick_sig, 72)
+
+            # 2. Certificate signature: self-signed certificate
+            # Signs "fidelity-bond-cert|<cert_pub>|<cert_expiry_encoded>"
+            cert_msg = (
+                b"fidelity-bond-cert|" + cert_pub + b"|" + str(cert_expiry_encoded).encode("ascii")
+            )
+            cert_sig = _sign_message_bitcoin(bond.private_key, cert_msg)
+            cert_sig_padded = _pad_signature(cert_sig, 72)
 
         # 3. Pack the proof
         # TXID in display format (big-endian, human-readable) - same as how Bitcoin Core

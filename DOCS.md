@@ -1610,6 +1610,75 @@ UTXO keypair (cold) → signs → certificate (hot) → signs → nick proofs (p
 
 Allows cold storage of bond privkey while hot wallet handles per-session proofs.
 
+### Cold Wallet Setup (External Wallet / Hardware Wallet)
+
+For maximum security, fidelity bonds can use a certificate chain that keeps the bond UTXO private key completely offline in cold storage (hardware wallet). The bond private key never touches any internet-connected device.
+
+**Workflow:**
+
+1. **Get public key from hardware wallet** (using Sparrow Wallet):
+   - Open Sparrow Wallet and connect your hardware wallet
+   - Navigate to the Addresses tab
+   - Find or create an address at the fidelity bond derivation path: `m/84'/0'/0'/2/0`
+   - Right-click the address and select "Copy Public Key"
+   - Save this public key (33-byte compressed format, starts with 02 or 03)
+
+2. **Create bond address from public key** (on online machine - NO private keys needed):
+   ```bash
+   jm-wallet create-bond-address <pubkey_from_step_1> \
+     --locktime-date "2026-01" \
+     --network mainnet
+   ```
+   This creates the bond address WITHOUT requiring your mnemonic. Note the address.
+
+3. **Fund the bond address**: Send Bitcoin to the address from step 2.
+
+4. **Generate hot wallet keypair** (on online machine):
+   ```bash
+   jm-wallet generate-hot-keypair
+   ```
+   This creates a random keypair. Store both the private and public keys securely.
+
+5. **Prepare certificate message** (on online machine - NO private keys needed):
+   ```bash
+   jm-wallet prepare-certificate-message <bond_address> \
+     --cert-pubkey <hot_wallet_pubkey> \
+     --cert-expiry-blocks 104832  # ~2 years
+   ```
+   This outputs the message that needs to be signed.
+
+6. **Sign the message** (using hardware wallet with Sparrow or similar):
+   - Open Sparrow Wallet and connect your hardware wallet
+   - Go to Tools -> Sign/Verify Message
+   - Select the address that matches your bond's public key
+   - Paste the hex message from step 5
+   - Sign with your hardware wallet
+   - Copy the resulting signature
+
+7. **Import certificate** (on online machine):
+   ```bash
+   jm-wallet import-certificate <bond_address> \
+     --cert-pubkey <hot_wallet_pubkey> \
+     --cert-privkey <hot_wallet_privkey> \
+     --cert-signature <signature_from_hardware_wallet> \
+     --cert-expiry 52  # Periods (104832 blocks / 2016)
+   ```
+   This imports the certificate into the bond registry.
+
+8. **Run maker**: The maker will automatically detect certificates and use them.
+   ```bash
+   jm-maker start --mnemonic-file hot-wallet.enc
+   ```
+
+**Security benefits:**
+- Bond UTXO private key NEVER leaves the hardware wallet
+- No mnemonic exposure to online systems
+- Certificate expires after configurable period (~2 years default)
+- If hot wallet is compromised, attacker can only impersonate bond until expiry
+- Bond funds remain safe in cold storage
+
+**Certificate expiry:** Specified in 2016-block periods (Bitcoin difficulty adjustment period). Example: `cert_expiry=52` means 52 x 2016 = 104,832 blocks (approximately 2 years). After expiry, sign a new certificate message to continue using the bond.
+
 ### Protocol: Bond Announcement
 
 Fidelity bonds are only sent via PRIVMSG as a direct response to `!orderbook` requests. They are not included in the initial PUBLIC offer announcements. The reference orderbook watcher only requests offers once on startup, so any offer posted afterwards does not show a bond. This does not affect takers who will always receive bond proofs when they request the orderbook.

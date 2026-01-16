@@ -32,6 +32,13 @@ class FidelityBondInfo(BaseModel):
     vout: int | None = None
     value: int | None = None  # in satoshis
     confirmations: int | None = None
+    # Certificate info (for cold wallet support)
+    # Allows keeping bond UTXO private key in cold storage (hardware wallet)
+    # while using a hot wallet certificate key for signing nick proofs
+    cert_pubkey: str | None = None  # Hot wallet certificate public key (hex)
+    cert_privkey: str | None = None  # Hot wallet certificate private key (hex)
+    cert_signature: str | None = None  # Certificate signature by UTXO key (hex)
+    cert_expiry: int | None = None  # Certificate expiry in 2016-block periods
 
     @property
     def is_funded(self) -> bool:
@@ -52,6 +59,33 @@ class FidelityBondInfo(BaseModel):
 
         remaining = self.locktime - int(time.time())
         return max(0, remaining)
+
+    @property
+    def has_certificate(self) -> bool:
+        """Check if this bond has a certificate configured (for cold wallet mode)."""
+        return (
+            self.cert_pubkey is not None
+            and self.cert_privkey is not None
+            and self.cert_signature is not None
+            and self.cert_expiry is not None
+        )
+
+    def is_certificate_expired(self, current_block_height: int) -> bool:
+        """
+        Check if the certificate has expired based on current block height.
+
+        Args:
+            current_block_height: Current blockchain height
+
+        Returns:
+            True if certificate is expired or not configured
+        """
+        if not self.has_certificate or self.cert_expiry is None:
+            return True
+
+        # cert_expiry is stored in 2016-block periods
+        expiry_height = self.cert_expiry * 2016
+        return current_block_height >= expiry_height
 
 
 class BondRegistry(BaseModel):
