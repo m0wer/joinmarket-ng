@@ -538,6 +538,22 @@ class Notifier:
             priority=NotificationPriority.FAILURE,
         )
 
+    async def notify_directory_reconnect(
+        self,
+        server: str,
+        connected_count: int,
+        total_count: int,
+    ) -> bool:
+        """Notify when successfully reconnected to a directory server."""
+        if not self.config.notify_disconnect:
+            return False
+
+        return await self._send(
+            title="Directory Server Reconnected",
+            body=(f"Server: {server[:30]}...\nConnected: {connected_count}/{total_count}"),
+            priority=NotificationPriority.SUCCESS,
+        )
+
     # =========================================================================
     # Taker notifications
     # =========================================================================
