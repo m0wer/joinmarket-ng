@@ -395,20 +395,25 @@ update_packages() {
 
     local git_base="git+https://github.com/${GITHUB_REPO}.git@${commit_hash}"
 
-    # Update core libraries
+    # Update core libraries (force reinstall to handle same version, different commit)
     print_info "Updating jmcore..."
-    pip install --upgrade "${git_base}#subdirectory=jmcore" --quiet
+    pip install --upgrade --force-reinstall --no-deps "${git_base}#subdirectory=jmcore" --quiet
     print_success "jmcore updated"
 
     print_info "Updating jmwallet..."
-    pip install --upgrade "${git_base}#subdirectory=jmwallet" --quiet
+    pip install --upgrade --force-reinstall --no-deps "${git_base}#subdirectory=jmwallet" --quiet
     print_success "jmwallet updated"
+
+    # Reinstall dependencies to ensure they're satisfied
+    print_info "Updating dependencies..."
+    pip install --upgrade jmcore jmwallet --quiet
 
     # Update/install maker (default: install if not present)
     local should_install_maker="${INSTALL_MAKER:-true}"
     if pip show jm-maker &> /dev/null; then
         print_info "Updating maker..."
-        pip install --upgrade "${git_base}#subdirectory=maker" --quiet
+        pip install --upgrade --force-reinstall --no-deps "${git_base}#subdirectory=maker" --quiet
+        pip install --upgrade jm-maker --quiet
         print_success "Maker updated"
     elif [[ "$should_install_maker" == "true" ]]; then
         print_info "Installing maker..."
@@ -420,7 +425,8 @@ update_packages() {
     local should_install_taker="${INSTALL_TAKER:-true}"
     if pip show jm-taker &> /dev/null; then
         print_info "Updating taker..."
-        pip install --upgrade "${git_base}#subdirectory=taker" --quiet
+        pip install --upgrade --force-reinstall --no-deps "${git_base}#subdirectory=taker" --quiet
+        pip install --upgrade jm-taker --quiet
         print_success "Taker updated"
     elif [[ "$should_install_taker" == "true" ]]; then
         print_info "Installing taker..."
