@@ -1,0 +1,13 @@
+# Trusted GPG Keys for JoinMarket NG Release Verification
+#
+# Format: <fingerprint> <name>
+# Lines starting with # are comments
+#
+# To add your key:
+# 1. Submit a PR adding your fingerprint and name to this file
+# 2. Ensure your public key is available on public keyservers or GitHub
+#
+# Example:
+# ABCD1234ABCD1234ABCD1234ABCD1234ABCD1234 Alice Developer
+
+# Add trusted keys below this line:

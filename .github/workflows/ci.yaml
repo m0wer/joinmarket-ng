@@ -79,6 +79,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Get Git commit timestamp for reproducible builds
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> $GITHUB_ENV
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -103,6 +106,9 @@ jobs:
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache,mode=max
           build-args: |
             BUILDKIT_INLINE_CACHE=1
+            SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
+        env:
+          SOURCE_DATE_EPOCH: ${{ env.SOURCE_DATE_EPOCH }}
 
   # ==========================================================================
   # Stage 2a: Unit tests (combined in single job for efficiency)
@@ -1082,6 +1088,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Get Git commit timestamp for reproducible builds
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> $GITHUB_ENV
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -1107,6 +1116,9 @@ jobs:
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache-arm64,mode=max
           build-args: |
             BUILDKIT_INLINE_CACHE=1
+            SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
+        env:
+          SOURCE_DATE_EPOCH: ${{ env.SOURCE_DATE_EPOCH }}
 
   # ==========================================================================
   # Stage 4b: ARMv7 builds (parallel with everything else)
@@ -1152,6 +1164,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Get Git commit timestamp for reproducible builds
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> $GITHUB_ENV
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
@@ -1182,6 +1197,9 @@ jobs:
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache-armv7,mode=max
           build-args: |
             BUILDKIT_INLINE_CACHE=1
+            SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
+        env:
+          SOURCE_DATE_EPOCH: ${{ env.SOURCE_DATE_EPOCH }}
 
   # ==========================================================================
   # Stage 4c: Publish images (combine manifests and promote to production)

@@ -165,6 +165,22 @@ joinmarket-ng/
 └── tests/               # End-to-end tests
 ```
 
+## Security
+
+### Reproducible Builds
+
+All Docker images are built reproducibly using `SOURCE_DATE_EPOCH` timestamps. This allows anyone to verify that released images match the source code.
+
+```bash
+# Verify a release (checks GPG signatures and image digests)
+./scripts/verify-release.sh 1.0.0
+
+# Reproduce the build locally
+./scripts/verify-release.sh 1.0.0 --reproduce
+```
+
+Releases are signed by trusted parties who have verified the build. See [DOCS.md](./DOCS.md#reproducible-builds) for details on verification and signing.
+
 ## Help & Community
 
 - **Installation issues:** See [INSTALL.md](./INSTALL.md)

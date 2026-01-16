@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reproducible Docker Builds**: All Docker images now support reproducible builds using `SOURCE_DATE_EPOCH`. This allows anyone to verify that released images were built from the published source code.
+  - Dockerfiles updated to use `SOURCE_DATE_EPOCH` build arg for consistent timestamps
+  - CI/CD workflows pass git commit timestamp to builds
+  - Release workflow generates manifest files with image digests
+  - New verification script: `scripts/verify-release.sh` to verify GPG signatures and image digests
+  - New signing script: `scripts/sign-release.sh` for trusted parties to attest releases
+  - GPG signature infrastructure in `signatures/` directory
+  - Documentation added to DOCS.md and README.md
+
 - **Directory Server Auto-Reconnection**: Makers now automatically attempt to reconnect to disconnected directory servers. This improves maker uptime and resilience against temporary network issues or directory server restarts. Previously, if a maker lost connection to a directory server during startup or due to network issues, it would remain disconnected indefinitely.
   - New config options: `directory_reconnect_interval` (default: 300s/5min) and `directory_reconnect_max_retries` (default: 0 = unlimited)
   - On successful reconnection, offers are automatically re-announced to the reconnected directory
