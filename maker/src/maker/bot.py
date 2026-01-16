@@ -874,13 +874,29 @@ class MakerBot:
                 )
                 return
 
-            # Check if offers actually changed
+            # Check if offers actually changed (compare maxsize for each offer by ID)
+            offers_changed = False
             if self.current_offers and new_offers:
-                old_maxsize = self.current_offers[0].maxsize
-                new_maxsize = new_offers[0].maxsize
-                if old_maxsize == new_maxsize:
-                    logger.debug("Offer maxsize unchanged, skipping re-announcement")
+                # Build lookup by offer ID for comparison
+                old_offers_by_id = {o.oid: o for o in self.current_offers}
+                new_offers_by_id = {o.oid: o for o in new_offers}
+
+                # Check if offer count changed
+                if set(old_offers_by_id.keys()) != set(new_offers_by_id.keys()):
+                    offers_changed = True
+                else:
+                    # Check if any offer's maxsize changed
+                    for oid, new_offer in new_offers_by_id.items():
+                        old_offer = old_offers_by_id.get(oid)
+                        if old_offer is None or old_offer.maxsize != new_offer.maxsize:
+                            offers_changed = True
+                            break
+
+                if not offers_changed:
+                    logger.debug("Offer maxsizes unchanged, skipping re-announcement")
                     return
+            else:
+                offers_changed = True  # First time or recovering from no offers
 
             # Regenerate nick when offers change for additional privacy
             # This makes it harder for observers to track maker activity over time
@@ -892,7 +908,8 @@ class MakerBot:
 
             self.current_offers = new_offers
             await self._announce_offers()
-            logger.info(f"Updated and re-announced offers: maxsize={new_offers[0].maxsize:,} sats")
+            offer_summary = ", ".join(f"oid={o.oid}:{o.maxsize:,}" for o in new_offers)
+            logger.info(f"Updated and re-announced {len(new_offers)} offer(s): {offer_summary}")
         except Exception as e:
             logger.error(f"Failed to update offers: {e}")
 
@@ -1547,6 +1564,10 @@ class MakerBot:
         """Handle !fill request from taker.
 
         Fill message format: fill <oid> <amount> <taker_nacl_pk> <commitment> [<signing_pk> <sig>]
+
+        The offer_id (oid) is used to identify which offer the taker wants to fill.
+        This allows makers to have multiple offers (e.g., relative and absolute fee)
+        simultaneously, each with a unique ID.
         """
         try:
             parts = msg.split()
@@ -1571,15 +1592,18 @@ class MakerBot:
                 )
                 return
 
-            if offer_id >= len(self.current_offers):
-                logger.warning(f"Invalid offer ID: {offer_id}")
+            # Find the offer by ID (supports multiple offers with different IDs)
+            offer = self.offer_manager.get_offer_by_id(self.current_offers, offer_id)
+            if offer is None:
+                logger.warning(
+                    f"Invalid offer ID: {offer_id} (available: "
+                    f"{[o.oid for o in self.current_offers]})"
+                )
                 return
-
-            offer = self.current_offers[offer_id]
 
             is_valid, error = self.offer_manager.validate_offer_fill(offer, amount)
             if not is_valid:
-                logger.warning(f"Invalid fill request: {error}")
+                logger.warning(f"Invalid fill request for offer {offer_id}: {error}")
                 return
 
             session = CoinJoinSession(
@@ -1601,7 +1625,10 @@ class MakerBot:
 
             if success:
                 self.active_sessions[taker_nick] = session
-                logger.info(f"Created CoinJoin session with {taker_nick}")
+                logger.info(
+                    f"Created CoinJoin session with {taker_nick} "
+                    f"(offer_id={offer_id}, type={offer.ordertype.value})"
+                )
 
                 # Fire-and-forget notification
                 asyncio.create_task(

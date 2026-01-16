@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Multi-Offer Support (Dual Offers)**: Makers can now advertise both relative and absolute fee offers simultaneously with different offer IDs. This allows makers to serve different types of takers (those preferring percentage-based fees vs fixed fees) from a single instance.
+  - New `--dual-offers` CLI flag for `jm-maker start` creates both offer types automatically
+  - Each offer type gets a unique offer ID (0 for relative, 1 for absolute)
+  - !fill requests are routed to the correct offer based on the offer ID
+  - Fidelity bond value is shared across all offers
+  - Extensible architecture: `offer_configs` list in `MakerConfig` allows N offers (internal API, not yet exposed via CLI for simplicity)
+  - Usage: `jm-maker start --dual-offers --cj-fee-relative 0.001 --cj-fee-absolute 500`
+
 - **Wallet Import Command**: New `jm-wallet import` command to recover existing wallets from BIP39 mnemonic phrases. Features interactive word-by-word input with Tab completion (where readline is available), automatic word auto-completion when only one BIP39 word matches the prefix, suggestions display when multiple words match, mnemonic checksum validation after entry, and optional encryption of the saved wallet file. Supports 12, 15, 18, 21, and 24-word mnemonics.
 
 ### Fixed

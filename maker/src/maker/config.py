@@ -8,7 +8,70 @@ from enum import Enum
 
 from jmcore.config import TorControlConfig, WalletConfig
 from jmcore.models import OfferType
-from pydantic import Field, model_validator
+from pydantic import BaseModel, Field, model_validator
+
+
+class OfferConfig(BaseModel):
+    """
+    Configuration for a single offer.
+
+    This model represents an individual offer that the maker will advertise.
+    Multiple OfferConfigs can be used to create multiple offers simultaneously
+    (e.g., one relative and one absolute fee offer).
+
+    The offer_id is assigned automatically based on position in the list.
+    """
+
+    offer_type: OfferType = Field(
+        default=OfferType.SW0_RELATIVE,
+        description="Offer type (sw0reloffer for relative, sw0absoffer for absolute)",
+    )
+    min_size: int = Field(
+        default=100_000,
+        ge=0,
+        description="Minimum CoinJoin amount in satoshis",
+    )
+    cj_fee_relative: str = Field(
+        default="0.001",
+        description="Relative CJ fee as decimal (0.001 = 0.1%). Used when offer_type is relative.",
+    )
+    cj_fee_absolute: int = Field(
+        default=500,
+        ge=0,
+        description="Absolute CJ fee in satoshis. Used when offer_type is absolute.",
+    )
+    tx_fee_contribution: int = Field(
+        default=0,
+        ge=0,
+        description="Transaction fee contribution in satoshis",
+    )
+
+    @model_validator(mode="after")
+    def validate_fee_config(self) -> OfferConfig:
+        """Validate fee configuration based on offer type."""
+        if self.offer_type in (OfferType.SW0_RELATIVE, OfferType.SWA_RELATIVE):
+            try:
+                cj_fee_float = float(self.cj_fee_relative)
+                if cj_fee_float <= 0:
+                    raise ValueError(
+                        f"cj_fee_relative must be > 0 for relative offer types, "
+                        f"got {self.cj_fee_relative}"
+                    )
+            except ValueError as e:
+                if "could not convert" in str(e):
+                    raise ValueError(
+                        f"cj_fee_relative must be a valid number, got {self.cj_fee_relative}"
+                    ) from e
+                raise
+        return self
+
+    def get_cjfee(self) -> str | int:
+        """Get the appropriate cjfee value based on offer type."""
+        if self.offer_type in (OfferType.SW0_ABSOLUTE, OfferType.SWA_ABSOLUTE):
+            return self.cj_fee_absolute
+        return self.cj_fee_relative
+
+    model_config = {"frozen": False}
 
 
 class MergeAlgorithm(str, Enum):
@@ -40,6 +103,13 @@ class MakerConfig(WalletConfig):
     Inherits base wallet configuration from jmcore.config.WalletConfig
     and adds maker-specific settings for offers, hidden services, and
     UTXO selection.
+
+    Offer Configuration:
+    - Simple single-offer: use offer_type, min_size, cj_fee_relative/absolute, tx_fee_contribution
+    - Multi-offer setup: use offer_configs list (overrides single-offer fields when non-empty)
+
+    The multi-offer system allows running both relative and absolute fee offers simultaneously,
+    each with a unique offer ID. This is extensible to support N offers in the future.
     """
 
     # Hidden service configuration for direct peer connections
@@ -65,7 +135,17 @@ class MakerConfig(WalletConfig):
         description="Tor control port configuration",
     )
 
-    # Offer configuration
+    # Multi-offer configuration (takes precedence over single-offer fields when non-empty)
+    # Each OfferConfig gets a unique offer_id (0, 1, 2, ...) based on position
+    offer_configs: list[OfferConfig] = Field(
+        default_factory=list,
+        description=(
+            "List of offer configurations. When non-empty, overrides single-offer fields. "
+            "Allows running multiple offers (e.g., relative + absolute) simultaneously."
+        ),
+    )
+
+    # Single offer configuration (legacy, used when offer_configs is empty)
     offer_type: OfferType = Field(
         default=OfferType.SW0_RELATIVE, description="Offer type (relative/absolute fee)"
     )
@@ -178,20 +258,49 @@ class MakerConfig(WalletConfig):
         if self.bitcoin_network is None:
             object.__setattr__(self, "bitcoin_network", self.network)
 
-        # Validate cj_fee_relative for relative offer types
-        if self.offer_type in (OfferType.SW0_RELATIVE, OfferType.SWA_RELATIVE):
-            try:
-                cj_fee_float = float(self.cj_fee_relative)
-                if cj_fee_float <= 0:
-                    raise ValueError(
-                        f"cj_fee_relative must be > 0 for relative offer types, "
-                        f"got {self.cj_fee_relative}"
-                    )
-            except ValueError as e:
-                if "could not convert" in str(e):
-                    raise ValueError(
-                        f"cj_fee_relative must be a valid number, got {self.cj_fee_relative}"
-                    ) from e
-                raise
+        # Only validate single-offer fields if offer_configs is empty
+        # (when offer_configs is set, those fields are ignored)
+        if not self.offer_configs:
+            # Validate cj_fee_relative for relative offer types
+            if self.offer_type in (OfferType.SW0_RELATIVE, OfferType.SWA_RELATIVE):
+                try:
+                    cj_fee_float = float(self.cj_fee_relative)
+                    if cj_fee_float <= 0:
+                        raise ValueError(
+                            f"cj_fee_relative must be > 0 for relative offer types, "
+                            f"got {self.cj_fee_relative}"
+                        )
+                except ValueError as e:
+                    if "could not convert" in str(e):
+                        raise ValueError(
+                            f"cj_fee_relative must be a valid number, got {self.cj_fee_relative}"
+                        ) from e
+                    raise
 
         return self
+
+    def get_effective_offer_configs(self) -> list[OfferConfig]:
+        """
+        Get the effective list of offer configurations.
+
+        If offer_configs is set (non-empty), returns it directly.
+        Otherwise, creates a single OfferConfig from the legacy single-offer fields.
+
+        This provides backward compatibility while supporting the new multi-offer system.
+
+        Returns:
+            List of OfferConfig objects to use for creating offers.
+        """
+        if self.offer_configs:
+            return self.offer_configs
+
+        # Create single OfferConfig from legacy fields
+        return [
+            OfferConfig(
+                offer_type=self.offer_type,
+                min_size=self.min_size,
+                cj_fee_relative=self.cj_fee_relative,
+                cj_fee_absolute=self.cj_fee_absolute,
+                tx_fee_contribution=self.tx_fee_contribution,
+            )
+        ]

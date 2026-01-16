@@ -2,6 +2,7 @@
 Offer management for makers.
 
 Creates and manages liquidity offers based on wallet balance and configuration.
+Supports multiple simultaneous offers with different fee structures (relative/absolute).
 """
 
 from __future__ import annotations
@@ -10,13 +11,16 @@ from jmcore.models import Offer, OfferType
 from jmwallet.wallet.service import WalletService
 from loguru import logger
 
-from maker.config import MakerConfig
+from maker.config import MakerConfig, OfferConfig
 from maker.fidelity import get_best_fidelity_bond
 
 
 class OfferManager:
     """
     Creates and manages offers for the maker bot.
+
+    Supports creating multiple offers simultaneously, each with a unique offer ID.
+    This allows makers to advertise both relative and absolute fee offers at the same time.
     """
 
     def __init__(self, wallet: WalletService, config: MakerConfig, maker_nick: str):
@@ -30,12 +34,12 @@ class OfferManager:
 
         Logic:
         1. Find mixdepth with maximum balance
-        2. Calculate available amount (balance - dust - txfee)
-        3. Create offer with configured fee structure
+        2. Calculate available amount (balance - dust - max_txfee)
+        3. Create offer(s) with configured fee structure(s)
         4. Attach fidelity bond value if available
 
         Returns:
-            List of offers (usually just one)
+            List of offers. Each offer gets a unique oid (0, 1, 2, ...).
         """
         try:
             balances = {}
@@ -52,34 +56,10 @@ class OfferManager:
             max_mixdepth = max(available_mixdepths, key=lambda md: available_mixdepths[md])
             max_balance = available_mixdepths[max_mixdepth]
 
-            # Reserve dust threshold + tx fee contribution
-            max_available = max_balance - max(
-                self.config.dust_threshold, self.config.tx_fee_contribution
-            )
+            # Get effective offer configurations
+            offer_configs = self.config.get_effective_offer_configs()
 
-            if max_available <= self.config.min_size:
-                logger.warning(f"Insufficient balance: {max_available} <= {self.config.min_size}")
-                return []
-
-            if self.config.offer_type in (OfferType.SW0_RELATIVE, OfferType.SWA_RELATIVE):
-                cjfee = self.config.cj_fee_relative
-
-                # Validate cj_fee_relative to prevent division by zero
-                cj_fee_float = float(self.config.cj_fee_relative)
-                if cj_fee_float <= 0:
-                    logger.error(
-                        f"Invalid cj_fee_relative: {self.config.cj_fee_relative}. "
-                        "Must be > 0 for relative offer types."
-                    )
-                    return []
-
-                min_size_for_profit = int(1.5 * self.config.tx_fee_contribution / cj_fee_float)
-                min_size = max(min_size_for_profit, self.config.min_size)
-            else:
-                cjfee = str(self.config.cj_fee_absolute)
-                min_size = self.config.min_size
-
-            # Get fidelity bond value if available
+            # Get fidelity bond value if available (shared across all offers)
             fidelity_bond_value = 0
             bond = await get_best_fidelity_bond(self.wallet)
             if bond:
@@ -89,29 +69,104 @@ class OfferManager:
                     f"value={bond.value} sats, bond_value={bond.bond_value}"
                 )
 
+            # Create an offer for each configuration
+            offers: list[Offer] = []
+            for offer_id, offer_cfg in enumerate(offer_configs):
+                offer = self._create_single_offer(
+                    offer_id=offer_id,
+                    offer_cfg=offer_cfg,
+                    max_balance=max_balance,
+                    fidelity_bond_value=fidelity_bond_value,
+                )
+                if offer:
+                    offers.append(offer)
+
+            if not offers:
+                logger.warning("No valid offers could be created")
+                return []
+
+            logger.info(f"Created {len(offers)} offer(s)")
+            return offers
+
+        except Exception as e:
+            logger.error(f"Failed to create offers: {e}")
+            return []
+
+    def _create_single_offer(
+        self,
+        offer_id: int,
+        offer_cfg: OfferConfig,
+        max_balance: int,
+        fidelity_bond_value: int,
+    ) -> Offer | None:
+        """
+        Create a single offer from configuration.
+
+        Args:
+            offer_id: Unique offer ID (0, 1, 2, ...)
+            offer_cfg: Offer configuration
+            max_balance: Maximum available balance
+            fidelity_bond_value: Fidelity bond value to attach
+
+        Returns:
+            Offer object or None if creation failed
+        """
+        try:
+            # Reserve dust threshold + tx fee contribution
+            max_available = max_balance - max(
+                self.config.dust_threshold, offer_cfg.tx_fee_contribution
+            )
+
+            if max_available <= offer_cfg.min_size:
+                logger.warning(
+                    f"Offer {offer_id}: Insufficient balance: "
+                    f"{max_available} <= {offer_cfg.min_size}"
+                )
+                return None
+
+            # Calculate min_size based on offer type
+            if offer_cfg.offer_type in (OfferType.SW0_RELATIVE, OfferType.SWA_RELATIVE):
+                cjfee = offer_cfg.cj_fee_relative
+
+                # Validate cj_fee_relative to prevent division by zero
+                cj_fee_float = float(offer_cfg.cj_fee_relative)
+                if cj_fee_float <= 0:
+                    logger.error(
+                        f"Offer {offer_id}: Invalid cj_fee_relative: {offer_cfg.cj_fee_relative}. "
+                        "Must be > 0 for relative offer types."
+                    )
+                    return None
+
+                # Calculate minimum size for profitability
+                min_size_for_profit = int(1.5 * offer_cfg.tx_fee_contribution / cj_fee_float)
+                min_size = max(min_size_for_profit, offer_cfg.min_size)
+            else:
+                cjfee = str(offer_cfg.cj_fee_absolute)
+                min_size = offer_cfg.min_size
+
             offer = Offer(
                 counterparty=self.maker_nick,
-                oid=0,
-                ordertype=self.config.offer_type,
+                oid=offer_id,
+                ordertype=offer_cfg.offer_type,
                 minsize=min_size,
                 maxsize=max_available,
-                txfee=self.config.tx_fee_contribution,
+                txfee=offer_cfg.tx_fee_contribution,
                 cjfee=cjfee,
                 fidelity_bond_value=fidelity_bond_value,
             )
 
             logger.info(
-                f"Created offer: type={offer.ordertype}, "
+                f"Created offer {offer_id}: type={offer.ordertype.value}, "
                 f"size={min_size}-{max_available}, "
-                f"cjfee={cjfee}, txfee={self.config.tx_fee_contribution}, "
+                f"cjfee={cjfee}, txfee={offer_cfg.tx_fee_contribution}, "
                 f"bond_value={fidelity_bond_value}"
             )
 
-            return [offer]
+            return offer
 
         except Exception as e:
-            logger.error(f"Failed to create offers: {e}")
-            return []
+            logger.error(f"Failed to create offer {offer_id}: {e}")
+            return None
 
     def validate_offer_fill(self, offer: Offer, amount: int) -> tuple[bool, str]:
         """
@@ -131,3 +186,19 @@ class OfferManager:
             return False, f"Amount {amount} above maximum {offer.maxsize}"
 
         return True, ""
+
+    def get_offer_by_id(self, offers: list[Offer], offer_id: int) -> Offer | None:
+        """
+        Find an offer by its ID.
+
+        Args:
+            offers: List of current offers
+            offer_id: Offer ID to find
+
+        Returns:
+            Offer with matching oid, or None if not found
+        """
+        for offer in offers:
+            if offer.oid == offer_id:
+                return offer
+        return None

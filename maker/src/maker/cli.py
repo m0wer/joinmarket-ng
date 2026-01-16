@@ -28,7 +28,7 @@ from loguru import logger
 from pydantic import SecretStr
 
 from maker.bot import MakerBot
-from maker.config import MakerConfig, MergeAlgorithm
+from maker.config import MakerConfig, MergeAlgorithm, OfferConfig
 
 app = typer.Typer(add_completion=False)
 
@@ -67,6 +67,7 @@ def build_maker_config(
     merge_algorithm: str | None = None,
     fidelity_bond_locktimes: list[int] | None = None,
     fidelity_bond_index: int | None = None,
+    dual_offers: bool = False,
 ) -> MakerConfig:
     """
     Build MakerConfig from unified settings with CLI overrides.
@@ -179,13 +180,46 @@ def build_maker_config(
 
     # Determine offer type and fee values
     # CLI explicit values take precedence
-    if cj_fee_relative is not None and cj_fee_absolute is not None:
+    offer_configs: list[OfferConfig] = []
+
+    if dual_offers:
+        # Create both relative and absolute offers
+        # Use CLI values if provided, otherwise use settings
+        rel_fee = cj_fee_relative if cj_fee_relative is not None else settings.maker.cj_fee_relative
+        abs_fee = cj_fee_absolute if cj_fee_absolute is not None else settings.maker.cj_fee_absolute
+        tx_fee = (
+            tx_fee_contribution
+            if tx_fee_contribution is not None
+            else settings.maker.tx_fee_contribution
+        )
+        min_sz = min_size if min_size is not None else settings.maker.min_size
+
+        offer_configs = [
+            OfferConfig(
+                offer_type=OfferType.SW0_RELATIVE,
+                min_size=min_sz,
+                cj_fee_relative=rel_fee,
+                cj_fee_absolute=abs_fee,
+                tx_fee_contribution=tx_fee,
+            ),
+            OfferConfig(
+                offer_type=OfferType.SW0_ABSOLUTE,
+                min_size=min_sz,
+                cj_fee_relative=rel_fee,
+                cj_fee_absolute=abs_fee,
+                tx_fee_contribution=tx_fee,
+            ),
+        ]
+        # Set dummy values for legacy fields (they won't be used)
+        parsed_offer_type = OfferType.SW0_RELATIVE
+        actual_cj_fee_relative = rel_fee
+        actual_cj_fee_absolute = abs_fee
+    elif cj_fee_relative is not None and cj_fee_absolute is not None:
         raise ValueError(
             "Cannot specify both --cj-fee-relative and --cj-fee-absolute. "
-            "Use only one to set the fee model."
+            "Use --dual-offers to create both offer types, or use only one fee option."
         )
-
-    if cj_fee_absolute is not None:
+    elif cj_fee_absolute is not None:
         # User explicitly set absolute fee via CLI
         parsed_offer_type = OfferType.SW0_ABSOLUTE
         actual_cj_fee_relative = settings.maker.cj_fee_relative
@@ -258,6 +292,7 @@ def build_maker_config(
         fidelity_bond_locktimes=list(effective_locktimes),
         fidelity_bond_index=effective_bond_index,
         merge_algorithm=parsed_merge_algorithm,
+        offer_configs=offer_configs,
     )
 
 
@@ -487,6 +522,17 @@ def start(
             help="UTXO selection strategy: default, gradual, greedy, random",
         ),
     ] = None,
+    dual_offers: Annotated[
+        bool,
+        typer.Option(
+            "--dual-offers",
+            help=(
+                "Create both relative and absolute fee offers simultaneously. "
+                "Each offer gets a unique ID (0 for relative, 1 for absolute). "
+                "Use with --cj-fee-relative and --cj-fee-absolute to set fees for each."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """
     Start the maker bot.
@@ -545,6 +591,7 @@ def start(
             merge_algorithm=merge_algorithm,
             fidelity_bond_locktimes=fidelity_bond_locktimes if fidelity_bond_locktimes else None,
             fidelity_bond_index=fidelity_bond_index,
+            dual_offers=dual_offers,
         )
     except ValueError as e:
         logger.error(str(e))
