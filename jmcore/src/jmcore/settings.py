@@ -459,7 +459,7 @@ class DirectoryServerSettings(BaseModel):
         description="Port for health check endpoint (0 = let OS assign)",
     )
     motd: str = Field(
-        default="JoinMarket NG Directory Server https://github.com/m0wer/joinmarket-ng/tree/master",
+        default="JoinMarket NG Directory Server https://github.com/m0wer/joinmarket-ng/",
         description="Message of the day sent to clients",
     )
 

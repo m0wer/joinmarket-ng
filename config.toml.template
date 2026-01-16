@@ -227,7 +227,7 @@
 # health_check_port = 8080
 
 # Message of the day
-# motd = "JoinMarket NG Directory Server https://github.com/m0wer/joinmarket-ng/tree/master"
+# motd = "JoinMarket NG Directory Server https://github.com/m0wer/joinmarket-ng/"
 
 # ============================================================================
 # Orderbook Watcher Settings
