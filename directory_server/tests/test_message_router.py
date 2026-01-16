@@ -357,3 +357,138 @@ class TestOfferTracking:
         stats = router.get_offer_stats()
         assert stats["total_offers"] == 0
         assert stats["peers_with_offers"] == 0
+
+
+class TestChunkedPeerlist:
+    """Tests for chunked peerlist sending."""
+
+    @pytest.mark.anyio
+    async def test_send_peerlist_chunks_large_list(self, registry):
+        """Should send peerlist in chunks for large peer lists."""
+        sent_messages: list[tuple[str, bytes]] = []
+
+        async def mock_send(peer_key: str, data: bytes) -> None:
+            sent_messages.append((peer_key, data))
+
+        router = MessageRouter(
+            peer_registry=registry,
+            send_callback=mock_send,
+        )
+
+        # Create 50 peers (more than default chunk_size=20)
+        # Use valid onion address format: 56 chars of [a-z2-7]
+        # Valid chars in base32: a-z and 2-7 (no 0, 1, 8, 9)
+        valid_chars = "abcdefghijklmnopqrstuvwxyz234567"
+        for i in range(50):
+            # Generate valid onion address using only valid base32 chars
+            # Use different starting chars to make unique addresses
+            char1 = valid_chars[i % 32]
+            char2 = valid_chars[(i // 32) % 32]
+            onion = f"{char1}{char2}{'a' * 54}.onion"
+            peer = PeerInfo(
+                nick=f"peer{i:02d}",
+                onion_address=onion,
+                port=5222,
+                network=NetworkType.MAINNET,
+                status=PeerStatus.HANDSHAKED,
+            )
+            registry.register(peer)
+
+        # Create requesting peer
+        requester = PeerInfo(
+            nick="requester",
+            onion_address="r" * 56 + ".onion",
+            port=5222,
+            network=NetworkType.MAINNET,
+            status=PeerStatus.HANDSHAKED,
+        )
+        registry.register(requester)
+
+        # Send peerlist
+        await router.send_peerlist(requester.location_string, NetworkType.MAINNET, chunk_size=20)
+
+        # Should have sent 3 chunks (50 peers / 20 = 2.5, rounded up)
+        # Note: requester is also in the registry so it's 51 total, but requester
+        # isn't excluded from peerlist by default
+        assert len(sent_messages) >= 3
+
+        # Parse messages to verify content
+        total_peers = 0
+        for peer_key, data in sent_messages:
+            assert peer_key == requester.location_string
+            envelope = MessageEnvelope.from_bytes(data)
+            assert envelope.message_type == MessageType.PEERLIST
+            # Count comma-separated entries (each peer is an entry)
+            if envelope.payload:
+                entries = envelope.payload.split(",")
+                total_peers += len(entries)
+
+        # Should have all peers (including requester since it's in the registry)
+        assert total_peers >= 50
+
+    @pytest.mark.anyio
+    async def test_send_peerlist_single_chunk_for_small_list(self, registry):
+        """Should send single chunk for small peer lists."""
+        sent_messages: list[tuple[str, bytes]] = []
+
+        async def mock_send(peer_key: str, data: bytes) -> None:
+            sent_messages.append((peer_key, data))
+
+        router = MessageRouter(
+            peer_registry=registry,
+            send_callback=mock_send,
+        )
+
+        # Create 5 peers (less than chunk_size)
+        for i in range(5):
+            peer = PeerInfo(
+                nick=f"peer{i}",
+                onion_address=f"{chr(ord('a') + i) * 56}.onion",
+                port=5222,
+                network=NetworkType.MAINNET,
+                status=PeerStatus.HANDSHAKED,
+            )
+            registry.register(peer)
+
+        # Create requesting peer
+        requester = PeerInfo(
+            nick="requester",
+            onion_address="r" * 56 + ".onion",
+            port=5222,
+            network=NetworkType.MAINNET,
+            status=PeerStatus.HANDSHAKED,
+        )
+        registry.register(requester)
+
+        # Send peerlist
+        await router.send_peerlist(requester.location_string, NetworkType.MAINNET, chunk_size=20)
+
+        # Should have sent exactly 1 chunk (6 peers including requester < 20)
+        assert len(sent_messages) == 1
+
+    @pytest.mark.anyio
+    async def test_send_peerlist_empty_registry(self, registry):
+        """Should send empty peerlist response when registry is empty."""
+        sent_messages: list[tuple[str, bytes]] = []
+
+        async def mock_send(peer_key: str, data: bytes) -> None:
+            sent_messages.append((peer_key, data))
+
+        router = MessageRouter(
+            peer_registry=registry,
+            send_callback=mock_send,
+        )
+
+        # Send peerlist to a non-existent peer (simulating empty registry scenario)
+        # We need a valid location string format
+        await router.send_peerlist(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion:5222",
+            NetworkType.MAINNET,
+            chunk_size=20,
+        )
+
+        # Should still send one response (empty)
+        assert len(sent_messages) == 1
+        envelope = MessageEnvelope.from_bytes(sent_messages[0][1])
+        assert envelope.message_type == MessageType.PEERLIST
+        assert envelope.payload == ""
