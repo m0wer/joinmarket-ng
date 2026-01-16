@@ -21,9 +21,9 @@ pip install -e ../jmcore .
 
 ## Quick Start
 
-### 1. Generate a Wallet
+### 1. Create or Import a Wallet
 
-Create an encrypted wallet file with password protection:
+**Option A: Generate a new wallet** with password protection:
 
 ```bash
 # Generate with defaults (saves to ~/.joinmarket-ng/wallets/default.mnemonic with password)
@@ -37,6 +37,25 @@ jm-wallet generate --no-save --no-prompt-password
 ```
 
 **IMPORTANT**: The mnemonic is displayed once during generation. Write it down and store it securely offline - it's your only backup if you lose the encrypted file!
+
+**Option B: Import an existing mnemonic** (e.g., migrating from reference implementation):
+
+```bash
+# Interactive word-by-word input with Tab completion
+jm-wallet import
+
+# Or pass mnemonic directly
+jm-wallet import --mnemonic "your twelve word mnemonic phrase ..."
+
+# Import a 12-word mnemonic
+jm-wallet import --words 12
+```
+
+The import command features:
+- Tab completion (where readline is available)
+- Auto-completion when only one BIP39 word matches your prefix
+- Suggestions when multiple words match
+- Mnemonic checksum validation
 
 **Note**: By default, the wallet is saved and password-protected. Use `--no-save` to skip saving or `--no-prompt-password` to skip password protection (not recommended for production).
 
@@ -166,6 +185,25 @@ jm-wallet generate --words 12
 - By default, the wallet is saved and password-protected
 - Use `--no-save` to skip saving, `--no-prompt-password` to skip encryption (not recommended)
 
+### Import Existing Mnemonic
+
+```bash
+# Interactive input with Tab completion and auto-complete
+jm-wallet import
+
+# Import to specific file
+jm-wallet import --output ~/my-wallet.mnemonic
+
+# Pass mnemonic directly (for scripting)
+jm-wallet import --mnemonic "word1 word2 ..." --no-prompt-password
+
+# Import 12-word mnemonic
+jm-wallet import --words 12
+
+# Force overwrite existing file
+jm-wallet import --force
+```
+
 ### View Balance
 
 ```bash
@@ -270,21 +308,76 @@ For detailed help on any command, see the auto-generated help sections below.
 │ --help          Show this message and exit.                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ Commands ───────────────────────────────────────────────────────────────────╮
-│ generate                Generate a new BIP39 mnemonic phrase with secure     │
-│                         entropy.                                             │
-│ info                    Display wallet information and balances by mixdepth. │
-│ list-bonds              List all fidelity bonds in the wallet.               │
-│ generate-bond-address   Generate a fidelity bond (timelocked P2WSH) address. │
-│ send                    Send a simple transaction from wallet to an address. │
-│ history                 View CoinJoin transaction history.                   │
-│ validate                Validate a BIP39 mnemonic phrase.                    │
-│ registry-list           List all fidelity bonds in the registry.             │
-│ registry-show           Show detailed information about a specific fidelity  │
-│                         bond.                                                │
-│ recover-bonds           Recover fidelity bonds by scanning all 960 possible  │
-│                         timelocks.                                           │
-│ registry-sync           Sync fidelity bond funding status from the           │
-│                         blockchain.                                          │
+│ import                        Import an existing BIP39 mnemonic phrase to    │
+│                               create/recover a wallet.                       │
+│ generate                      Generate a new BIP39 mnemonic phrase with      │
+│                               secure entropy.                                │
+│ info                          Display wallet information and balances by     │
+│                               mixdepth.                                      │
+│ list-bonds                    List all fidelity bonds in the wallet.         │
+│ generate-bond-address         Generate a fidelity bond (timelocked P2WSH)    │
+│                               address.                                       │
+│ send                          Send a simple transaction from wallet to an    │
+│                               address.                                       │
+│ history                       View CoinJoin transaction history.             │
+│ validate                      Validate a BIP39 mnemonic phrase.              │
+│ registry-list                 List all fidelity bonds in the registry.       │
+│ registry-show                 Show detailed information about a specific     │
+│                               fidelity bond.                                 │
+│ recover-bonds                 Recover fidelity bonds by scanning all 960     │
+│                               possible timelocks.                            │
+│ registry-sync                 Sync fidelity bond funding status from the     │
+│                               blockchain.                                    │
+│ create-bond-address           Create a fidelity bond address from a public   │
+│                               key (cold wallet workflow).                    │
+│ generate-hot-keypair          Generate a hot wallet keypair for fidelity     │
+│                               bond certificates.                             │
+│ prepare-certificate-message   Prepare certificate message for signing with   │
+│                               hardware wallet (cold wallet support).         │
+│ import-certificate            Import a certificate signature for a fidelity  │
+│                               bond (cold wallet support).                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-wallet import --help</code></summary>
+
+```
+
+ Usage: jm-wallet import [OPTIONS]
+
+ Import an existing BIP39 mnemonic phrase to create/recover a wallet.
+
+ Enter your existing mnemonic interactively with autocomplete support, or pass
+ it directly via --mnemonic.
+ By default, saves to ~/.joinmarket-ng/wallets/default.mnemonic with password
+ protection.
+ Examples:     jm-wallet import                          # Interactive input,
+ 24 words     jm-wallet import --words 12               # Interactive input, 12
+ words     jm-wallet import --mnemonic "word1 word2 ..."  # Direct input
+ jm-wallet import -o my-wallet.mnemonic    # Custom output file
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --words            -w                          INTEGER  Number of words (12, │
+│                                                         15, 18, 21, or 24)   │
+│                                                         [default: 24]        │
+│ --mnemonic         -m                          TEXT     Mnemonic phrase      │
+│                                                         (space-separated)    │
+│ --output           -o                          PATH     Output file path     │
+│ --password         -p                          TEXT     Password for         │
+│                                                         encryption           │
+│ --prompt-password      --no-prompt-password             Prompt for password  │
+│                                                         interactively        │
+│                                                         (default: prompt)    │
+│                                                         [default:            │
+│                                                         prompt-password]     │
+│ --force            -f                                   Overwrite existing   │
+│                                                         file without         │
+│                                                         confirmation         │
+│ --help                                                  Show this message    │
+│                                                         and exit.            │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -299,14 +392,26 @@ For detailed help on any command, see the auto-generated help sections below.
 
  Generate a new BIP39 mnemonic phrase with secure entropy.
 
+ By default, saves to ~/.joinmarket-ng/wallets/default.mnemonic with password
+ protection. Use --no-save to only display the mnemonic without saving.
+
 ╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ --words            -w      INTEGER  Number of words (12, 15, 18, 21, or 24)  │
-│                                     [default: 24]                            │
-│ --save             -s               Save to file                             │
-│ --output           -o      PATH     Output file path                         │
-│ --password         -p      TEXT     Password for encryption                  │
-│ --prompt-password                   Prompt for password interactively        │
-│ --help                              Show this message and exit.              │
+│ --words            -w                          INTEGER  Number of words (12, │
+│                                                         15, 18, 21, or 24)   │
+│                                                         [default: 24]        │
+│ --save                 --no-save                        Save to file         │
+│                                                         (default: save)      │
+│                                                         [default: save]      │
+│ --output           -o                          PATH     Output file path     │
+│ --password         -p                          TEXT     Password for         │
+│                                                         encryption           │
+│ --prompt-password      --no-prompt-password             Prompt for password  │
+│                                                         interactively        │
+│                                                         (default: prompt)    │
+│                                                         [default:            │
+│                                                         prompt-password]     │
+│ --help                                                  Show this message    │
+│                                                         and exit.            │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -405,7 +510,7 @@ For detailed help on any command, see the auto-generated help sections below.
 │ --locktime-date            -d      TEXT     Locktime as YYYY-MM (must be 1st │
 │                                             of month)                        │
 │ --index                    -i      INTEGER  Address index [default: 0]       │
-│ --network                  -n      TEXT     [default: mainnet]               │
+│ --network                  -n      TEXT                                      │
 │ --data-dir                         PATH     Data directory (default:         │
 │                                             ~/.joinmarket-ng or              │
 │                                             $JOINMARKET_DATA_DIR)            │
@@ -628,6 +733,150 @@ For detailed help on any command, see the auto-generated help sections below.
 │                                          $JOINMARKET_DATA_DIR)               │
 │ --log-level                -l      TEXT  [default: INFO]                     │
 │ --help                                   Show this message and exit.         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-wallet create-bond-address --help</code></summary>
+
+```
+
+ Usage: jm-wallet create-bond-address [OPTIONS] PUBKEY
+
+ Create a fidelity bond address from a public key (cold wallet workflow).
+
+ This command creates a timelocked P2WSH bond address from a public key WITHOUT
+ requiring your mnemonic or private keys. Use this for true cold storage
+ security.
+ WORKFLOW: 1. Use Sparrow Wallet (or similar) with your hardware wallet 2.
+ Navigate to your wallet's receive addresses 3. Find or create an address at
+ the fidelity bond derivation path (m/84'/0'/0'/2/0) 4. Copy the public key
+ from the address details 5. Use this command with the public key to create the
+ bond address 6. Fund the bond address from any wallet 7. Use
+ 'prepare-certificate-message' and hardware wallet signing for certificates
+ Your hardware wallet never needs to be connected to this online tool.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    pubkey      TEXT  Public key (hex, 33 bytes compressed) [required]      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --locktime       -L      INTEGER  Locktime as Unix timestamp [default: 0]    │
+│ --locktime-date  -d      TEXT     Locktime as date (YYYY-MM, must be 1st of  │
+│                                   month)                                     │
+│ --network        -n      TEXT     [default: mainnet]                         │
+│ --data-dir               PATH     Data directory (default: ~/.joinmarket-ng  │
+│                                   or $JOINMARKET_DATA_DIR)                   │
+│ --no-save                         Do not save the bond to the registry       │
+│ --log-level      -l      TEXT     [default: INFO]                            │
+│ --help                            Show this message and exit.                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-wallet generate-hot-keypair --help</code></summary>
+
+```
+
+ Usage: jm-wallet generate-hot-keypair [OPTIONS]
+
+ Generate a hot wallet keypair for fidelity bond certificates.
+
+ This generates a random keypair that will be used for signing nick messages in
+ the fidelity bond proof. The private key stays in the hot wallet, while the
+ public key is used to create a certificate signed by the cold wallet.
+ The certificate chain is:   UTXO keypair (cold) -> signs -> certificate (hot)
+ -> signs -> nick proofs
+ SECURITY: - The hot wallet private key should be stored securely - If
+ compromised, an attacker can impersonate your bond until cert expires - But
+ they CANNOT spend your bond funds (those remain in cold storage)
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --log-level        TEXT  [default: INFO]                                     │
+│ --help                   Show this message and exit.                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-wallet prepare-certificate-message --help</code></summary>
+
+```
+
+ Usage: jm-wallet prepare-certificate-message [OPTIONS] BOND_ADDRESS
+
+ Prepare certificate message for signing with hardware wallet (cold wallet
+ support).
+
+ This generates the message that needs to be signed by the bond UTXO's private
+ key. The message can then be signed using a hardware wallet via tools like
+ Sparrow Wallet.
+ IMPORTANT: This command does NOT require your mnemonic or private keys. It
+ only prepares the message that you will sign with your hardware wallet.
+ The certificate message format is:
+ "fidelity-bond-cert|<cert_pubkey>|<cert_expiry>"
+ Where cert_expiry is the number of 2016-block periods (difficulty adjustment
+ periods).
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    bond_address      TEXT  Bond P2WSH address [required]                   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --cert-pubkey               TEXT     Certificate public key (hex)         │
+│                                         [required]                           │
+│    --cert-expiry-blocks        INTEGER  Certificate expiry in blocks         │
+│                                         [default: 104832]                    │
+│    --data-dir                  PATH     Data directory (default:             │
+│                                         ~/.joinmarket-ng or                  │
+│                                         $JOINMARKET_DATA_DIR)                │
+│    --log-level                 TEXT     [default: INFO]                      │
+│    --help                               Show this message and exit.          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+</details>
+
+<details>
+<summary><code>jm-wallet import-certificate --help</code></summary>
+
+```
+
+ Usage: jm-wallet import-certificate [OPTIONS] ADDRESS
+
+ Import a certificate signature for a fidelity bond (cold wallet support).
+
+ This imports a certificate generated with 'prepare-certificate-message' into
+ the bond registry, allowing the hot wallet to use it for making offers.
+ You need to provide: - cert_pubkey: Hot wallet public key (from
+ generate-hot-keypair) - cert_privkey: Hot wallet private key (from
+ generate-hot-keypair) - cert_signature: Certificate signature from hardware
+ wallet (base64 or hex) - cert_expiry: Certificate expiry in periods (from
+ prepare-certificate-message)
+ The signature must have been created by signing the certificate message with
+ the bond UTXO's private key (in your hardware wallet).
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    address      TEXT  Bond address [required]                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --cert-pubkey              TEXT     Certificate pubkey (hex) [required]   │
+│ *  --cert-privkey             TEXT     Certificate private key (hex)         │
+│                                        [required]                            │
+│ *  --cert-signature           TEXT     Certificate signature (base64 or hex) │
+│                                        [required]                            │
+│ *  --cert-expiry              INTEGER  Certificate expiry (periods)          │
+│                                        [required]                            │
+│    --data-dir                 PATH     Data directory (default:              │
+│                                        ~/.joinmarket-ng or                   │
+│                                        $JOINMARKET_DATA_DIR)                 │
+│    --skip-verification                 Skip signature verification (not      │
+│                                        recommended)                          │
+│    --log-level                TEXT     [default: INFO]                       │
+│    --help                              Show this message and exit.           │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 

@@ -27,14 +27,19 @@ The maker bot tries to auto-detect Tor configuration. For manual setup, see [Env
 
 ### 1. Create a Wallet
 
-Generate an encrypted wallet file:
+Generate a new encrypted wallet file:
 
 ```bash
-mkdir -p ~/.joinmarket-ng/wallets
-jm-wallet generate --save --prompt-password --output ~/.joinmarket-ng/wallets/maker.mnemonic
+jm-wallet generate --output ~/.joinmarket-ng/wallets/maker.mnemonic
 ```
 
 **IMPORTANT**: Write down the displayed mnemonic - it's your only backup!
+
+Or import an existing mnemonic (e.g., migrating from reference implementation):
+
+```bash
+jm-wallet import --output ~/.joinmarket-ng/wallets/maker.mnemonic
+```
 
 See [jmwallet README](../jmwallet/README.md) for wallet management details.
 
@@ -208,61 +213,46 @@ jm-maker start \
 
 ## Migrating from JoinMarket Reference Implementation
 
-If you have an existing maker on the reference implementation (JoinMarket-Org/joinmarket-clientserver), you can migrate using your 12-word mnemonic.
+If you have an existing maker on the reference implementation (JoinMarket-Org/joinmarket-clientserver), migration is simple - **all you need is your mnemonic**.
 
-### Quick Migration Steps
+### Quick Migration
 
-1. **Save your mnemonic** to a file on the host:
+1. **Import your mnemonic** with the interactive import command:
 
 ```bash
-mkdir -p ~/.joinmarket-ng/wallets
-# Edit and paste your 12-word mnemonic (plaintext, see below for encryption)
-vim ~/.joinmarket-ng/wallets/maker.mnemonic
+jm-wallet import --output ~/.joinmarket-ng/wallets/maker.mnemonic
 ```
 
-2. **Register your existing fidelity bond** (if you have one):
+This provides word-by-word entry with Tab completion and auto-complete when only one BIP39 word matches your prefix. The mnemonic is validated and optionally encrypted.
 
-Find your bond info from the old maker (path like `m/84'/0'/0'/2/123:1767225600`).
-You can use `wallet-tool.py`. Then:
-
-```bash
-docker exec -it <maker-container> jm-wallet generate-bond-address \
-  --mnemonic-file /home/jm/.joinmarket-ng/wallets/maker.mnemonic \
-  --locktime 1767225600 \
-  --index 123
-```
-
-This verifies the address and adds it to the bond registry for auto-discovery.
-
-3. **Sync bond status** from the blockchain:
+Alternatively, pass the mnemonic directly:
 
 ```bash
-docker exec -it <maker-container> jm-wallet registry-sync \
-  --mnemonic-file /home/jm/.joinmarket-ng/wallets/maker.mnemonic
-```
-
-4. **Restart the maker** - it will automatically discover and use your bond.
-
-### Key Differences
-
-- **No wallet.jmdat file**: JoinMarket-NG uses only the mnemonic + blockchain state
-- **Bond registry**: Fidelity bonds tracked in `~/.joinmarket-ng/fidelity_bonds.json`
-- **Stateless design**: Everything derived from mnemonic on each startup
-- **Same derivation paths**: Compatible with reference implementation (BIP84)
-
-### Encrypting Your Mnemonic (Optional)
-
-For better security, encrypt your mnemonic file:
-
-```bash
-jm-wallet generate \
-  --mnemonic "your 12 word phrase here" \
-  --save \
-  --prompt-password \
+jm-wallet import \
+  --mnemonic "your twelve word mnemonic phrase here ..." \
   --output ~/.joinmarket-ng/wallets/maker.mnemonic
 ```
 
-Then use `--password` or `MNEMONIC_PASSWORD` env var when running commands.
+2. **Start the maker** - fidelity bonds are auto-discovered:
+
+```bash
+jm-maker start --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic
+```
+
+That's it! The maker will:
+- Derive all addresses from your mnemonic (same BIP84 paths as reference implementation)
+- **Automatically discover any existing fidelity bonds** by scanning the blockchain
+- Start serving offers with your existing balance
+
+### Fidelity Bond Auto-Discovery
+
+JoinMarket-NG automatically scans all 960 possible fidelity bond timelocks (Jan 2020 - Dec 2099) to find your existing bonds. No need to manually register locktimes or indexes.
+
+To manually trigger bond discovery:
+
+```bash
+jm-wallet recover-bonds --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic
+```
 
 ## Docker Deployment
 
@@ -576,35 +566,34 @@ Thresholds are configurable via environment variables if needed (see config.py).
 │                                                        [env var:             │
 │                                                        DIRECTORY_SERVERS]    │
 │ --tor-socks-host                TEXT                   Tor SOCKS proxy host  │
-│                                                        [env var:             │
-│                                                        TOR_SOCKS_HOST]       │
+│                                                        (overrides            │
+│                                                        TOR__SOCKS_HOST)      │
 │ --tor-socks-port                INTEGER                Tor SOCKS proxy port  │
-│                                                        [env var:             │
-│                                                        TOR_SOCKS_PORT]       │
+│                                                        (overrides            │
+│                                                        TOR__SOCKS_PORT)      │
 │ --tor-control-host              TEXT                   Tor control port host │
-│                                                        [env var:             │
-│                                                        TOR_CONTROL_HOST]     │
+│                                                        (overrides            │
+│                                                        TOR__CONTROL_HOST)    │
 │ --tor-control-port              INTEGER                Tor control port      │
-│                                                        [env var:             │
-│                                                        TOR_CONTROL_PORT]     │
+│                                                        (overrides            │
+│                                                        TOR__CONTROL_PORT)    │
 │ --tor-cookie-path               PATH                   Path to Tor cookie    │
-│                                                        auth file             │
-│                                                        [env var:             │
-│                                                        TOR_COOKIE_PATH]      │
+│                                                        auth file (overrides  │
+│                                                        TOR__COOKIE_PATH)     │
 │ --disable-tor-control                                  Disable Tor control   │
 │                                                        port integration      │
 │ --onion-serving-host            TEXT                   Bind address for      │
 │                                                        incoming connections  │
-│                                                        [env var:             │
-│                                                        ONION_SERVING_HOST]   │
+│                                                        (overrides            │
+│                                                        MAKER__ONION_SERVING… │
 │ --onion-serving-port            INTEGER                Port for incoming     │
 │                                                        .onion connections    │
-│                                                        [env var:             │
-│                                                        ONION_SERVING_PORT]   │
+│                                                        (overrides            │
+│                                                        MAKER__ONION_SERVING… │
 │ --tor-target-host               TEXT                   Target hostname for   │
 │                                                        Tor hidden service    │
-│                                                        [env var:             │
-│                                                        TOR_TARGET_HOST]      │
+│                                                        (overrides            │
+│                                                        TOR__TARGET_HOST)     │
 │ --fidelity-bond-lockt…  -L      INTEGER                Fidelity bond         │
 │                                                        locktimes to scan for │
 │ --fidelity-bond-index   -I      INTEGER                Fidelity bond         │
@@ -620,6 +609,17 @@ Thresholds are configurable via environment variables if needed (see config.py).
 │                                                        random                │
 │                                                        [env var:             │
 │                                                        MERGE_ALGORITHM]      │
+│ --dual-offers                                          Create both relative  │
+│                                                        and absolute fee      │
+│                                                        offers                │
+│                                                        simultaneously. Each  │
+│                                                        offer gets a unique   │
+│                                                        ID (0 for relative, 1 │
+│                                                        for absolute). Use    │
+│                                                        with                  │
+│                                                        --cj-fee-relative and │
+│                                                        --cj-fee-absolute to  │
+│                                                        set fees for each.    │
 │ --help                                                 Show this message and │
 │                                                        exit.                 │
 ╰──────────────────────────────────────────────────────────────────────────────╯

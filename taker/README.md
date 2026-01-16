@@ -524,13 +524,11 @@ Use env vars for RPC credentials (see jmwallet README).
 │                                                             [env var:        │
 │                                                             DIRECTORY_SERVE… │
 │    --tor-socks-ho…                         TEXT             Tor SOCKS proxy  │
-│                                                             host             │
-│                                                             [env var:        │
-│                                                             TOR_SOCKS_HOST]  │
+│                                                             host (overrides  │
+│                                                             TOR__SOCKS_HOST) │
 │    --tor-socks-po…                         INTEGER          Tor SOCKS proxy  │
-│                                                             port             │
-│                                                             [env var:        │
-│                                                             TOR_SOCKS_PORT]  │
+│                                                             port (overrides  │
+│                                                             TOR__SOCKS_PORT) │
 │    --max-abs-fee                           INTEGER          Max absolute fee │
 │                                                             in sats          │
 │    --max-rel-fee                           TEXT             Max relative fee │
@@ -630,11 +628,11 @@ Use env vars for RPC credentials (see jmwallet README).
 │                                                     [env var:                │
 │                                                     DIRECTORY_SERVERS]       │
 │ --tor-socks-host            TEXT                    Tor SOCKS proxy host     │
-│                                                     [env var:                │
-│                                                     TOR_SOCKS_HOST]          │
+│                                                     (overrides               │
+│                                                     TOR__SOCKS_HOST)         │
 │ --tor-socks-port            INTEGER                 Tor SOCKS proxy port     │
-│                                                     [env var:                │
-│                                                     TOR_SOCKS_PORT]          │
+│                                                     (overrides               │
+│                                                     TOR__SOCKS_PORT)         │
 │ --log-level         -l      TEXT                    Log level                │
 │                                                     [default: INFO]          │
 │ --help                                              Show this message and    │
