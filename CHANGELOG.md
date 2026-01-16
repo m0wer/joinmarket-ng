@@ -40,6 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Orderbook watcher feature detection**: Fixed race condition where offers from new makers were stored with empty features before the peerlist response arrived. Now when peerlist response arrives with features, all cached offers for those makers are retroactively updated with the correct features.
 
+- **Peer location updates now include features**: Fixed directory server to include peer features (neutrino_compat, peerlist_features) in peer location update messages sent after private message routing. Previously, when a client learned about a new peer through a PEERLIST update (not via explicit GETPEERLIST request), the features were missing. This caused orderbook watchers to miss feature information for makers discovered through private message routing.
+
+- **Faster feature discovery for new makers**: Improved orderbook watcher feature discovery timing:
+  - Added immediate feature discovery (30 seconds after startup) instead of waiting 10 minutes for first health check
+  - Reduced initial health check delay from 10 minutes to 2 minutes
+  - Added automatic feature discovery for makers without features after each peerlist refresh (every 5 minutes)
+  - Direct health checks now populate features in directory client caches, ensuring offers are tagged with correct features
+
 ## [0.10.0] - 2026-01-15
 
 ### Security

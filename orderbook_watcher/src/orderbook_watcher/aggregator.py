@@ -425,6 +425,14 @@ class OrderbookAggregator:
                             "avoiding false positives"
                         )
 
+                    # After peerlist refresh, check makers that still don't have features
+                    # This handles the case where directory doesn't support peerlist_features
+                    # or the maker's features weren't included in the peerlist
+                    try:
+                        await self._check_makers_without_features()
+                    except Exception as e:
+                        logger.debug(f"Error checking makers without features: {e}")
+
                 # Sleep for 5 minutes before next refresh
                 await asyncio.sleep(300)
 
@@ -436,6 +444,54 @@ class OrderbookAggregator:
                 await asyncio.sleep(300)
 
         logger.info("Peerlist refresh task stopped")
+
+    async def _check_makers_without_features(self) -> None:
+        """Check makers that have offers but no features discovered yet.
+
+        This is called after peerlist refresh to ensure we discover features
+        for makers whose features weren't included in the peerlist (e.g., from
+        reference implementation directories that don't support peerlist_features).
+        """
+        makers_to_check: list[tuple[str, str]] = []
+
+        for _node_id, client in self.clients.items():
+            for key, _offer_ts in client.offers.items():
+                nick = key[0]
+                # Check if this peer has no features
+                peer_features = client.peer_features.get(nick, {})
+                if not peer_features:
+                    # Try to find location
+                    location = client._active_peers.get(nick)
+                    if location and location != "NOT-SERVING-ONION":
+                        makers_to_check.append((nick, location))
+
+        # Deduplicate by location
+        unique_makers = {loc: (nick, loc) for nick, loc in makers_to_check}
+        makers_list = list(unique_makers.values())
+
+        if not makers_list:
+            return
+
+        logger.info(f"Feature discovery: Checking {len(makers_list)} makers without features")
+
+        # Check makers and extract features from handshake
+        health_statuses = await self.health_checker.check_makers_batch(makers_list, force=True)
+
+        # Update features in directory clients' peer_features cache
+        features_discovered = 0
+        for _location, status in health_statuses.items():
+            if status.reachable and status.features.features:
+                features_dict = status.features.to_dict()
+                features_discovered += 1
+                # Update all clients with this peer's features
+                for client in self.clients.values():
+                    if status.nick in client._active_peers:
+                        client.peer_features[status.nick] = features_dict
+                        # Also update cached offers
+                        client._update_offer_features(status.nick, features_dict)
+
+        if features_discovered > 0:
+            logger.info(f"Feature discovery: Discovered features for {features_discovered} makers")
 
     async def _periodic_maker_health_check(self) -> None:
         """Background task to periodically check maker reachability via direct connections.
@@ -450,8 +506,9 @@ class OrderbookAggregator:
         server may still have a valid connection to the maker even if we can't reach
         them directly. We trust the directory's peerlist for offer validity.
         """
-        # Initial wait to let orderbook populate
-        await asyncio.sleep(600)  # 10 minutes
+        # Initial wait to let orderbook populate - reduced from 10 minutes to 2 minutes
+        # to discover features faster for newly connected makers
+        await asyncio.sleep(120)  # 2 minutes
 
         # Health check interval: check makers every 15 minutes
         check_interval = 900.0
@@ -622,6 +679,26 @@ class OrderbookAggregator:
                 retry_task = asyncio.create_task(self._retry_failed_connection(onion_address, port))
                 self._retry_tasks.append(retry_task)
                 logger.info(f"Scheduled retry task for {node_id}")
+
+        # Start early feature discovery task - runs once after initial connections settle
+        early_feature_task = asyncio.create_task(self._early_feature_discovery())
+        self.listener_tasks.append(early_feature_task)
+
+    async def _early_feature_discovery(self) -> None:
+        """Run feature discovery shortly after startup to populate features quickly.
+
+        This is a one-shot task that runs after a brief delay to allow initial
+        offers to be received, then checks makers without features.
+        """
+        try:
+            # Wait for initial offers to arrive (30 seconds should be enough for !orderbook responses)
+            await asyncio.sleep(30)
+            logger.info("Running early feature discovery for makers without features")
+            await self._check_makers_without_features()
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.debug(f"Early feature discovery error: {e}")
 
     async def stop_listening(self) -> None:
         logger.info("Stopping all directory listeners")

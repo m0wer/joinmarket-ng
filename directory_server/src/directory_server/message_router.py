@@ -9,7 +9,7 @@ import contextlib
 from collections.abc import Awaitable, Callable, Iterator
 
 from jmcore.models import MessageEnvelope, NetworkType, PeerInfo
-from jmcore.protocol import MessageType, create_peerlist_entry, parse_jm_message
+from jmcore.protocol import FeatureSet, MessageType, create_peerlist_entry, parse_jm_message
 from loguru import logger
 
 from directory_server.peer_registry import PeerRegistry
@@ -324,7 +324,10 @@ class MessageRouter:
         if peer_info.onion_address == "NOT-SERVING-ONION":
             return
 
-        entry = create_peerlist_entry(peer_info.nick, peer_info.location_string)
+        # Include features if the peer has any - this ensures recipients can learn about
+        # the peer's capabilities (e.g., neutrino_compat) when they receive the peerlist update
+        features = FeatureSet(features={k for k, v in peer_info.features.items() if v is True})
+        entry = create_peerlist_entry(peer_info.nick, peer_info.location_string, features=features)
         envelope = MessageEnvelope(message_type=MessageType.PEERLIST, payload=entry)
 
         try:
