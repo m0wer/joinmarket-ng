@@ -637,7 +637,13 @@ class DirectoryClient:
                     self._active_peers[nick] = location
                     # Always update peer_features cache to track that we've seen this peer
                     # This prevents triggering "new peer" logic for every message from this peer
-                    self.peer_features[nick] = features.to_dict()
+                    features_dict = features.to_dict()
+                    self.peer_features[nick] = features_dict
+
+                    # Update features on any cached offers for this peer
+                    # This fixes the race condition where offers are stored before
+                    # peerlist response arrives with features
+                    self._update_offer_features(nick, features_dict)
             except ValueError as e:
                 logger.warning(f"Failed to parse peerlist entry '{entry}': {e}")
                 continue
@@ -1324,6 +1330,38 @@ class DirectoryClient:
         self.offers[offer_key] = OfferWithTimestamp(
             offer=offer, received_at=current_time, bond_utxo_key=bond_utxo_key
         )
+
+    def _update_offer_features(self, nick: str, features: dict[str, bool]) -> int:
+        """
+        Update features on all cached offers for a specific peer.
+
+        This is called when we receive updated feature information from peerlist,
+        ensuring that offers stored before features were known get updated.
+
+        Args:
+            nick: The nick to update features for
+            features: New features dict to apply
+
+        Returns:
+            Number of offers updated
+        """
+        updated = 0
+        for key, offer_ts in self.offers.items():
+            if key[0] == nick:
+                # Update features on the cached offer
+                # Merge new features with any existing ones (new features take precedence)
+                for feature, value in features.items():
+                    if value:  # Only set true features
+                        offer_ts.offer.features[feature] = value
+                updated += 1
+
+        if updated > 0:
+            logger.debug(
+                f"Updated features on {updated} cached offer(s) for {nick}: "
+                f"{[k for k, v in features.items() if v]}"
+            )
+
+        return updated
 
     def remove_offers_for_nick(self, nick: str) -> int:
         """

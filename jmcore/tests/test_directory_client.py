@@ -195,3 +195,151 @@ async def test_privmsg_fidelity_bond_taker_nick():
         # args: (proof_base64, maker_nick, taker_nick)
         # We expect taker_nick to be "MyNick" because it was a PRIVMSG to us
         mock_parse.assert_called_with("BOND_PROOF_BASE64", maker_nick, "MyNick")
+
+
+def test_update_offer_features_updates_cached_offers():
+    """
+    Test that _update_offer_features correctly updates features on cached offers.
+
+    This tests the fix for the race condition where offers are stored before
+    peerlist response arrives with features.
+    """
+    from jmcore.directory_client import OfferWithTimestamp
+    from jmcore.models import Offer, OfferType
+
+    client = DirectoryClient("host", 1234, "mainnet")
+
+    # Create some cached offers with empty features
+    offer1 = Offer(
+        counterparty="maker1",
+        oid=0,
+        ordertype=OfferType.SW0_RELATIVE,
+        minsize=1000,
+        maxsize=100000,
+        txfee=500,
+        cjfee="0.001",
+        features={},  # Empty features
+    )
+    offer2 = Offer(
+        counterparty="maker1",
+        oid=1,
+        ordertype=OfferType.SW0_ABSOLUTE,
+        minsize=2000,
+        maxsize=200000,
+        txfee=600,
+        cjfee="1000",
+        features={},  # Empty features
+    )
+    offer3 = Offer(
+        counterparty="maker2",  # Different maker
+        oid=0,
+        ordertype=OfferType.SW0_RELATIVE,
+        minsize=3000,
+        maxsize=300000,
+        txfee=700,
+        cjfee="0.002",
+        features={},  # Empty features
+    )
+
+    # Store offers in cache
+    client.offers[("maker1", 0)] = OfferWithTimestamp(offer=offer1, received_at=1.0)
+    client.offers[("maker1", 1)] = OfferWithTimestamp(offer=offer2, received_at=2.0)
+    client.offers[("maker2", 0)] = OfferWithTimestamp(offer=offer3, received_at=3.0)
+
+    # Update features for maker1
+    updated_count = client._update_offer_features(
+        "maker1", {"neutrino_compat": True, "other_feature": True}
+    )
+
+    # Verify count
+    assert updated_count == 2
+
+    # Verify maker1's offers have updated features
+    assert offer1.features == {"neutrino_compat": True, "other_feature": True}
+    assert offer2.features == {"neutrino_compat": True, "other_feature": True}
+
+    # Verify maker2's offer is unchanged
+    assert offer3.features == {}
+
+
+def test_update_offer_features_no_matching_offers():
+    """Test _update_offer_features when no offers match the nick."""
+    client = DirectoryClient("host", 1234, "mainnet")
+
+    # No offers cached
+    updated_count = client._update_offer_features("nonexistent_maker", {"neutrino_compat": True})
+
+    assert updated_count == 0
+
+
+def test_update_offer_features_only_sets_true_values():
+    """Test that _update_offer_features only sets features with True values."""
+    from jmcore.directory_client import OfferWithTimestamp
+    from jmcore.models import Offer, OfferType
+
+    client = DirectoryClient("host", 1234, "mainnet")
+
+    # Create offer with one existing feature
+    offer = Offer(
+        counterparty="maker1",
+        oid=0,
+        ordertype=OfferType.SW0_RELATIVE,
+        minsize=1000,
+        maxsize=100000,
+        txfee=500,
+        cjfee="0.001",
+        features={"existing_feature": True},
+    )
+    client.offers[("maker1", 0)] = OfferWithTimestamp(offer=offer, received_at=1.0)
+
+    # Update with mixed true/false features
+    client._update_offer_features("maker1", {"neutrino_compat": True, "disabled_feature": False})
+
+    # Only true features should be added
+    assert offer.features == {"existing_feature": True, "neutrino_compat": True}
+    assert "disabled_feature" not in offer.features
+
+
+def test_peerlist_response_updates_cached_offer_features():
+    """
+    Integration test: verify that processing a peerlist response updates
+    features on previously cached offers.
+
+    This tests the full fix for the race condition bug.
+    """
+    from jmcore.directory_client import OfferWithTimestamp
+    from jmcore.models import Offer, OfferType
+    from jmcore.protocol import FEATURE_NEUTRINO_COMPAT
+
+    client = DirectoryClient("host", 1234, "mainnet")
+
+    # Create an offer with empty features (simulating race condition)
+    offer = Offer(
+        counterparty="J57wPBk1VfjSP5Te",
+        oid=0,
+        ordertype=OfferType.SW0_RELATIVE,
+        minsize=30000,
+        maxsize=643786,
+        txfee=0,
+        cjfee="0.0001",
+        features={},  # Empty - offer stored before peerlist arrived
+    )
+    client.offers[("J57wPBk1VfjSP5Te", 0)] = OfferWithTimestamp(offer=offer, received_at=1.0)
+
+    # Simulate peerlist response with features
+    peerlist_str = f"J57wPBk1VfjSP5Te;maker.onion:62780;F:{FEATURE_NEUTRINO_COMPAT}"
+
+    # Process peerlist response
+    peers = client._handle_peerlist_response(peerlist_str)
+
+    # Verify peer was parsed
+    assert len(peers) == 1
+    nick, location, features = peers[0]
+    assert nick == "J57wPBk1VfjSP5Te"
+    assert features.supports_neutrino_compat()
+
+    # Verify peer_features cache was updated
+    assert client.peer_features["J57wPBk1VfjSP5Te"] == {"neutrino_compat": True}
+
+    # Verify cached offer's features were updated (THE FIX)
+    assert offer.features == {"neutrino_compat": True}
