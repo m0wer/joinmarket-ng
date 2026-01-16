@@ -41,6 +41,9 @@ class HandshakeHandler:
             is_directory = hs.get("directory", False)
             proto_ver = hs.get("proto-ver")
             features = hs.get("features", {})
+            # Debug: Log received features for troubleshooting feature propagation
+            if features:
+                logger.debug(f"Handshake features from {hs.get('nick', 'unknown')}: {features}")
             location_string = hs.get("location-string")
             nick = hs.get("nick")
             network_str = hs.get("network")

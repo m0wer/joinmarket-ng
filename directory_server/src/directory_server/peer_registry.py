@@ -105,6 +105,12 @@ class PeerRegistry:
         for peer in self._iter_connected(network):
             # Build FeatureSet from peer.features dict
             features = FeatureSet(features={k for k, v in peer.features.items() if v is True})
+            # Debug: Log when features are extracted for peerlist
+            if peer.features and not features.features:
+                logger.warning(
+                    f"Peer {peer.nick} has features dict {peer.features} but "
+                    f"FeatureSet is empty after 'v is True' filter"
+                )
             result.append((peer.nick, peer.location_string, features))
         return result
 

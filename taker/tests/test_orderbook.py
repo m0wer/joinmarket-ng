@@ -15,6 +15,7 @@ from taker.orderbook import (
     calculate_cj_fee,
     cheapest_order_choose,
     choose_orders,
+    dedupe_offers_by_bond,
     dedupe_offers_by_maker,
     fidelity_bond_weighted_choose,
     filter_offers,
@@ -245,6 +246,201 @@ class TestDedupeOffersByMaker:
         deduped = dedupe_offers_by_maker(offers)
         assert len(deduped) == 1
         assert deduped[0].cjfee == "0.001"
+
+
+class TestDedupeOffersByBond:
+    """Tests for dedupe_offers_by_bond (sybil protection)."""
+
+    def test_different_makers_same_bond_keeps_cheapest(self) -> None:
+        """Two makers sharing same bond UTXO - keep only the cheapest."""
+        bond_data = {
+            "utxo_txid": "a" * 64,
+            "utxo_vout": 0,
+            "locktime": 500000,
+            "utxo_pub": "pubkey",
+            "cert_expiry": 1700000000,
+        }
+        offers = [
+            Offer(
+                counterparty="maker1",
+                oid=0,
+                ordertype=OfferType.SW0_RELATIVE,
+                minsize=10_000,
+                maxsize=1_000_000,
+                txfee=1000,
+                cjfee="0.002",  # More expensive
+                fidelity_bond_data=bond_data,
+            ),
+            Offer(
+                counterparty="maker2",
+                oid=0,
+                ordertype=OfferType.SW0_RELATIVE,
+                minsize=10_000,
+                maxsize=1_000_000,
+                txfee=1000,
+                cjfee="0.001",  # Cheaper
+                fidelity_bond_data=bond_data,
+            ),
+        ]
+        deduped = dedupe_offers_by_bond(offers, cj_amount=100_000)
+        assert len(deduped) == 1
+        assert deduped[0].counterparty == "maker2"  # Cheaper one kept
+
+    def test_different_bonds_preserved(self) -> None:
+        """Makers with different bonds are all preserved."""
+        offers = [
+            Offer(
+                counterparty="maker1",
+                oid=0,
+                ordertype=OfferType.SW0_RELATIVE,
+                minsize=10_000,
+                maxsize=1_000_000,
+                txfee=1000,
+                cjfee="0.001",
+                fidelity_bond_data={
+                    "utxo_txid": "a" * 64,
+                    "utxo_vout": 0,
+                    "locktime": 500000,
+                    "utxo_pub": "pubkey1",
+                    "cert_expiry": 1700000000,
+                },
+            ),
+            Offer(
+                counterparty="maker2",
+                oid=0,
+                ordertype=OfferType.SW0_RELATIVE,
+                minsize=10_000,
+                maxsize=1_000_000,
+                txfee=1000,
+                cjfee="0.001",
+                fidelity_bond_data={
+                    "utxo_txid": "b" * 64,  # Different bond
+                    "utxo_vout": 0,
+                    "locktime": 500000,
+                    "utxo_pub": "pubkey2",
+                    "cert_expiry": 1700000000,
+                },
+            ),
+        ]
+        deduped = dedupe_offers_by_bond(offers, cj_amount=100_000)
+        assert len(deduped) == 2
+
+    def test_unbonded_offers_passed_through(self) -> None:
+        """Offers without bonds pass through unchanged."""
+        offers = [
+            Offer(
+                counterparty="maker1",
+                oid=0,
+                ordertype=OfferType.SW0_RELATIVE,
+                minsize=10_000,
+                maxsize=1_000_000,
+                txfee=1000,
+                cjfee="0.001",
+                # No fidelity_bond_data
+            ),
+            Offer(
+                counterparty="maker2",
+                oid=0,
+                ordertype=OfferType.SW0_RELATIVE,
+                minsize=10_000,
+                maxsize=1_000_000,
+                txfee=1000,
+                cjfee="0.002",
+                # No fidelity_bond_data
+            ),
+        ]
+        deduped = dedupe_offers_by_bond(offers, cj_amount=100_000)
+        assert len(deduped) == 2
+
+    def test_mixed_bonded_unbonded(self) -> None:
+        """Mix of bonded and unbonded offers."""
+        bond_data = {
+            "utxo_txid": "a" * 64,
+            "utxo_vout": 0,
+            "locktime": 500000,
+            "utxo_pub": "pubkey",
+            "cert_expiry": 1700000000,
+        }
+        offers = [
+            # Two makers sharing bond
+            Offer(
+                counterparty="bonded1",
+                oid=0,
+                ordertype=OfferType.SW0_RELATIVE,
+                minsize=10_000,
+                maxsize=1_000_000,
+                txfee=1000,
+                cjfee="0.002",
+                fidelity_bond_data=bond_data,
+            ),
+            Offer(
+                counterparty="bonded2",
+                oid=0,
+                ordertype=OfferType.SW0_RELATIVE,
+                minsize=10_000,
+                maxsize=1_000_000,
+                txfee=1000,
+                cjfee="0.001",  # Cheaper - this one should be kept
+                fidelity_bond_data=bond_data,
+            ),
+            # Unbonded maker
+            Offer(
+                counterparty="unbonded",
+                oid=0,
+                ordertype=OfferType.SW0_RELATIVE,
+                minsize=10_000,
+                maxsize=1_000_000,
+                txfee=1000,
+                cjfee="0.003",
+            ),
+        ]
+        deduped = dedupe_offers_by_bond(offers, cj_amount=100_000)
+        assert len(deduped) == 2
+        nicks = {o.counterparty for o in deduped}
+        assert "bonded2" in nicks  # Cheaper bonded
+        assert "unbonded" in nicks  # Unbonded passes through
+
+    def test_fee_comparison_uses_actual_cj_amount(self) -> None:
+        """Fee comparison should use the actual cj_amount, not a reference amount."""
+        bond_data = {
+            "utxo_txid": "a" * 64,
+            "utxo_vout": 0,
+            "locktime": 500000,
+            "utxo_pub": "pubkey",
+            "cert_expiry": 1700000000,
+        }
+        offers = [
+            Offer(
+                counterparty="maker_abs",
+                oid=0,
+                ordertype=OfferType.SW0_ABSOLUTE,
+                minsize=10_000,
+                maxsize=1_000_000,
+                txfee=1000,
+                cjfee=5000,  # 5000 sats fixed
+                fidelity_bond_data=bond_data,
+            ),
+            Offer(
+                counterparty="maker_rel",
+                oid=0,
+                ordertype=OfferType.SW0_RELATIVE,
+                minsize=10_000,
+                maxsize=1_000_000,
+                txfee=1000,
+                cjfee="0.01",  # 1%
+                fidelity_bond_data=bond_data,
+            ),
+        ]
+
+        # At 100k sats: abs=5000, rel=1000 -> rel wins
+        deduped_small = dedupe_offers_by_bond(offers, cj_amount=100_000)
+        assert len(deduped_small) == 1
+        assert deduped_small[0].counterparty == "maker_rel"
+
+        # At 1M sats: abs=5000, rel=10000 -> abs wins
+        deduped_large = dedupe_offers_by_bond(offers, cj_amount=1_000_000)
+        assert len(deduped_large) == 1
+        assert deduped_large[0].counterparty == "maker_abs"
 
 
 class TestOrderChoosers:

@@ -682,9 +682,11 @@ class TestBondDeduplicationAcrossDirectories:
         This simulates the aggregator's get_live_orderbook() logic processing offers
         from multiple directories where the same maker is present.
         """
-        # Simulate the aggregator's bond_to_best_offer dict structure
+        # Aggregator uses (bond_utxo, oid) as key to preserve multiple offers per bond
         bond_utxo_key = "abc123def456:0"
-        bond_to_best_offer: dict[str, tuple[Offer, float, list[str]]] = {}
+        bond_oid_to_best_offer: dict[
+            tuple[str, int], tuple[Offer, float, list[str], str]
+        ] = {}  # (bond_utxo, oid) -> (offer, timestamp, directory_nodes, counterparty)
 
         # First directory announces the offer
         offer1 = Offer(
@@ -698,8 +700,14 @@ class TestBondDeduplicationAcrossDirectories:
             directory_node="dir1.onion:5222",
         )
         timestamp1 = 1000.0
+        dedup_key = (bond_utxo_key, offer1.oid)
         directory_nodes = [offer1.directory_node] if offer1.directory_node else []
-        bond_to_best_offer[bond_utxo_key] = (offer1, timestamp1, directory_nodes)
+        bond_oid_to_best_offer[dedup_key] = (
+            offer1,
+            timestamp1,
+            directory_nodes,
+            offer1.counterparty,
+        )
 
         # Second directory announces the SAME offer (same maker, same oid, same bond)
         offer2 = Offer(
@@ -715,19 +723,26 @@ class TestBondDeduplicationAcrossDirectories:
         timestamp2 = 1005.0  # Slightly newer
 
         # Simulate aggregator logic
-        old_offer, old_timestamp, directory_nodes = bond_to_best_offer[bond_utxo_key]
-        is_same_maker = old_offer.counterparty == offer2.counterparty
+        existing = bond_oid_to_best_offer.get(dedup_key)
+        if existing:
+            _old_offer, old_timestamp, directory_nodes, old_counterparty = existing
+            is_same_maker = old_counterparty == offer2.counterparty
 
-        if is_same_maker:
-            # Merge directory_nodes
-            if offer2.directory_node and offer2.directory_node not in directory_nodes:
-                directory_nodes.append(offer2.directory_node)
-            # Keep newer timestamp
-            if timestamp2 > old_timestamp:
-                bond_to_best_offer[bond_utxo_key] = (offer2, timestamp2, directory_nodes)
+            if is_same_maker:
+                # Merge directory_nodes
+                if offer2.directory_node and offer2.directory_node not in directory_nodes:
+                    directory_nodes.append(offer2.directory_node)
+                # Keep newer timestamp
+                if timestamp2 > old_timestamp:
+                    bond_oid_to_best_offer[dedup_key] = (
+                        offer2,
+                        timestamp2,
+                        directory_nodes,
+                        offer2.counterparty,
+                    )
 
         # Verify: Should have merged directory_nodes
-        _final_offer, _final_timestamp, final_directories = bond_to_best_offer[bond_utxo_key]
+        _final_offer, _final_timestamp, final_directories, _ = bond_oid_to_best_offer[dedup_key]
         assert len(final_directories) == 2
         assert "dir1.onion:5222" in final_directories
         assert "dir2.onion:5222" in final_directories
@@ -735,7 +750,7 @@ class TestBondDeduplicationAcrossDirectories:
     def test_different_maker_same_bond_with_large_time_diff_replaces(self) -> None:
         """When different maker uses same bond after >60s, treat as legitimate restart."""
         bond_utxo_key = "abc123def456:0"
-        bond_to_best_offer: dict[str, tuple[Offer, float, list[str]]] = {}
+        bond_oid_to_best_offer: dict[tuple[str, int], tuple[Offer, float, list[str], str]] = {}
 
         # First maker with bond
         offer1 = Offer(
@@ -749,8 +764,14 @@ class TestBondDeduplicationAcrossDirectories:
             directory_node="dir1.onion:5222",
         )
         timestamp1 = 1000.0
+        dedup_key = (bond_utxo_key, offer1.oid)
         directory_nodes = [offer1.directory_node] if offer1.directory_node else []
-        bond_to_best_offer[bond_utxo_key] = (offer1, timestamp1, directory_nodes)
+        bond_oid_to_best_offer[dedup_key] = (
+            offer1,
+            timestamp1,
+            directory_nodes,
+            offer1.counterparty,
+        )
 
         # Second maker with SAME bond, 120 seconds later
         offer2 = Offer(
@@ -766,19 +787,26 @@ class TestBondDeduplicationAcrossDirectories:
         timestamp2 = 1120.0  # 120s later
 
         # Simulate aggregator logic
-        old_offer, old_timestamp, directory_nodes = bond_to_best_offer[bond_utxo_key]
-        is_same_maker = old_offer.counterparty == offer2.counterparty
+        existing = bond_oid_to_best_offer.get(dedup_key)
+        if existing:
+            _old_offer, old_timestamp, directory_nodes, old_counterparty = existing
+            is_same_maker = old_counterparty == offer2.counterparty
 
-        if not is_same_maker:
-            time_diff = timestamp2 - old_timestamp
-            # Only replace if time difference suggests legitimate restart (>60s)
-            if time_diff > 60:
-                # Reset directory_nodes for new maker
-                new_directory_nodes = [offer2.directory_node] if offer2.directory_node else []
-                bond_to_best_offer[bond_utxo_key] = (offer2, timestamp2, new_directory_nodes)
+            if not is_same_maker:
+                time_diff = timestamp2 - old_timestamp
+                # Only replace if time difference suggests legitimate restart (>60s)
+                if time_diff > 60:
+                    # Reset directory_nodes for new maker
+                    new_directory_nodes = [offer2.directory_node] if offer2.directory_node else []
+                    bond_oid_to_best_offer[dedup_key] = (
+                        offer2,
+                        timestamp2,
+                        new_directory_nodes,
+                        offer2.counterparty,
+                    )
 
         # Verify: Should have replaced with new maker
-        final_offer, _final_timestamp, final_directories = bond_to_best_offer[bond_utxo_key]
+        final_offer, _final_timestamp, final_directories, _ = bond_oid_to_best_offer[dedup_key]
         assert final_offer.counterparty == "J5newnick"
         assert len(final_directories) == 1
         assert "dir1.onion:5222" in final_directories
@@ -786,7 +814,7 @@ class TestBondDeduplicationAcrossDirectories:
     def test_different_maker_same_bond_with_small_time_diff_ignored(self) -> None:
         """When different maker uses same bond with <60s diff, likely clock skew - ignore."""
         bond_utxo_key = "abc123def456:0"
-        bond_to_best_offer: dict[str, tuple[Offer, float, list[str]]] = {}
+        bond_oid_to_best_offer: dict[tuple[str, int], tuple[Offer, float, list[str], str]] = {}
 
         # First maker with bond
         offer1 = Offer(
@@ -800,8 +828,14 @@ class TestBondDeduplicationAcrossDirectories:
             directory_node="dir1.onion:5222",
         )
         timestamp1 = 1000.0
+        dedup_key = (bond_utxo_key, offer1.oid)
         directory_nodes = [offer1.directory_node] if offer1.directory_node else []
-        bond_to_best_offer[bond_utxo_key] = (offer1, timestamp1, directory_nodes)
+        bond_oid_to_best_offer[dedup_key] = (
+            offer1,
+            timestamp1,
+            directory_nodes,
+            offer1.counterparty,
+        )
 
         # Second maker with SAME bond, only 5 seconds later (likely clock skew)
         offer2 = Offer(
@@ -817,19 +851,26 @@ class TestBondDeduplicationAcrossDirectories:
         timestamp2 = 1005.0  # 5s later
 
         # Simulate aggregator logic
-        old_offer, old_timestamp, directory_nodes = bond_to_best_offer[bond_utxo_key]
-        is_same_maker = old_offer.counterparty == offer2.counterparty
+        existing = bond_oid_to_best_offer.get(dedup_key)
+        if existing:
+            _old_offer, old_timestamp, directory_nodes, old_counterparty = existing
+            is_same_maker = old_counterparty == offer2.counterparty
 
-        if not is_same_maker:
-            time_diff = timestamp2 - old_timestamp
-            # Ignore if time difference is too small (<60s) - likely clock skew
-            if abs(time_diff) >= 60:
-                new_directory_nodes = [offer2.directory_node] if offer2.directory_node else []
-                bond_to_best_offer[bond_utxo_key] = (offer2, timestamp2, new_directory_nodes)
-            # else: ignore, keep old offer
+            if not is_same_maker:
+                time_diff = timestamp2 - old_timestamp
+                # Ignore if time difference is too small (<60s) - likely clock skew
+                if abs(time_diff) >= 60:
+                    new_directory_nodes = [offer2.directory_node] if offer2.directory_node else []
+                    bond_oid_to_best_offer[dedup_key] = (
+                        offer2,
+                        timestamp2,
+                        new_directory_nodes,
+                        offer2.counterparty,
+                    )
+                # else: ignore, keep old offer
 
         # Verify: Should have kept the original maker (not replaced)
-        final_offer, _final_timestamp, final_directories = bond_to_best_offer[bond_utxo_key]
+        final_offer, _final_timestamp, final_directories, _ = bond_oid_to_best_offer[dedup_key]
         assert final_offer.counterparty == "J5maker1"
         assert len(final_directories) == 1
         assert "dir1.onion:5222" in final_directories
@@ -1056,3 +1097,143 @@ class TestOfferDeduplicationPreservesDirectoryNodes:
         result_offer = offer_key_to_offer[key]
         assert len(result_offer.directory_nodes) == 1
         assert "dir1.onion:5222" in result_offer.directory_nodes
+
+
+class TestMultipleOidsPerMakerWithSameBond:
+    """Tests that multiple offers (different oids) from same maker with same bond are preserved.
+
+    A maker can have multiple offer types (e.g., oid=0 for relative fee, oid=1 for absolute fee)
+    all backed by the same fidelity bond. The bond deduplication should keep ALL of these offers,
+    not just the most recent one.
+    """
+
+    def test_same_maker_multiple_oids_same_bond_all_preserved(self) -> None:
+        """All offers from same maker with same bond but different oids should be kept."""
+        # New key structure: (bond_utxo_key, oid) instead of just bond_utxo_key
+        bond_oid_to_best_offer: dict[
+            tuple[str, int], tuple[Offer, float, list[str], str]
+        ] = {}  # (bond_utxo, oid) -> (offer, timestamp, directory_nodes, counterparty)
+
+        bond_utxo_key = "abc123def456:0"
+
+        # First offer: oid=0 (relative fee)
+        offer0 = Offer(
+            counterparty="J5maker",
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="0.001",
+            directory_node="dir1.onion:5222",
+        )
+        timestamp0 = 1000.0
+        key0 = (bond_utxo_key, offer0.oid)
+        bond_oid_to_best_offer[key0] = (
+            offer0,
+            timestamp0,
+            [offer0.directory_node] if offer0.directory_node else [],
+            offer0.counterparty,
+        )
+
+        # Second offer: oid=1 (absolute fee) - same maker, same bond, different oid
+        offer1 = Offer(
+            counterparty="J5maker",
+            oid=1,
+            ordertype=OfferType.SW0_ABSOLUTE,
+            minsize=50000,
+            maxsize=500000,
+            txfee=1000,
+            cjfee="500",
+            directory_node="dir1.onion:5222",
+        )
+        timestamp1 = 1001.0
+        key1 = (bond_utxo_key, offer1.oid)
+        bond_oid_to_best_offer[key1] = (
+            offer1,
+            timestamp1,
+            [offer1.directory_node] if offer1.directory_node else [],
+            offer1.counterparty,
+        )
+
+        # Verify: BOTH offers should be present (different keys due to different oids)
+        assert len(bond_oid_to_best_offer) == 2
+        assert key0 in bond_oid_to_best_offer
+        assert key1 in bond_oid_to_best_offer
+
+        # Verify offer details
+        result_offer0, _, _, _ = bond_oid_to_best_offer[key0]
+        result_offer1, _, _, _ = bond_oid_to_best_offer[key1]
+        assert result_offer0.oid == 0
+        assert result_offer0.ordertype == OfferType.SW0_RELATIVE
+        assert result_offer1.oid == 1
+        assert result_offer1.ordertype == OfferType.SW0_ABSOLUTE
+
+    def test_maker_restart_replaces_only_matching_oid(self) -> None:
+        """When maker restarts with new nick, only replace offers with matching oid."""
+        bond_oid_to_best_offer: dict[tuple[str, int], tuple[Offer, float, list[str], str]] = {}
+
+        bond_utxo_key = "abc123def456:0"
+
+        # Original maker has two offers
+        offer0_old = Offer(
+            counterparty="J5oldnick",
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="0.001",
+        )
+        offer1_old = Offer(
+            counterparty="J5oldnick",
+            oid=1,
+            ordertype=OfferType.SW0_ABSOLUTE,
+            minsize=50000,
+            maxsize=500000,
+            txfee=1000,
+            cjfee="500",
+        )
+        timestamp_old = 1000.0
+        bond_oid_to_best_offer[(bond_utxo_key, 0)] = (offer0_old, timestamp_old, [], "J5oldnick")
+        bond_oid_to_best_offer[(bond_utxo_key, 1)] = (offer1_old, timestamp_old, [], "J5oldnick")
+
+        # New maker (restarted) announces oid=0 with same bond, 120s later
+        offer0_new = Offer(
+            counterparty="J5newnick",
+            oid=0,
+            ordertype=OfferType.SW0_RELATIVE,
+            minsize=30000,
+            maxsize=1000000,
+            txfee=500,
+            cjfee="0.001",
+        )
+        timestamp_new = 1120.0
+
+        # Simulate aggregator logic for the new offer
+        dedup_key = (bond_utxo_key, offer0_new.oid)
+        existing = bond_oid_to_best_offer.get(dedup_key)
+        if existing:
+            _, old_timestamp, _, old_counterparty = existing
+            is_same_maker = old_counterparty == offer0_new.counterparty
+            if not is_same_maker:
+                time_diff = timestamp_new - old_timestamp
+                if time_diff > 60:  # Legitimate restart
+                    bond_oid_to_best_offer[dedup_key] = (
+                        offer0_new,
+                        timestamp_new,
+                        [],
+                        offer0_new.counterparty,
+                    )
+
+        # Verify: oid=0 should be replaced, oid=1 should be KEPT (even though it's from old nick)
+        # This is because the new maker hasn't announced oid=1 yet
+        assert len(bond_oid_to_best_offer) == 2
+
+        result_offer0, _, _, counterparty0 = bond_oid_to_best_offer[(bond_utxo_key, 0)]
+        assert result_offer0.counterparty == "J5newnick"
+        assert counterparty0 == "J5newnick"
+
+        result_offer1, _, _, counterparty1 = bond_oid_to_best_offer[(bond_utxo_key, 1)]
+        assert result_offer1.counterparty == "J5oldnick"  # Still the old nick
+        assert counterparty1 == "J5oldnick"

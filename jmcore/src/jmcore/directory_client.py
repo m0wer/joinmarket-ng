@@ -707,10 +707,11 @@ class DirectoryClient:
                     peers.append((nick, location, features))
                     # Update/add this nick to active peers
                     self._active_peers[nick] = location
-                    # Always update peer_features cache to track that we've seen this peer
-                    # This prevents triggering "new peer" logic for every message from this peer
+                    # Merge features into peer_features cache (never overwrite/downgrade)
+                    # This prevents losing features when receiving peerlist from directories
+                    # that don't support peerlist_features
                     features_dict = features.to_dict()
-                    self.peer_features[nick] = features_dict
+                    self._merge_peer_features(nick, features_dict)
 
                     # Update features on any cached offers for this peer
                     # This fixes the race condition where offers are stored before
@@ -1179,9 +1180,10 @@ class DirectoryClient:
                                 current_time = time.time()
 
                                 if is_new_peer:
-                                    # Track new peer with empty features
+                                    # Track new peer - merge empty features (will be a no-op
+                                    # if we already know their features from another source)
                                     # Features will be populated from offer messages or peerlist
-                                    self.peer_features[from_nick] = {}
+                                    self._merge_peer_features(from_nick, {})
                                     logger.debug(f"Discovered new peer: {from_nick}")
 
                                     # If directory supports peerlist_features, request updated peerlist
@@ -1434,6 +1436,24 @@ class DirectoryClient:
             )
 
         return updated
+
+    def _merge_peer_features(self, nick: str, new_features: dict[str, bool]) -> None:
+        """
+        Merge new features into the peer_features cache for a nick.
+
+        Features are cumulative - once a peer advertises a feature, we keep it.
+        This prevents losing features when receiving updates from directories
+        that don't support peerlist_features.
+
+        Args:
+            nick: The peer's nick
+            new_features: New features dict to merge (only True values are added)
+        """
+        existing = self.peer_features.get(nick, {})
+        for feature, value in new_features.items():
+            if value:  # Only set true features, never downgrade
+                existing[feature] = value
+        self.peer_features[nick] = existing
 
     def remove_offers_for_nick(self, nick: str) -> int:
         """

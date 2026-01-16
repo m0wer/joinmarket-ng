@@ -327,6 +327,12 @@ class MessageRouter:
         # Include features if the peer has any - this ensures recipients can learn about
         # the peer's capabilities (e.g., neutrino_compat) when they receive the peerlist update
         features = FeatureSet(features={k for k, v in peer_info.features.items() if v is True})
+        # Debug: Log when features are being sent
+        if peer_info.features and not features.features:
+            logger.warning(
+                f"Peer {peer_info.nick} has features dict {peer_info.features} but "
+                f"FeatureSet is empty after 'v is True' filter"
+            )
         entry = create_peerlist_entry(peer_info.nick, peer_info.location_string, features=features)
         envelope = MessageEnvelope(message_type=MessageType.PEERLIST, payload=entry)
 

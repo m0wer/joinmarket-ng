@@ -189,6 +189,63 @@ def dedupe_offers_by_maker(offers: list[Offer]) -> list[Offer]:
     return result
 
 
+def dedupe_offers_by_bond(offers: list[Offer], cj_amount: int) -> list[Offer]:
+    """
+    Deduplicate offers by fidelity bond UTXO, keeping only the cheapest per bond.
+
+    This is a sybil protection measure: if two different counterparties (nicks)
+    share the same fidelity bond UTXO, we should only select one of them.
+    Otherwise, an attacker could create multiple nicks backed by the same bond
+    and get selected multiple times in the same CoinJoin.
+
+    Offers without a fidelity bond are passed through unchanged.
+
+    Args:
+        offers: List of offers (possibly from different makers using same bond)
+        cj_amount: The actual CoinJoin amount for accurate fee comparison
+
+    Returns:
+        List with at most one offer per bond UTXO (the cheapest), plus all unbonded offers
+    """
+    # Group bonded offers by bond UTXO
+    by_bond: dict[str, list[Offer]] = {}
+    unbonded: list[Offer] = []
+
+    for offer in offers:
+        bond_key = None
+        if offer.fidelity_bond_data:
+            # Use txid:vout as unique key
+            bond_key = (
+                f"{offer.fidelity_bond_data['utxo_txid']}:{offer.fidelity_bond_data['utxo_vout']}"
+            )
+
+        if bond_key:
+            if bond_key not in by_bond:
+                by_bond[bond_key] = []
+            by_bond[bond_key].append(offer)
+        else:
+            unbonded.append(offer)
+
+    # For each bond UTXO, keep only the cheapest offer
+    result = []
+    for bond_key, bond_offers in by_bond.items():
+        sorted_offers = sorted(bond_offers, key=lambda o: calculate_cj_fee(o, cj_amount))
+        result.append(sorted_offers[0])
+        if len(bond_offers) > 1:
+            kept = sorted_offers[0]
+            dropped = [o.counterparty for o in sorted_offers[1:]]
+            kept_fee = calculate_cj_fee(kept, cj_amount)
+            logger.warning(
+                f"Bond sybil protection: Kept {kept.counterparty} (fee={kept_fee}), "
+                f"dropped {dropped} sharing same bond UTXO {bond_key[:16]}..."
+            )
+
+    # Add unbonded offers unchanged
+    result.extend(unbonded)
+
+    return result
+
+
 # Order chooser functions (selection algorithms)
 
 
@@ -472,8 +529,12 @@ def choose_orders(
         min_nick_version=min_nick_version,
     )
 
-    # Dedupe by maker
-    deduped = dedupe_offers_by_maker(eligible)
+    # Dedupe by maker (keep cheapest offer per counterparty)
+    deduped_by_maker = dedupe_offers_by_maker(eligible)
+
+    # Dedupe by bond UTXO (sybil protection: keep cheapest offer per bond)
+    # This must come after maker dedup so we compare the best offer from each nick
+    deduped = dedupe_offers_by_bond(deduped_by_maker, cj_amount)
 
     if len(deduped) < n:
         logger.warning(
@@ -557,8 +618,12 @@ def choose_sweep_orders(
         min_nick_version=min_nick_version,
     )
 
-    # Dedupe
-    deduped = dedupe_offers_by_maker(eligible)
+    # Dedupe by maker
+    deduped_by_maker = dedupe_offers_by_maker(eligible)
+
+    # Dedupe by bond UTXO (sybil protection)
+    # Use estimated_cj_amount for fee comparison since we don't know exact amount yet
+    deduped = dedupe_offers_by_bond(deduped_by_maker, estimated_cj_amount)
 
     logger.debug(
         f"After deduplication: {len(deduped)} unique makers from {len(eligible)} eligible offers"
