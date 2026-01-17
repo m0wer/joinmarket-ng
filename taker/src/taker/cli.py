@@ -277,6 +277,13 @@ def coinjoin(
             help="BIP39 passphrase (13th/25th word)",
         ),
     ] = None,
+    prompt_bip39_passphrase: Annotated[
+        bool,
+        typer.Option(
+            "--prompt-bip39-passphrase",
+            help="Prompt for BIP39 passphrase interactively",
+        ),
+    ] = False,
     network: Annotated[
         NetworkType | None,
         typer.Option("--network", case_sensitive=False, help="Protocol network for handshakes"),
@@ -411,8 +418,10 @@ def coinjoin(
             mnemonic_file=mnemonic_file,
             password=password,
             bip39_passphrase=bip39_passphrase,
+            prompt_bip39_passphrase=prompt_bip39_passphrase,
         )
         resolved_mnemonic = resolved.mnemonic if resolved else ""
+        resolved_passphrase = resolved.bip39_passphrase if resolved else ""
     except (ValueError, FileNotFoundError) as e:
         logger.error(str(e))
         raise typer.Exit(1)
@@ -422,7 +431,7 @@ def coinjoin(
         config = build_taker_config(
             settings=settings,
             mnemonic=resolved_mnemonic,
-            passphrase=bip39_passphrase or "",
+            passphrase=resolved_passphrase,
             amount=amount,
             destination=destination,
             mixdepth=mixdepth,

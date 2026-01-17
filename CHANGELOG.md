@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Password Confirmation Retry Loop**: The `jm-wallet import` and `jm-wallet generate` commands now retry password confirmation up to 3 times when passwords don't match, instead of immediately exiting. This improves the user experience by allowing correction of typos without having to restart the command.
 
+- **BIP39 Passphrase Prompt for Maker/Taker**: Added `--prompt-bip39-passphrase` option to `jm-maker start` and `jm-taker coinjoin` commands. This allows users to enter their BIP39 passphrase interactively at startup rather than passing it via environment variable or command line argument.
+
 - **Wallet Scan Start Height Setting**: New `scan_start_height` configuration option in `[wallet]` section allows specifying an explicit block height for initial wallet scanning. This is useful when you know when your wallet was first used, enabling faster initial sync for newer wallets.
 
 - **Fee Rate Configuration Option**: Added `fee_rate` option to `[taker]` config section for manual fee rate specification in sat/vB. This takes precedence over `fee_block_target` when set, useful for users who prefer explicit fee rates over estimation.
