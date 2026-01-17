@@ -7,6 +7,8 @@ and attested to specific releases of JoinMarket NG.
 
 ```
 signatures/
+  pubkeys/
+    <fingerprint>.asc      # Full GPG public keys
   <version>/
     <fingerprint>.sig      # Detached signature of the release manifest
 ```
@@ -35,6 +37,8 @@ See [DOCS.md](../DOCS.md#verifying-signatures) for instructions on how to verify
 
 | Fingerprint | Name | Since |
 |-------------|------|-------|
-| *Add your key here* | *Your name* | *Date* |
+| 1C53A412D11EF3051704419C44912E1E03005B31 | m0wer | 2026-01-17 |
 
 Note: The list of trusted keys is maintained in `trusted-keys.txt` for automated verification.
+
+Full public keys are stored in `pubkeys/<fingerprint>.asc` for convenience.
