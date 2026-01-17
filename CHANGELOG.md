@@ -105,6 +105,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Maker direct connection handshake support**: Makers now respond to handshake requests on direct connections (via their hidden service). This enables health checkers and feature discovery tools to connect directly to makers and discover their features (neutrino_compat, peerlist_features) without relying on directory server peerlists. Previously, direct connections only handled CoinJoin protocol messages (fill, auth, tx, push), causing health checks to time out and feature discovery to fail for NG makers.
 
+- **Direct connection orderbook requests**: Makers now properly handle `!orderbook` requests received via direct connection (PUBMSG type 687). Previously, orderbook requests sent over direct connections were ignored with "Failed to parse direct message" warnings, because the maker only handled PRIVMSG (type 685) on direct connections. This was causing repeated warnings like `'{"type": 687, "line": "J5xxx!PUBLIC!orderbook"}'`. Now these requests are processed with the same rate limiting as directory-relayed requests.
+
+- **Improved rate limiting and ban logging**: Added DEBUG/TRACE level logging throughout the rate limiter to help diagnose peer behavior:
+  - TRACE: Logs each allowed request
+  - DEBUG: Logs each rate-limited request with violation count, backoff level, and wait time
+  - DEBUG: Logs when banned peer requests are rejected (with remaining ban time)
+  - DEBUG: Logs when ban expires and peer state is reset
+  - WARNING: Ban events now include the final backoff level for context
+
+- **Improved PoDLE verification logging**: Added DEBUG/TRACE level logging for PoDLE proof verification to help diagnose authentication issues:
+  - TRACE: Logs verification inputs (P, P2, sig, e, commitment - truncated)
+  - DEBUG: Logs full PoDLE details on success (taker, utxo, commitment)
+  - DEBUG: Logs detailed failure reasons including commitment/utxo info
+  - DEBUG: Logs UTXO validation details (value, confirmations)
+  - DEBUG: Logs specific rejection reasons (too young, too small)
+
+- **Peer feature logging in handshake**: Makers now log advertised peer features (version, network, features) at DEBUG level when receiving handshake requests on direct connections. This helps diagnose feature negotiation and compatibility issues. Supports both reference implementation format (dict: `{"peerlist_features": true}`) and NG format (comma-string: `"neutrino_compat,peerlist_features"`).
+
+- **Improved direct message parse failure logging**: Parse failures now log the full message content at DEBUG level (in addition to the rate-limited WARNING with truncated preview). This helps diagnose protocol issues without flooding logs.
+
 ## [0.10.0] - 2026-01-15
 
 ### Security

@@ -251,11 +251,23 @@ class CoinJoinSession:
 
             commitment_bytes = bytes.fromhex(commitment)
             if commitment_bytes != self.commitment:
+                logger.debug(
+                    f"Commitment mismatch: received={commitment[:16]}..., "
+                    f"expected={self.commitment.hex()[:16]}..."
+                )
                 return False, {"error": "Commitment mismatch"}
 
             parsed_rev = parse_podle_revelation(revelation)
             if not parsed_rev:
+                logger.debug(f"Failed to parse PoDLE revelation: {revelation}")
                 return False, {"error": "Invalid PoDLE revelation format"}
+
+            # Log PoDLE verification inputs at TRACE level
+            logger.trace(
+                f"PoDLE verification inputs: P={parsed_rev['P'].hex()[:32]}..., "
+                f"P2={parsed_rev['P2'].hex()[:32]}..., sig={parsed_rev['sig'].hex()[:32]}..., "
+                f"e={parsed_rev['e'].hex()[:16]}..., commitment={commitment[:16]}..."
+            )
 
             is_valid, error = verify_podle(
                 parsed_rev["P"],
@@ -267,10 +279,19 @@ class CoinJoinSession:
             )
 
             if not is_valid:
-                logger.warning(f"PoDLE verification failed: {error}")
+                utxo_str = f"{parsed_rev['txid'][:16]}...:{parsed_rev['vout']}"
+                logger.warning(
+                    f"PoDLE verification failed for {self.taker_nick}: {error} "
+                    f"(commitment={commitment[:16]}..., utxo={utxo_str})"
+                )
                 return False, {"error": f"PoDLE verification failed: {error}"}
 
             logger.info("PoDLE proof verified ✓")
+            logger.debug(
+                f"PoDLE details: taker={self.taker_nick}, "
+                f"utxo={parsed_rev['txid']}:{parsed_rev['vout']}, "
+                f"commitment={commitment}"
+            )
 
             utxo_txid = parsed_rev["txid"]
             utxo_vout = parsed_rev["vout"]
@@ -318,6 +339,10 @@ class CoinJoinSession:
                 taker_utxo_confirmations = taker_utxo.confirmations
 
             if taker_utxo_confirmations < self.taker_utxo_age:
+                logger.debug(
+                    f"Taker UTXO too young: {utxo_txid}:{utxo_vout} has "
+                    f"{taker_utxo_confirmations} confirmations, need {self.taker_utxo_age}"
+                )
                 return False, {
                     "error": f"Taker's UTXO too young: "
                     f"{taker_utxo_confirmations} < {self.taker_utxo_age}"
@@ -325,11 +350,20 @@ class CoinJoinSession:
 
             required_amount = int(self.amount * self.taker_utxo_amtpercent / 100)
             if taker_utxo_value < required_amount:
+                logger.debug(
+                    f"Taker UTXO too small: {utxo_txid}:{utxo_vout} has "
+                    f"{taker_utxo_value} sats, need {required_amount} sats "
+                    f"({self.taker_utxo_amtpercent}% of {self.amount})"
+                )
                 return False, {
                     "error": f"Taker's UTXO too small: {taker_utxo_value} < {required_amount}"
                 }
 
             logger.info("Taker's UTXO validated ✓")
+            logger.debug(
+                f"Taker UTXO details: {utxo_txid}:{utxo_vout}, "
+                f"value={taker_utxo_value} sats, confirmations={taker_utxo_confirmations}"
+            )
 
             utxos_dict, cj_addr, change_addr, mixdepth = await self._select_our_utxos()
 

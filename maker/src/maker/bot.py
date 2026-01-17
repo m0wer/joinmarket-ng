@@ -130,12 +130,23 @@ class OrderbookRateLimiter:
         # Check if peer is banned
         if peer_nick in self._banned_peers:
             ban_time = self._banned_peers[peer_nick]
-            if now - ban_time < self.ban_duration:
+            remaining = self.ban_duration - (now - ban_time)
+            if remaining > 0:
                 # Still banned, increment violation count
-                self._violation_counts[peer_nick] = self._violation_counts.get(peer_nick, 0) + 1
+                new_violations = self._violation_counts.get(peer_nick, 0) + 1
+                self._violation_counts[peer_nick] = new_violations
+                logger.debug(
+                    f"Rejecting request from banned peer {peer_nick} "
+                    f"(remaining={remaining:.0f}s, violations={new_violations})"
+                )
                 return False
             else:
                 # Ban expired, reset state completely
+                logger.debug(
+                    f"Ban expired for {peer_nick}, resetting rate limit state "
+                    f"(was banned for {self.ban_duration}s with "
+                    f"{self._violation_counts.get(peer_nick, 0)} violations)"
+                )
                 del self._banned_peers[peer_nick]
                 self._violation_counts[peer_nick] = 0
                 # Reset last response time so they can immediately get a response
@@ -146,9 +157,11 @@ class OrderbookRateLimiter:
         # Check if peer should be banned based on violations
         if violations >= self.violation_ban_threshold:
             self._banned_peers[peer_nick] = now
+            # Get backoff history for detailed logging
+            backoff_level = self._get_backoff_level_name(violations)
             logger.warning(
                 f"BANNED peer {peer_nick} for {self.ban_duration}s "
-                f"after {violations} rate limit violations"
+                f"after {violations} rate limit violations (final backoff: {backoff_level})"
             )
             return False
 
@@ -159,10 +172,18 @@ class OrderbookRateLimiter:
 
         if now - last >= effective_interval:
             self._last_response[peer_nick] = now
+            logger.trace(f"Allowed request from {peer_nick} (violations={violations})")
             return True
 
-        # Rate limited
-        self._violation_counts[peer_nick] = violations + 1
+        # Rate limited - record violation
+        new_violations = violations + 1
+        self._violation_counts[peer_nick] = new_violations
+        time_until_allowed = effective_interval - (now - last)
+        backoff_level = self._get_backoff_level_name(new_violations)
+        logger.debug(
+            f"Rate limited {peer_nick}: violations={new_violations}, "
+            f"backoff={backoff_level}, wait={time_until_allowed:.1f}s"
+        )
         return False
 
     def _get_effective_interval(self, violations: int) -> float:
@@ -189,6 +210,17 @@ class OrderbookRateLimiter:
         else:
             # Severe backoff: 30x base interval
             return self.interval * 30
+
+    def _get_backoff_level_name(self, violations: int) -> str:
+        """Get human-readable backoff level name for logging."""
+        if violations >= self.violation_ban_threshold:
+            return "BANNED"
+        elif violations >= self.violation_severe_threshold:
+            return "SEVERE"
+        elif violations >= self.violation_warning_threshold:
+            return "MODERATE"
+        else:
+            return "NORMAL"
 
     def get_violation_count(self, peer_nick: str) -> int:
         """Get the number of rate limit violations for a peer."""
@@ -2322,13 +2354,14 @@ class MakerBot:
 
         The reference implementation uses OnionCustomMessage format:
             {"type": 685, "line": "from_nick!to_nick!command data"}
-        Where type 685 = PRIVMSG.
+        Where type 685 = PRIVMSG, type 687 = PUBMSG.
 
         Our internal format (for future use):
             {"nick": "sender", "cmd": "command", "data": "..."}
 
         Returns:
             (sender_nick, command, message_data) tuple or None if parsing fails.
+            For PUBMSG (orderbook), returns (sender_nick, "PUBLIC:orderbook", "").
         """
         try:
             message = json.loads(data.decode("utf-8"))
@@ -2342,9 +2375,31 @@ class MakerBot:
             msg_type = message.get("type")
             line = message.get("line", "")
 
-            # Only handle PRIVMSG for CoinJoin protocol
+            # Handle PUBMSG (687) - typically orderbook requests
+            if msg_type == MessageType.PUBMSG.value:
+                # Parse line format: from_nick!PUBLIC!command
+                parts = line.split(COMMAND_PREFIX)
+                if len(parts) < 3:
+                    logger.debug(f"Invalid PUBMSG line format: {line[:50]}...")
+                    return None
+
+                sender_nick = parts[0]
+                to_nick = parts[1]
+                rest = COMMAND_PREFIX.join(parts[2:]).strip().lstrip("!")
+
+                if to_nick == "PUBLIC":
+                    # Return special marker for public messages
+                    logger.trace(
+                        f"Received PUBMSG from {sender_nick} via direct connection: {rest}"
+                    )
+                    return (sender_nick, f"PUBLIC:{rest}", "")
+                else:
+                    logger.debug(f"Ignoring PUBMSG with non-PUBLIC target: {to_nick}")
+                    return None
+
+            # Handle PRIVMSG (685) for CoinJoin protocol
             if msg_type != MessageType.PRIVMSG.value:
-                logger.debug(f"Ignoring non-PRIVMSG type {msg_type} on direct connection")
+                logger.debug(f"Ignoring message type {msg_type} on direct connection")
                 return None
 
             # Parse line format: from_nick!to_nick!command data
@@ -2421,7 +2476,25 @@ class MakerBot:
         peer_nick = handshake_data.get("nick", "unknown")
         peer_network = handshake_data.get("network", "")
 
+        # Parse peer's advertised features (supports both dict and comma-string formats)
+        peer_features_raw = handshake_data.get("features", "")
+        peer_features = FeatureSet()
+        if isinstance(peer_features_raw, dict):
+            # Reference implementation format: {"peerlist_features": True, ...}
+            for feature_name, enabled in peer_features_raw.items():
+                if enabled:
+                    peer_features.features.add(feature_name)
+        elif isinstance(peer_features_raw, str) and peer_features_raw:
+            # Comma-separated string format: "neutrino_compat,peerlist_features"
+            peer_features = FeatureSet.from_comma_string(peer_features_raw)
+        peer_version = handshake_data.get("version", handshake_data.get("proto-ver", "unknown"))
+
         logger.info(f"Received handshake from {peer_nick} at {peer_str}")
+        logger.debug(
+            f"Peer {peer_nick} handshake details: version={peer_version}, "
+            f"network={peer_network or 'unspecified'}, "
+            f"features={peer_features.to_comma_string() or 'none'}"
+        )
 
         # Build our feature set
         features = FeatureSet()
@@ -2511,13 +2584,16 @@ class MakerBot:
                     # Parse the message (supports both formats)
                     parsed = self._parse_direct_message(data)
                     if parsed is None:
-                        # Log message content for debugging (truncate to avoid spam)
+                        # Log message content for debugging
                         # data is bytes, decode for display (replace errors to handle binary)
                         data_str = (
                             data.decode("utf-8", errors="replace")
                             if isinstance(data, bytes)
                             else str(data)
                         )
+                        # Full message at DEBUG level for troubleshooting
+                        logger.debug(f"Unparseable direct message from {peer_str}: {data_str!r}")
+                        # Rate-limited WARNING with truncated preview
                         msg_preview = data_str[:100] + "..." if len(data_str) > 100 else data_str
                         self._log_rate_limited(
                             f"direct_parse_fail:{peer_str}",
@@ -2533,6 +2609,40 @@ class MakerBot:
                     # Track this connection by nick for sending responses
                     if sender_nick and sender_nick != "unknown":
                         self.direct_connections[sender_nick] = connection
+
+                    # Handle PUBLIC messages (orderbook requests via direct connection)
+                    if cmd.startswith("PUBLIC:"):
+                        public_cmd = cmd[7:]  # Strip "PUBLIC:" prefix
+                        if public_cmd == "orderbook":
+                            # Apply rate limiting (same as directory-based requests)
+                            if not self._orderbook_rate_limiter.check(sender_nick):
+                                violations = self._orderbook_rate_limiter.get_violation_count(
+                                    sender_nick
+                                )
+                                is_banned = self._orderbook_rate_limiter.is_banned(sender_nick)
+                                if is_banned:
+                                    logger.debug(
+                                        f"Ignoring orderbook request from banned peer "
+                                        f"{sender_nick} via direct connection"
+                                    )
+                                else:
+                                    logger.debug(
+                                        f"Rate limiting orderbook request from {sender_nick} "
+                                        f"via direct (violations: {violations})"
+                                    )
+                                continue
+
+                            logger.info(
+                                f"Received !orderbook request from {sender_nick} via direct "
+                                f"connection, sending offers"
+                            )
+                            await self._send_offers_to_taker(sender_nick)
+                        else:
+                            logger.debug(
+                                f"Unknown PUBLIC command from {sender_nick} via direct: "
+                                f"{public_cmd}"
+                            )
+                        continue
 
                     # Process the command - reuse existing handlers
                     # Commands: fill, auth, tx (same as via directory)
