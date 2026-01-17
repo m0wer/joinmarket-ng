@@ -3,10 +3,6 @@
 # =============================================================================
 FROM python:3.14-slim AS builder
 
-# Reproducible builds: Use SOURCE_DATE_EPOCH for consistent timestamps
-ARG SOURCE_DATE_EPOCH
-ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
-
 WORKDIR /build
 
 # Install build dependencies (sorted alphabetically for reproducibility)
@@ -18,27 +14,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
+# Reproducible builds: SOURCE_DATE_EPOCH must be set via --build-arg for reproducible builds
+# When not provided, pip install runs without it (non-reproducible but works)
+# Usage: docker build --build-arg SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) ...
+ARG SOURCE_DATE_EPOCH
+
 # Install jmcore dependencies
 COPY jmcore/requirements.txt /build/jmcore/
-RUN pip install --no-cache-dir --user -r /build/jmcore/requirements.txt
+RUN if [ -n "$SOURCE_DATE_EPOCH" ]; then export SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH; fi && \
+    pip install --no-cache-dir --user -r /build/jmcore/requirements.txt
 
 # Copy jmcore source and install (with notifications support)
 COPY jmcore/src /build/jmcore/src
 COPY jmcore/pyproject.toml /build/jmcore/
-RUN pip install --no-cache-dir --user "/build/jmcore"
+RUN if [ -n "$SOURCE_DATE_EPOCH" ]; then export SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH; fi && \
+    pip install --no-cache-dir --user "/build/jmcore"
 
 # Install orderbook_watcher dependencies
 COPY orderbook_watcher/requirements.txt /build/orderbook_watcher/
-RUN pip install --no-cache-dir --user -r /build/orderbook_watcher/requirements.txt
+RUN if [ -n "$SOURCE_DATE_EPOCH" ]; then export SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH; fi && \
+    pip install --no-cache-dir --user -r /build/orderbook_watcher/requirements.txt
 
 # =============================================================================
 # Production stage: Minimal runtime image
 # =============================================================================
 FROM python:3.14-slim AS production
-
-# Reproducible builds: Use SOURCE_DATE_EPOCH for consistent timestamps
-ARG SOURCE_DATE_EPOCH
-ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
 WORKDIR /app
 

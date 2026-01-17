@@ -3,10 +3,6 @@
 # =============================================================================
 FROM python:3.14-slim AS builder
 
-# Reproducible builds: Use SOURCE_DATE_EPOCH for consistent timestamps
-ARG SOURCE_DATE_EPOCH
-ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
-
 WORKDIR /build
 
 # Install build dependencies (sorted alphabetically for reproducibility)
@@ -18,41 +14,49 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
+# Reproducible builds: SOURCE_DATE_EPOCH must be set via --build-arg for reproducible builds
+# When not provided, pip install runs without it (non-reproducible but works)
+# Usage: docker build --build-arg SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) ...
+ARG SOURCE_DATE_EPOCH
+
 # Install jmcore dependencies
+# Note: SOURCE_DATE_EPOCH is passed as ARG, which is available during RUN commands
 COPY jmcore/requirements.txt /build/jmcore/requirements.txt
-RUN pip install --no-cache-dir --user -r /build/jmcore/requirements.txt
+RUN if [ -n "$SOURCE_DATE_EPOCH" ]; then export SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH; fi && \
+    pip install --no-cache-dir --user -r /build/jmcore/requirements.txt
 
 # Copy jmcore source and install (with notifications support)
 COPY jmcore/src /build/jmcore/src
 COPY jmcore/pyproject.toml /build/jmcore/
-RUN pip install --no-cache-dir --user "/build/jmcore"
+RUN if [ -n "$SOURCE_DATE_EPOCH" ]; then export SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH; fi && \
+    pip install --no-cache-dir --user "/build/jmcore"
 
 # Install jmwallet dependencies
 COPY jmwallet/requirements.txt /build/jmwallet/requirements.txt
-RUN pip install --no-cache-dir --user -r /build/jmwallet/requirements.txt
+RUN if [ -n "$SOURCE_DATE_EPOCH" ]; then export SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH; fi && \
+    pip install --no-cache-dir --user -r /build/jmwallet/requirements.txt
 
 # Copy jmwallet source and install
 COPY jmwallet/pyproject.toml /build/jmwallet/pyproject.toml
 COPY jmwallet/src /build/jmwallet/src
-RUN pip install --no-cache-dir --user /build/jmwallet
+RUN if [ -n "$SOURCE_DATE_EPOCH" ]; then export SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH; fi && \
+    pip install --no-cache-dir --user /build/jmwallet
 
 # Install maker dependencies
 COPY maker/requirements.txt /build/maker/requirements.txt
-RUN pip install --no-cache-dir --user -r /build/maker/requirements.txt
+RUN if [ -n "$SOURCE_DATE_EPOCH" ]; then export SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH; fi && \
+    pip install --no-cache-dir --user -r /build/maker/requirements.txt
 
 # Copy maker source and install
 COPY maker/src /build/maker/src
 COPY maker/pyproject.toml /build/maker/
-RUN pip install --no-cache-dir --user /build/maker
+RUN if [ -n "$SOURCE_DATE_EPOCH" ]; then export SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH; fi && \
+    pip install --no-cache-dir --user /build/maker
 
 # =============================================================================
 # Production stage: Minimal runtime image
 # =============================================================================
 FROM python:3.14-slim AS production
-
-# Reproducible builds: Use SOURCE_DATE_EPOCH for consistent timestamps
-ARG SOURCE_DATE_EPOCH
-ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
 WORKDIR /app
 
