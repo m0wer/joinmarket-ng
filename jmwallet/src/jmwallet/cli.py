@@ -159,6 +159,34 @@ def decrypt_mnemonic(encrypted_data: bytes, password: str) -> str:
         raise ValueError("Decryption failed - wrong password or corrupted file") from e
 
 
+def prompt_password_with_confirmation(max_attempts: int = 3) -> str:
+    """
+    Prompt for a password with confirmation, retrying on mismatch.
+
+    Args:
+        max_attempts: Maximum number of attempts before giving up
+
+    Returns:
+        The confirmed password
+
+    Raises:
+        typer.Exit: If passwords don't match after max_attempts
+    """
+    for attempt in range(max_attempts):
+        password = typer.prompt("Enter encryption password", hide_input=True)
+        confirm = typer.prompt("Confirm password", hide_input=True)
+        if password == confirm:
+            return password
+        remaining = max_attempts - attempt - 1
+        if remaining > 0:
+            typer.echo(f"Passwords do not match. {remaining} attempt(s) remaining.")
+        else:
+            logger.error("Passwords do not match after maximum attempts")
+            raise typer.Exit(1)
+    # Should not reach here, but satisfy type checker
+    raise typer.Exit(1)
+
+
 def save_mnemonic_file(
     mnemonic: str,
     output_file: Path,
@@ -504,11 +532,7 @@ def import_mnemonic(
 
     # Get password
     if prompt_password and password is None:
-        password = typer.prompt("Enter encryption password", hide_input=True)
-        confirm = typer.prompt("Confirm password", hide_input=True)
-        if password != confirm:
-            logger.error("Passwords do not match")
-            raise typer.Exit(1)
+        password = prompt_password_with_confirmation()
 
     # Save the mnemonic
     save_mnemonic_file(resolved_mnemonic, output_file, password)
@@ -587,11 +611,7 @@ def generate(
 
             # Prompt for password if requested and not already provided
             if prompt_password and password is None:
-                password = typer.prompt("Enter encryption password", hide_input=True)
-                confirm = typer.prompt("Confirm password", hide_input=True)
-                if password != confirm:
-                    logger.error("Passwords do not match")
-                    raise typer.Exit(1)
+                password = prompt_password_with_confirmation()
 
             save_mnemonic_file(mnemonic, output_file, password)
 

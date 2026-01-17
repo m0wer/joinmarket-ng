@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Password Confirmation Retry Loop**: The `jm-wallet import` and `jm-wallet generate` commands now retry password confirmation up to 3 times when passwords don't match, instead of immediately exiting. This improves the user experience by allowing correction of typos without having to restart the command.
+
+- **Wallet Scan Start Height Setting**: New `scan_start_height` configuration option in `[wallet]` section allows specifying an explicit block height for initial wallet scanning. This is useful when you know when your wallet was first used, enabling faster initial sync for newer wallets.
+
+- **Fee Rate Configuration Option**: Added `fee_rate` option to `[taker]` config section for manual fee rate specification in sat/vB. This takes precedence over `fee_block_target` when set, useful for users who prefer explicit fee rates over estimation.
+
+- **Troubleshooting Documentation**: Added new "Troubleshooting" section to DOCS.md with:
+  - Common `bitcoin-cli` debugging commands for wallet sync issues
+  - Smart scan configuration tips for faster initial sync
+  - RPC timeout troubleshooting guide
+
 - **Reproducible Docker Builds**: All Docker images now support reproducible builds using `SOURCE_DATE_EPOCH`. This allows anyone to verify that released images were built from the published source code.
   - Dockerfiles updated to use `SOURCE_DATE_EPOCH` build arg for consistent timestamps
   - CI/CD workflows pass git commit timestamp to builds
@@ -47,6 +58,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Chunked PEERLIST responses**: Directory server now sends PEERLIST responses in chunks of 20 peers instead of a single massive message. This fixes timeout issues when receiving large peerlists over slow Tor connections. Previously, mainnet directories with hundreds of peers would frequently timeout because the entire peerlist had to be transmitted in one message. The client now accumulates peers from multiple PEERLIST messages, using a 5-second inter-chunk timeout to detect when all chunks have been received.
 
+### Improved
+
+- **BIP39 Passphrase Documentation**: Expanded DOCS.md to clarify that `jm-wallet import` only stores the mnemonic without the BIP39 passphrase. The passphrase is provided when using the wallet (via `--bip39-passphrase`, `--prompt-bip39-passphrase`, or `BIP39_PASSPHRASE` env var).
+
+- **Config Template Clarity**: Improved `config.toml.template` comments to:
+  - Distinguish "coinjoin fees" (paid to makers) from "network/miner fees"
+  - Document `fee_rate` option precedence over `fee_block_target`
+  - Explain smart scan and background rescan behavior for wallet import
+
 - **Orderbook watcher feature detection**: Fixed race condition where offers from new makers were stored with empty features before the peerlist response arrived. Now when peerlist response arrives with features, all cached offers for those makers are retroactively updated with the correct features.
 
 - **Peer location updates now include features**: Fixed directory server to include peer features (neutrino_compat, peerlist_features) in peer location update messages sent after private message routing. Previously, when a client learned about a new peer through a PEERLIST update (not via explicit GETPEERLIST request), the features were missing. This caused orderbook watchers to miss feature information for makers discovered through private message routing.
@@ -60,8 +80,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Feature merging across directories**: Fixed issue where maker features (neutrino_compat, peerlist_features) were being overwritten instead of merged when receiving updates from multiple directory sources. When a PEERLIST came from a reference directory (no features), it would overwrite features previously learned from an NG directory. Now features are properly merged: once we learn a feature for a nick, we keep it. This ensures the orderbook watcher and taker correctly detect maker capabilities regardless of which directory responds first.
 
 - **Multiple offers per maker with same bond**: Fixed bond deduplication in orderbook watcher incorrectly dropping offers when a maker advertises multiple offer IDs (e.g., oid=0 and oid=1) backed by the same fidelity bond. Previously, only one offer was kept per bond UTXO. Now the deduplication key includes both the bond UTXO and offer ID, preserving all distinct offers from the same maker while still deduplicating when different nicks share the same bond (maker restart scenario).
-
-- **Maker direct connection handshake support**: Makers now respond to handshake requests on direct connections (via their hidden service). This enables health checkers and feature discovery tools to connect directly to makers and discover their features (neutrino_compat, peerlist_features) without relying on directory server peerlists. Previously, direct connections only handled CoinJoin protocol messages (fill, auth, tx, push), causing health checks to time out and feature discovery to fail for NG makers.
 
 - **Maker direct connection handshake support**: Makers now respond to handshake requests on direct connections (via their hidden service). This enables health checkers and feature discovery tools to connect directly to makers and discover their features (neutrino_compat, peerlist_features) without relying on directory server peerlists. Previously, direct connections only handled CoinJoin protocol messages (fill, auth, tx, push), causing health checks to time out and feature discovery to fail for NG makers.
 

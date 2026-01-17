@@ -390,6 +390,20 @@ JoinMarket NG supports the optional BIP39 passphrase (also known as the "13th wo
 - **File encryption password** (`--password`): Encrypts the mnemonic file on disk with AES
 - **BIP39 passphrase** (`--bip39-passphrase`): Used in seed derivation per BIP39 spec
 
+**Wallet Import vs. Usage**:
+
+The `jm-wallet import` command only stores the 12/24-word mnemonic - it does NOT take a BIP39 passphrase. This is intentional because the passphrase is used at key derivation time, not at storage time.
+
+```bash
+# Import only stores the mnemonic (no BIP39 passphrase here)
+jm-wallet import --words 24
+
+# BIP39 passphrase is provided when USING the wallet:
+jm-wallet info --prompt-bip39-passphrase       # Interactive prompt
+jm-wallet info --bip39-passphrase "my phrase"  # CLI argument
+BIP39_PASSPHRASE="my phrase" jm-wallet info    # Environment variable
+```
+
 **Use Cases**:
 
 - Migrate existing wallets with passphrases (e.g., from other implementations)
@@ -1805,6 +1819,70 @@ pytest -lv \
 ```
 
 For E2E tests, see the [E2E README](./tests/e2e/README.md).
+
+---
+
+## Troubleshooting
+
+### Wallet Sync Issues
+
+If wallet sync hangs or times out, use these `bitcoin-cli` commands to debug:
+
+```bash
+# List loaded wallets (jm-wallet creates descriptive names like jm_<hash>_<network>)
+bitcoin-cli listwallets
+
+# Replace <wallet_name> with your wallet name from listwallets
+WALLET="jm_xxxxxxxx_mainnet"
+
+# Check wallet balance
+bitcoin-cli -rpcwallet="$WALLET" getbalance
+
+# List unspent outputs (UTXOs)
+bitcoin-cli -rpcwallet="$WALLET" listunspent
+
+# List addresses that received funds (useful for fidelity bonds)
+bitcoin-cli -rpcwallet="$WALLET" listreceivedbyaddress
+
+# Manually trigger blockchain rescan from a specific height
+# Use height 0 for full rescan, or a recent height for faster sync
+bitcoin-cli -rpcwallet="$WALLET" rescanblockchain 900000
+
+# Check rescan progress
+bitcoin-cli -rpcwallet="$WALLET" getwalletinfo
+```
+
+**Common Sync Issues**:
+
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| First sync times out | Initial descriptor import triggers full scan | Wait and retry - background scan continues |
+| Second sync hangs | Concurrent rescan still running | Check `getwalletinfo` for scan progress |
+| Missing transactions | Scan started too late | Use `rescanblockchain` with earlier height |
+| Wrong balance | BIP39 passphrase mismatch | Verify passphrase with `jm-wallet info` |
+
+### Smart Scan Configuration
+
+For faster initial sync of newer wallets, reduce the lookback period:
+
+```toml
+[wallet]
+# ~3 months instead of ~1 year default
+scan_lookback_blocks = 12960
+
+# Or set explicit start height
+scan_start_height = 870000
+```
+
+The smart scan performs a quick scan of recent blocks first, then triggers a full background rescan to ensure no transactions are missed. You can monitor the background scan with `bitcoin-cli getwalletinfo`.
+
+### RPC Timeout Issues
+
+If you see RPC timeout errors during wallet operations:
+
+1. Check Bitcoin Core is fully synced: `bitcoin-cli getblockchaininfo`
+2. Increase RPC timeout in Bitcoin Core config: `rpcservertimeout=120`
+3. For large wallets, the first scan may take several minutes - retry after it completes
 
 ---
 

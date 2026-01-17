@@ -72,11 +72,18 @@
 # dust_threshold = 27300
 
 # Smart wallet scanning optimizations
-# smart_scan = true
-# background_full_rescan = true
+# When importing an existing wallet, initial sync scans recent blocks for fast startup.
+# A full background rescan runs afterward to ensure no transactions are missed.
+# smart_scan = true                  # Enable smart scan for fast startup
+# background_full_rescan = true      # Run full rescan in background after smart scan
 
-# Blocks to look back during wallet scan (~1 year)
+# Blocks to look back during initial smart scan (~1 year default)
+# For faster initial sync of newer wallets, set lower (e.g., 12960 for ~3 months)
 # scan_lookback_blocks = 52560
+
+# Explicit start height for initial scan (overrides scan_lookback_blocks if set)
+# Useful when you know when the wallet was first used. Set to 0 for full scan.
+# scan_start_height = 0
 
 # Default fee estimation settings
 # default_fee_block_target = 3  # Block target for wallet transactions
@@ -173,11 +180,13 @@
 # Number of counterparty makers to use (1-20)
 # counterparty_count = 10
 
-# Maximum acceptable fees
-# max_cj_fee_abs = 500        # Absolute fee in satoshis
+# Maximum acceptable coinjoin fees (paid to makers, not network/miner fees)
+# max_cj_fee_abs = 500        # Absolute fee in satoshis per maker
 # max_cj_fee_rel = "0.001"    # Relative fee (0.001 = 0.1%)
 
-# Transaction fee settings
+# Network/miner transaction fee settings
+# fee_rate takes precedence over fee_block_target when set
+# fee_rate = 10.0             # Manual fee rate in sat/vB (omit to use estimation)
 # tx_fee_factor = 3.0         # Fee estimation multiplier (minimum: 1.0)
 # fee_block_target = 6        # Target blocks for fee estimation (1-1008, omit to use default)
 

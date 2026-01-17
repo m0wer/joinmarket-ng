@@ -188,6 +188,11 @@ class WalletSettings(BaseModel):
         ge=0,
         description="Blocks to look back for smart scan (~1 year default)",
     )
+    scan_start_height: int | None = Field(
+        default=None,
+        ge=0,
+        description="Explicit start height for initial scan (overrides scan_lookback_blocks if set)",
+    )
     default_fee_block_target: int = Field(
         default=3,
         ge=1,

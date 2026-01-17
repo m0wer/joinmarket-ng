@@ -865,3 +865,149 @@ def test_format_word_suggestions():
     words = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]
     result = format_word_suggestions(words, max_display=8)
     assert result == "a, b, c, d, e, f, g, h, ... (+2 more)"
+
+
+def test_password_confirmation_retry_on_mismatch():
+    """Test that password confirmation retries when passwords don't match."""
+    from jmwallet.cli import prompt_password_with_confirmation
+
+    # Track call count
+    call_count = 0
+    responses = [
+        "password1",  # First password
+        "wrong_confirm",  # First confirm - mismatch
+        "password2",  # Second password
+        "password2",  # Second confirm - match
+    ]
+
+    def mock_prompt(*args, **kwargs):
+        nonlocal call_count
+        result = responses[call_count]
+        call_count += 1
+        return result
+
+    with patch.object(typer, "prompt", side_effect=mock_prompt):
+        result = prompt_password_with_confirmation(max_attempts=3)
+
+    assert result == "password2"
+    assert call_count == 4  # 2 prompts for first attempt + 2 for second
+
+
+def test_password_confirmation_success_first_try():
+    """Test that password confirmation succeeds on first try."""
+    from jmwallet.cli import prompt_password_with_confirmation
+
+    call_count = 0
+    responses = ["mypassword", "mypassword"]
+
+    def mock_prompt(*args, **kwargs):
+        nonlocal call_count
+        result = responses[call_count]
+        call_count += 1
+        return result
+
+    with patch.object(typer, "prompt", side_effect=mock_prompt):
+        result = prompt_password_with_confirmation(max_attempts=3)
+
+    assert result == "mypassword"
+    assert call_count == 2
+
+
+def test_password_confirmation_fails_after_max_attempts():
+    """Test that password confirmation exits after max attempts."""
+    from click.exceptions import Exit
+
+    from jmwallet.cli import prompt_password_with_confirmation
+
+    responses = [
+        "pass1",
+        "wrong1",
+        "pass2",
+        "wrong2",
+        "pass3",
+        "wrong3",
+    ]
+
+    def mock_prompt(*args, **kwargs):
+        return responses.pop(0)
+
+    with patch.object(typer, "prompt", side_effect=mock_prompt):
+        import pytest
+
+        with pytest.raises(Exit) as exc_info:
+            prompt_password_with_confirmation(max_attempts=3)
+        assert exc_info.value.exit_code == 1
+
+
+def test_import_mnemonic_password_retry():
+    """Test that import command uses password retry on mismatch."""
+    mnemonic = "abandon " * 11 + "about"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_file = Path(tmpdir) / "test.mnemonic"
+
+        # Mock prompts: first password mismatch, then match
+        responses = iter(
+            [
+                # First word prompts (skipped with --mnemonic)
+                # Password prompts
+                "password1",
+                "wrong_confirm",
+                "password2",
+                "password2",
+            ]
+        )
+
+        def mock_prompt(*args, **kwargs):
+            return next(responses)
+
+        with patch.object(typer, "prompt", side_effect=mock_prompt):
+            result = runner.invoke(
+                app,
+                [
+                    "import",
+                    "--mnemonic",
+                    mnemonic,
+                    "--output",
+                    str(output_file),
+                ],
+            )
+
+        assert result.exit_code == 0, f"import failed: {result.stdout}"
+        assert output_file.exists()
+        assert "Passwords do not match" in result.stdout
+
+
+def test_generate_mnemonic_password_retry():
+    """Test that generate command uses password retry on mismatch."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_file = Path(tmpdir) / "test.mnemonic"
+
+        # Mock prompts: first password mismatch, then match
+        responses = iter(
+            [
+                "password1",
+                "wrong_confirm",
+                "password2",
+                "password2",
+            ]
+        )
+
+        def mock_prompt(*args, **kwargs):
+            return next(responses)
+
+        with patch.object(typer, "prompt", side_effect=mock_prompt):
+            result = runner.invoke(
+                app,
+                [
+                    "generate",
+                    "--words",
+                    "12",
+                    "--output",
+                    str(output_file),
+                ],
+            )
+
+        assert result.exit_code == 0, f"generate failed: {result.stdout}"
+        assert output_file.exists()
+        assert "Passwords do not match" in result.stdout
