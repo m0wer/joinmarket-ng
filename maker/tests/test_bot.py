@@ -919,5 +919,176 @@ class TestDirectoryReconnection:
         assert maker_bot._directory_reconnect_attempts.get(node_id, 0) == 0
 
 
+class TestDirectConnectionHandshake:
+    """Tests for handling handshake messages on direct connections."""
+
+    @pytest.fixture
+    def mock_wallet(self):
+        """Create a mock wallet service."""
+        wallet = MagicMock()
+        wallet.mixdepth_count = 5
+        wallet.utxo_cache = {}
+        return wallet
+
+    @pytest.fixture
+    def mock_backend(self):
+        """Create a mock blockchain backend."""
+        backend = MagicMock()
+        # Full node backend can provide neutrino metadata
+        backend.can_provide_neutrino_metadata.return_value = True
+        return backend
+
+    @pytest.fixture
+    def config(self):
+        """Create a test maker config."""
+        return MakerConfig(
+            mnemonic="test " * 12,
+            directory_servers=["localhost:5222"],
+            network=NetworkType.REGTEST,
+        )
+
+    @pytest.fixture
+    def maker_bot(self, mock_wallet, mock_backend, config):
+        """Create a MakerBot instance for testing."""
+        bot = MakerBot(
+            wallet=mock_wallet,
+            backend=mock_backend,
+            config=config,
+        )
+        return bot
+
+    @pytest.mark.asyncio
+    async def test_try_handle_handshake_returns_false_for_non_handshake(self, maker_bot):
+        """Test that non-handshake messages return False."""
+        mock_conn = MagicMock(spec=TCPConnection)
+
+        # PRIVMSG type message
+        privmsg_data = json.dumps({"type": 685, "line": "test"}).encode("utf-8")
+        result = await maker_bot._try_handle_handshake(mock_conn, privmsg_data, "test:1234")
+        assert result is False
+
+        # Invalid JSON
+        result = await maker_bot._try_handle_handshake(mock_conn, b"not json", "test:1234")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_try_handle_handshake_responds_with_dn_handshake(self, maker_bot):
+        """Test that handshake request gets DN_HANDSHAKE response with features."""
+        mock_conn = MagicMock(spec=TCPConnection)
+
+        # Create a handshake request (type 793)
+        handshake_request = {
+            "type": 793,  # HANDSHAKE
+            "line": json.dumps(
+                {
+                    "app-name": "joinmarket",
+                    "directory": False,
+                    "location-string": "NOT-SERVING-ONION",
+                    "proto-ver": 5,
+                    "features": {"peerlist_features": True},
+                    "nick": "J5TestNick",
+                    "network": "regtest",
+                }
+            ),
+        }
+        data = json.dumps(handshake_request).encode("utf-8")
+
+        result = await maker_bot._try_handle_handshake(mock_conn, data, "test:1234")
+
+        assert result is True
+        mock_conn.send.assert_called_once()
+
+        # Parse the response
+        response_bytes = mock_conn.send.call_args[0][0]
+        response = json.loads(response_bytes.decode("utf-8"))
+
+        # Should be DN_HANDSHAKE (795)
+        assert response["type"] == 795
+
+        # Parse the response data
+        response_data = json.loads(response["line"])
+        assert response_data["accepted"] is True
+        assert response_data["nick"] == maker_bot.nick
+        assert response_data["network"] == "regtest"
+
+        # Should include features
+        features = response_data.get("features", {})
+        assert "neutrino_compat" in features
+        assert features["neutrino_compat"] is True
+        assert "peerlist_features" in features
+        assert features["peerlist_features"] is True
+
+    @pytest.mark.asyncio
+    async def test_try_handle_handshake_rejects_wrong_network(self, maker_bot):
+        """Test that handshake from wrong network is rejected."""
+        mock_conn = MagicMock(spec=TCPConnection)
+
+        # Create a handshake request with wrong network
+        handshake_request = {
+            "type": 793,
+            "line": json.dumps(
+                {
+                    "app-name": "joinmarket",
+                    "directory": False,
+                    "location-string": "NOT-SERVING-ONION",
+                    "proto-ver": 5,
+                    "features": {},
+                    "nick": "J5TestNick",
+                    "network": "mainnet",  # Wrong network (we're on regtest)
+                }
+            ),
+        }
+        data = json.dumps(handshake_request).encode("utf-8")
+
+        result = await maker_bot._try_handle_handshake(mock_conn, data, "test:1234")
+
+        assert result is True
+        mock_conn.send.assert_called_once()
+
+        # Parse the response
+        response_bytes = mock_conn.send.call_args[0][0]
+        response = json.loads(response_bytes.decode("utf-8"))
+        response_data = json.loads(response["line"])
+
+        # Should be rejected
+        assert response_data["accepted"] is False
+
+    @pytest.mark.asyncio
+    async def test_try_handle_handshake_neutrino_backend_no_neutrino_compat(self, maker_bot):
+        """Test that Neutrino backend doesn't advertise neutrino_compat."""
+        mock_conn = MagicMock(spec=TCPConnection)
+
+        # Configure backend as Neutrino (can't provide neutrino metadata)
+        maker_bot.backend.can_provide_neutrino_metadata.return_value = False
+
+        handshake_request = {
+            "type": 793,
+            "line": json.dumps(
+                {
+                    "app-name": "joinmarket",
+                    "directory": False,
+                    "location-string": "NOT-SERVING-ONION",
+                    "proto-ver": 5,
+                    "features": {},
+                    "nick": "J5TestNick",
+                    "network": "regtest",
+                }
+            ),
+        }
+        data = json.dumps(handshake_request).encode("utf-8")
+
+        await maker_bot._try_handle_handshake(mock_conn, data, "test:1234")
+
+        response_bytes = mock_conn.send.call_args[0][0]
+        response = json.loads(response_bytes.decode("utf-8"))
+        response_data = json.loads(response["line"])
+
+        # Should NOT include neutrino_compat
+        features = response_data.get("features", {})
+        assert "neutrino_compat" not in features or features.get("neutrino_compat") is False
+        # But should still have peerlist_features
+        assert features.get("peerlist_features") is True
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

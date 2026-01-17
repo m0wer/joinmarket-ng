@@ -22,7 +22,15 @@ from jmcore.directory_client import DirectoryClient, DirectoryClientError
 from jmcore.models import Offer
 from jmcore.network import HiddenServiceListener, TCPConnection
 from jmcore.notifications import get_notifier
-from jmcore.protocol import COMMAND_PREFIX, JM_VERSION
+from jmcore.protocol import (
+    COMMAND_PREFIX,
+    FEATURE_NEUTRINO_COMPAT,
+    FEATURE_PEERLIST_FEATURES,
+    JM_VERSION,
+    FeatureSet,
+    MessageType,
+    create_handshake_response,
+)
 from jmcore.rate_limiter import RateLimiter
 from jmcore.tor_control import (
     EphemeralHiddenService,
@@ -2349,16 +2357,109 @@ class MakerBot:
 
         return None
 
+    async def _try_handle_handshake(
+        self, connection: TCPConnection, data: bytes, peer_str: str
+    ) -> bool:
+        """Try to handle a handshake request on a direct connection.
+
+        Health checkers and feature discovery tools connect directly to makers
+        and send a handshake request to discover features like neutrino_compat.
+
+        The protocol mirrors the reference implementation:
+        - Client sends HANDSHAKE (793) with client_handshake_json format
+        - Server responds with DN_HANDSHAKE (795) with server_handshake_json format
+
+        Args:
+            connection: The TCP connection
+            data: Raw message data
+            peer_str: Peer identifier string for logging
+
+        Returns:
+            True if this was a handshake message (handled), False otherwise.
+        """
+        try:
+            message = json.loads(data.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return False
+
+        # Check for handshake message type (793 = HANDSHAKE)
+        if message.get("type") != MessageType.HANDSHAKE.value:
+            return False
+
+        # Parse the handshake request
+        try:
+            line = message.get("line", "")
+            handshake_data = json.loads(line) if isinstance(line, str) else line
+        except json.JSONDecodeError:
+            logger.warning(f"Invalid handshake JSON from {peer_str}")
+            return True  # Was a handshake message, just malformed
+
+        peer_nick = handshake_data.get("nick", "unknown")
+        peer_network = handshake_data.get("network", "")
+
+        logger.info(f"Received handshake from {peer_nick} at {peer_str}")
+
+        # Build our feature set
+        features = FeatureSet()
+        if self.backend.can_provide_neutrino_metadata():
+            features.features.add(FEATURE_NEUTRINO_COMPAT)
+        # We support peerlist_features protocol
+        features.features.add(FEATURE_PEERLIST_FEATURES)
+
+        # Validate network
+        if peer_network and peer_network != self.config.network.value:
+            logger.warning(
+                f"Network mismatch from {peer_nick}: {peer_network} != {self.config.network.value}"
+            )
+            # Still respond but mark as rejected
+            response_data = create_handshake_response(
+                nick=self.nick,
+                network=self.config.network.value,
+                accepted=False,
+                motd="Network mismatch",
+                features=features,
+            )
+        else:
+            response_data = create_handshake_response(
+                nick=self.nick,
+                network=self.config.network.value,
+                accepted=True,
+                motd="JoinMarket NG Maker",
+                features=features,
+            )
+
+        # Send handshake response using DN_HANDSHAKE (795) type
+        # This matches the reference implementation protocol where the server
+        # (directory or maker accepting connections) responds with dn-handshake
+        response_msg = {
+            "type": MessageType.DN_HANDSHAKE.value,
+            "line": json.dumps(response_data),
+        }
+        try:
+            await connection.send(json.dumps(response_msg).encode("utf-8"))
+            logger.info(
+                f"Sent handshake response to {peer_nick} "
+                f"(features: {features.to_comma_string() or 'none'})"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send handshake response to {peer_str}: {e}")
+
+        return True
+
     async def _on_direct_connection(self, connection: TCPConnection, peer_str: str) -> None:
         """Handle incoming direct connection from a taker via hidden service.
 
-        Direct connections support two message formats:
+        Direct connections support three message formats:
 
-        1. Reference implementation format (OnionCustomMessage):
+        1. Handshake request (health check / feature discovery):
+           {"type": 793, "line": "<json handshake data>"}
+           Maker responds with handshake response including features.
+
+        2. Reference implementation format (OnionCustomMessage):
            {"type": 685, "line": "from_nick!to_nick!command data"}
            Where type 685 = PRIVMSG.
 
-        2. Our simplified format:
+        3. Our simplified format:
            {"nick": "sender", "cmd": "command", "data": "..."}
 
         This bypasses the directory server for lower latency once the taker
@@ -2375,6 +2476,13 @@ class MakerBot:
                     if not data:
                         logger.info(f"Direct connection from {peer_str} closed")
                         break
+
+                    # Check for handshake request first (health check / feature discovery)
+                    handshake_handled = await self._try_handle_handshake(connection, data, peer_str)
+                    if handshake_handled:
+                        # Handshake was handled, connection may close after response
+                        # Continue to allow follow-up messages or clean disconnect
+                        continue
 
                     # Parse the message (supports both formats)
                     parsed = self._parse_direct_message(data)
