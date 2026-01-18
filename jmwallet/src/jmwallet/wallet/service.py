@@ -1472,7 +1472,8 @@ class WalletService:
         for address, (md, ch, idx) in self.address_cache.items():
             if md == mixdepth and ch == change:
                 has_balance = address in address_balances
-                has_history = address in used_addresses
+                # Check both CoinJoin history AND general blockchain activity
+                has_history = address in used_addresses or address in self.addresses_with_history
                 if has_balance or has_history:
                     if idx > max_used_index:
                         max_used_index = idx

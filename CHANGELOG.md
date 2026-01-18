@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Unconfirmed Transaction Display in Wallet Info**: The `jm-wallet info --extended` command now shows "(unconfirmed)" status for addresses with unconfirmed UTXOs. This detects pending transactions directly from the Bitcoin backend (via `listunspent` with `minconf=0`), providing visibility into unconfirmed funds even for direct sends that aren't tracked in CoinJoin history.
 
+### Fixed
+
+- **Spent Address Shows "used-empty" Instead of "new"**: Fixed a bug in `jm-wallet info --extended` where an address that previously had funds but was spent (outside of CoinJoin) would incorrectly show as "new" with 0 balance instead of "used-empty". The address display range calculation now correctly considers general blockchain activity (`addresses_with_history`) in addition to CoinJoin history.
+
 - **Pending Transaction Timeout**: Maker now automatically marks pending CoinJoin transactions as failed after 60 minutes (configurable via `pending_tx_timeout_min` setting). This prevents the transaction history from being cluttered with entries that the taker never broadcast. Previously, these entries would remain in "pending" state indefinitely, causing repeated (and noisy) transaction lookup attempts in the logs.
 
 - **Mempool Min Fee Check for Wallet Send**: The `jm-wallet send` command now checks the fee rate against the node's mempool minimum fee (like the taker already does). If a manual `--fee-rate` is below the node's `minrelaytxfee`, a warning is logged and the mempool minimum is used instead, preventing "min relay fee not met" broadcast failures.

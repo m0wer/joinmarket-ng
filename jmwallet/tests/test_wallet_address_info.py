@@ -736,6 +736,46 @@ class TestAddressInfoForMixdepth:
         assert addresses[0].status == "cj-out"
         assert addresses[0].balance == 50000
 
+    def test_spent_address_shows_used_empty_not_new(self, wallet):
+        """Test that a spent address (now empty) shows 'used-empty', not 'new'.
+
+        Regression test for bug: After spending from an address, the address that
+        previously had funds and was labeled "non-cj-change" would show as "new"
+        instead of "used-empty" because `addresses_with_history` was not being
+        checked when calculating max_used_index.
+        """
+        # Simulate an address at index 5 that HAD funds but is now empty
+        # (spent in a non-CoinJoin transaction)
+        addr_5 = wallet.get_change_address(0, 5)
+
+        # Mark the address as having blockchain history (simulating it was used)
+        # This is what happens during wallet sync when an address had UTXOs
+        wallet.addresses_with_history.add(addr_5)
+
+        # No UTXOs (the address is now empty after spending)
+        wallet.utxo_cache[0] = []
+
+        addresses = wallet.get_address_info_for_mixdepth(
+            mixdepth=0,
+            change=1,  # Internal/change addresses
+            gap_limit=3,
+            used_addresses=set(),  # No CoinJoin history
+            history_addresses={},  # No CoinJoin history
+        )
+
+        # Should return addresses 0 through 5 + gap_limit = 0-8
+        # Even though there's no balance, the address at index 5 has history
+        assert len(addresses) >= 9  # 0-5 (history at 5) + 3 gap = 9
+
+        # Address at index 5 should be "used-empty", NOT "new"
+        addr_5_info = addresses[5]
+        assert addr_5_info.balance == 0
+        assert addr_5_info.status == "used-empty"
+
+        # Addresses 6-8 (gap) should be "new"
+        for i in [6, 7, 8]:
+            assert addresses[i].status == "new"
+
 
 class TestAccountXpub:
     """Tests for xpub generation."""
