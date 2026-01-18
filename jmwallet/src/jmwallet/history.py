@@ -594,6 +594,71 @@ def mark_pending_transaction_failed(
         return False
 
 
+def cleanup_stale_pending_transactions(
+    max_age_minutes: int = 60,
+    data_dir: Path | None = None,
+) -> int:
+    """
+    Mark all stale pending transactions as failed.
+
+    This is a cleanup function for entries that got stuck in pending state
+    (e.g., from before the timeout feature was implemented, or due to bugs).
+
+    Args:
+        max_age_minutes: Mark entries older than this as failed (default: 60)
+        data_dir: Optional data directory
+
+    Returns:
+        Number of entries marked as failed
+    """
+    history_path = _get_history_path(data_dir)
+    if not history_path.exists():
+        return 0
+
+    entries = read_history(data_dir)
+    count = 0
+    now = datetime.now()
+
+    for entry in entries:
+        # Only process pending entries (success=False, confirmations=0, no completed_at)
+        if not entry.success and entry.confirmations == 0 and not entry.completed_at:
+            try:
+                timestamp = datetime.fromisoformat(entry.timestamp)
+                age_minutes = (now - timestamp).total_seconds() / 60
+
+                if age_minutes >= max_age_minutes:
+                    entry.completed_at = now.isoformat()
+                    entry.failure_reason = (
+                        f"Cleaned up: pending for {int(age_minutes)} minutes without confirmation"
+                    )
+                    txid_str = f" (txid: {entry.txid[:16]}...)" if entry.txid else ""
+                    logger.info(
+                        f"Marked stale pending entry{txid_str} as failed "
+                        f"(age: {int(age_minutes)} minutes)"
+                    )
+                    count += 1
+            except (ValueError, TypeError) as e:
+                logger.debug(f"Error parsing timestamp for entry: {e}")
+                continue
+
+    if count == 0:
+        return 0
+
+    # Rewrite the entire history file
+    try:
+        fieldnames = _get_fieldnames()
+        with open(history_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for entry in entries:
+                row = {f.name: getattr(entry, f.name) for f in fields(entry)}
+                writer.writerow(row)
+        return count
+    except Exception as e:
+        logger.error(f"Failed to update history: {e}")
+        return 0
+
+
 def create_taker_history_entry(
     maker_nicks: list[str],
     cj_amount: int,

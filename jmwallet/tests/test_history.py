@@ -15,6 +15,7 @@ from jmwallet.backends.base import Transaction
 from jmwallet.history import (
     TransactionHistoryEntry,
     append_history_entry,
+    cleanup_stale_pending_transactions,
     create_maker_history_entry,
     create_taker_history_entry,
     detect_coinjoin_peer_count,
@@ -1100,3 +1101,121 @@ class TestMarkPendingTransactionFailed:
         assert second.success is False
         assert second.failure_reason == "Transaction not found"
         assert second.completed_at != ""
+
+
+class TestCleanupStalePendingTransactions:
+    """Tests for cleanup_stale_pending_transactions function."""
+
+    def test_cleanup_old_pending_entries(self, temp_data_dir: Path) -> None:
+        """Test that old pending entries are cleaned up."""
+        from datetime import datetime, timedelta
+
+        # Create an old pending entry (2 hours ago)
+        old_timestamp = (datetime.now() - timedelta(hours=2)).isoformat()
+        old_entry = TransactionHistoryEntry(
+            timestamp=old_timestamp,
+            role="maker",
+            txid="old_pending_txid123",
+            cj_amount=1_000_000,
+            success=False,
+            failure_reason="Pending confirmation",
+            confirmations=0,
+            completed_at="",  # Not completed
+            destination_address="bc1qoldpending12345",
+        )
+        append_history_entry(old_entry, temp_data_dir)
+
+        # Create a recent pending entry (5 minutes ago)
+        recent_timestamp = (datetime.now() - timedelta(minutes=5)).isoformat()
+        recent_entry = TransactionHistoryEntry(
+            timestamp=recent_timestamp,
+            role="maker",
+            txid="recent_pending_tx12",
+            cj_amount=2_000_000,
+            success=False,
+            failure_reason="Pending confirmation",
+            confirmations=0,
+            completed_at="",  # Not completed
+            destination_address="bc1qrecentpending1",
+        )
+        append_history_entry(recent_entry, temp_data_dir)
+
+        # Verify both are pending before cleanup
+        pending = get_pending_transactions(temp_data_dir)
+        assert len(pending) == 2
+
+        # Clean up with 60 minute threshold
+        count = cleanup_stale_pending_transactions(max_age_minutes=60, data_dir=temp_data_dir)
+        assert count == 1  # Only the old one should be cleaned
+
+        # Verify only recent entry is still pending
+        pending = get_pending_transactions(temp_data_dir)
+        assert len(pending) == 1
+        assert pending[0].txid == "recent_pending_tx12"
+
+        # Verify old entry was marked as failed
+        entries = read_history(temp_data_dir)
+        old = [e for e in entries if e.txid == "old_pending_txid123"][0]
+        assert old.completed_at != ""
+        assert "Cleaned up" in old.failure_reason
+
+    def test_cleanup_does_not_touch_confirmed(self, temp_data_dir: Path) -> None:
+        """Test that confirmed entries are not affected by cleanup."""
+        from datetime import datetime, timedelta
+
+        # Create an old confirmed entry
+        old_timestamp = (datetime.now() - timedelta(hours=24)).isoformat()
+        confirmed_entry = TransactionHistoryEntry(
+            timestamp=old_timestamp,
+            role="maker",
+            txid="confirmed_txid12345",
+            cj_amount=1_000_000,
+            success=True,
+            failure_reason="",
+            confirmations=6,
+            completed_at=old_timestamp,
+            destination_address="bc1qconfirmed12345",
+        )
+        append_history_entry(confirmed_entry, temp_data_dir)
+
+        # Clean up
+        count = cleanup_stale_pending_transactions(max_age_minutes=60, data_dir=temp_data_dir)
+        assert count == 0
+
+        # Verify entry unchanged
+        entries = read_history(temp_data_dir)
+        assert len(entries) == 1
+        assert entries[0].success is True
+        assert entries[0].confirmations == 6
+
+    def test_cleanup_with_no_entries(self, temp_data_dir: Path) -> None:
+        """Test cleanup with empty history."""
+        count = cleanup_stale_pending_transactions(max_age_minutes=60, data_dir=temp_data_dir)
+        assert count == 0
+
+    def test_cleanup_does_not_touch_already_failed(self, temp_data_dir: Path) -> None:
+        """Test that already-failed entries are not re-processed."""
+        from datetime import datetime, timedelta
+
+        # Create an old failed entry (has completed_at set)
+        old_timestamp = (datetime.now() - timedelta(hours=24)).isoformat()
+        failed_entry = TransactionHistoryEntry(
+            timestamp=old_timestamp,
+            role="maker",
+            txid="failed_txid1234567",
+            cj_amount=1_000_000,
+            success=False,
+            failure_reason="Original failure reason",
+            confirmations=0,
+            completed_at=(datetime.now() - timedelta(hours=23)).isoformat(),  # Already completed
+            destination_address="bc1qfailed12345678",
+        )
+        append_history_entry(failed_entry, temp_data_dir)
+
+        # Clean up
+        count = cleanup_stale_pending_transactions(max_age_minutes=60, data_dir=temp_data_dir)
+        assert count == 0  # Should not be cleaned (already has completed_at)
+
+        # Verify failure reason unchanged
+        entries = read_history(temp_data_dir)
+        assert entries[0].failure_reason == "Original failure reason"
