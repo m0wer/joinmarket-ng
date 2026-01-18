@@ -37,11 +37,12 @@ Environment Variable Naming:
 from __future__ import annotations
 
 import os
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, ClassVar
 
 from loguru import logger
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -329,6 +330,27 @@ class MakerSettings(BaseModel):
         ge=1,
         description="Maximum burst messages per peer",
     )
+
+    @field_validator("cj_fee_relative", mode="before")
+    @classmethod
+    def normalize_cj_fee_relative(cls, v: str | float | int) -> str:
+        """
+        Normalize cj_fee_relative to avoid scientific notation.
+
+        Pydantic may coerce float values (from env vars, TOML, or JSON) to strings,
+        which can result in scientific notation for small values (e.g., 1e-05).
+        The JoinMarket protocol expects decimal notation (e.g., 0.00001).
+        """
+        if isinstance(v, (int, float)):
+            # Use Decimal to preserve precision and avoid scientific notation
+            return format(Decimal(str(v)), "f")
+        # Already a string - check if it contains scientific notation
+        if "e" in v.lower():
+            try:
+                return format(Decimal(v), "f")
+            except InvalidOperation:
+                pass  # Let pydantic handle the validation error
+        return v
 
 
 class TakerSettings(BaseModel):

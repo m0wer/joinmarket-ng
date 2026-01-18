@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Fix Scientific Notation in Maker Fee Offers**: Fixed an issue where small relative fee values (like `0.00001`) were being sent in scientific notation (e.g., `1e-05`) instead of decimal notation. This happened when the fee was configured as a float in TOML config or environment variables, and Python's default float-to-string conversion produced scientific notation. The JoinMarket protocol expects decimal notation, which could cause compatibility issues with reference implementations. Added field validators to normalize all `cj_fee_relative` values to proper decimal strings.
+
 - **Improved Wallet Info Display**: Redesigned the `jm-wallet info` output to be clearer and less misleading:
   - **Standard view**: Balance and deposit addresses are now shown on separate lines with clear headers, instead of on the same line which could be misinterpreted as showing the balance at that specific address.
   - **Extended view**: Added a legend explaining address status labels (new, deposit, cj-out, non-cj-change, used-empty, flagged) so users can understand why addresses were skipped or marked as do-not-reuse.

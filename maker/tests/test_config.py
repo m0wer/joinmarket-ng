@@ -8,7 +8,7 @@ import pytest
 from jmcore.models import OfferType
 from pydantic import ValidationError
 
-from maker.config import MakerConfig, MergeAlgorithm, TorControlConfig
+from maker.config import MakerConfig, MergeAlgorithm, OfferConfig, TorControlConfig
 
 # Test mnemonic (BIP39 test vector)
 TEST_MNEMONIC = (
@@ -197,3 +197,84 @@ class TestMergeAlgorithm:
                 mnemonic=TEST_MNEMONIC,
                 merge_algorithm="invalid_algo",  # type: ignore[arg-type]
             )
+
+
+class TestCjFeeRelativeNormalization:
+    """Tests for cj_fee_relative scientific notation normalization."""
+
+    def test_float_converted_to_decimal_notation(self) -> None:
+        """Test that float values are converted to decimal notation, not scientific."""
+        # When pydantic coerces a float like 0.00001 to str, it becomes "1e-05"
+        # Our validator should normalize this to "0.00001"
+        config = MakerConfig(
+            mnemonic=TEST_MNEMONIC,
+            cj_fee_relative=0.00001,  # type: ignore[arg-type]
+        )
+        assert config.cj_fee_relative == "0.00001"
+        assert "e" not in config.cj_fee_relative.lower()
+
+    def test_scientific_notation_string_normalized(self) -> None:
+        """Test that scientific notation strings are normalized to decimal."""
+        config = MakerConfig(
+            mnemonic=TEST_MNEMONIC,
+            cj_fee_relative="1e-05",
+        )
+        assert config.cj_fee_relative == "0.00001"
+        assert "e" not in config.cj_fee_relative.lower()
+
+    def test_uppercase_scientific_notation_normalized(self) -> None:
+        """Test that uppercase scientific notation is also handled."""
+        config = MakerConfig(
+            mnemonic=TEST_MNEMONIC,
+            cj_fee_relative="1E-05",
+        )
+        assert config.cj_fee_relative == "0.00001"
+
+    def test_regular_decimal_unchanged(self) -> None:
+        """Test that regular decimal strings pass through unchanged."""
+        config = MakerConfig(
+            mnemonic=TEST_MNEMONIC,
+            cj_fee_relative="0.001",
+        )
+        assert config.cj_fee_relative == "0.001"
+
+    def test_offer_config_normalizes_float(self) -> None:
+        """Test that OfferConfig also normalizes float values."""
+        config = OfferConfig(
+            cj_fee_relative=0.00001,  # type: ignore[arg-type]
+        )
+        assert config.cj_fee_relative == "0.00001"
+        assert "e" not in config.cj_fee_relative.lower()
+
+    def test_offer_config_normalizes_scientific_string(self) -> None:
+        """Test that OfferConfig normalizes scientific notation strings."""
+        config = OfferConfig(
+            cj_fee_relative="1e-5",
+        )
+        assert config.cj_fee_relative == "0.00001"
+
+    def test_various_small_values(self) -> None:
+        """Test normalization for various small fee values."""
+        test_cases = [
+            (0.0001, "0.0001"),
+            (0.00001, "0.00001"),
+            (0.000001, "0.000001"),
+            ("1e-4", "0.0001"),
+            ("1e-5", "0.00001"),
+            ("1e-6", "0.000001"),
+            ("2.5e-5", "0.000025"),
+        ]
+        for input_val, expected in test_cases:
+            config = OfferConfig(
+                cj_fee_relative=input_val,  # type: ignore[arg-type]
+            )
+            assert config.cj_fee_relative == expected, f"Failed for {input_val}"
+            assert "e" not in config.cj_fee_relative.lower()
+
+    def test_integer_input_normalized(self) -> None:
+        """Test that integer inputs are converted to string."""
+        config = OfferConfig(
+            cj_fee_relative=1,  # type: ignore[arg-type]
+        )
+        # Integer 1 should become "1"
+        assert config.cj_fee_relative == "1"

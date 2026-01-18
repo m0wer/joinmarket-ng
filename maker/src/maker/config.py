@@ -4,11 +4,32 @@ Maker bot configuration.
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 
 from jmcore.config import TorControlConfig, WalletConfig
 from jmcore.models import OfferType
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+def normalize_decimal_string(v: str | float | int) -> str:
+    """
+    Normalize a decimal value to avoid scientific notation.
+
+    Pydantic may coerce float values (from env vars, TOML, or JSON) to strings,
+    which can result in scientific notation for small values (e.g., 1e-05).
+    The JoinMarket protocol expects decimal notation (e.g., 0.00001).
+    """
+    if isinstance(v, (int, float)):
+        # Use Decimal to preserve precision and avoid scientific notation
+        return format(Decimal(str(v)), "f")
+    # Already a string - check if it contains scientific notation
+    if "e" in v.lower():
+        try:
+            return format(Decimal(v), "f")
+        except InvalidOperation:
+            pass  # Let pydantic handle the validation error
+    return v
 
 
 class OfferConfig(BaseModel):
@@ -45,6 +66,12 @@ class OfferConfig(BaseModel):
         ge=0,
         description="Transaction fee contribution in satoshis",
     )
+
+    @field_validator("cj_fee_relative", mode="before")
+    @classmethod
+    def normalize_cj_fee_relative(cls, v: str | float | int) -> str:
+        """Normalize cj_fee_relative to avoid scientific notation."""
+        return normalize_decimal_string(v)
 
     @model_validator(mode="after")
     def validate_fee_config(self) -> OfferConfig:
@@ -274,6 +301,12 @@ class MakerConfig(WalletConfig):
     )
 
     model_config = {"frozen": False}
+
+    @field_validator("cj_fee_relative", mode="before")
+    @classmethod
+    def normalize_cj_fee_relative(cls, v: str | float | int) -> str:
+        """Normalize cj_fee_relative to avoid scientific notation."""
+        return normalize_decimal_string(v)
 
     @model_validator(mode="after")
     def validate_config(self) -> MakerConfig:

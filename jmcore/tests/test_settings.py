@@ -12,6 +12,7 @@ import pytest
 from jmcore.models import NetworkType
 from jmcore.settings import (
     JoinMarketSettings,
+    MakerSettings,
     ensure_config_file,
     generate_config_template,
     get_config_path,
@@ -350,3 +351,58 @@ class TestConfigPath:
 
         config_path = get_config_path()
         assert config_path == Path("/custom/data/config.toml")
+
+
+class TestMakerSettingsCjFeeNormalization:
+    """Tests for MakerSettings cj_fee_relative scientific notation normalization."""
+
+    def test_float_converted_to_decimal_notation(self) -> None:
+        """Test that float values are converted to decimal notation."""
+        settings = MakerSettings(cj_fee_relative=0.00001)  # type: ignore[arg-type]
+        assert settings.cj_fee_relative == "0.00001"
+        assert "e" not in settings.cj_fee_relative.lower()
+
+    def test_scientific_notation_string_normalized(self) -> None:
+        """Test that scientific notation strings are normalized."""
+        settings = MakerSettings(cj_fee_relative="1e-05")
+        assert settings.cj_fee_relative == "0.00001"
+        assert "e" not in settings.cj_fee_relative.lower()
+
+    def test_toml_float_normalized(
+        self, temp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test that TOML float values are normalized to decimal notation."""
+        config_path = temp_data_dir / "config.toml"
+        # TOML parses 0.00001 as a float, which could become "1e-05" when stringified
+        config_path.write_text("""
+[maker]
+cj_fee_relative = 0.00001
+""")
+
+        settings = JoinMarketSettings()
+
+        assert settings.maker.cj_fee_relative == "0.00001"
+        assert "e" not in settings.maker.cj_fee_relative.lower()
+
+    def test_env_var_float_normalized(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that environment variable float values are normalized."""
+        # When set via env var, the value comes as a string
+        monkeypatch.setenv("MAKER__CJ_FEE_RELATIVE", "1e-05")
+
+        settings = JoinMarketSettings()
+
+        assert settings.maker.cj_fee_relative == "0.00001"
+        assert "e" not in settings.maker.cj_fee_relative.lower()
+
+    def test_various_small_values(self) -> None:
+        """Test normalization for various small fee values."""
+        test_cases = [
+            (0.0001, "0.0001"),
+            (0.00001, "0.00001"),
+            ("1e-4", "0.0001"),
+            ("1e-5", "0.00001"),
+            ("2.5e-5", "0.000025"),
+        ]
+        for input_val, expected in test_cases:
+            settings = MakerSettings(cj_fee_relative=input_val)  # type: ignore[arg-type]
+            assert settings.cj_fee_relative == expected, f"Failed for {input_val}"
