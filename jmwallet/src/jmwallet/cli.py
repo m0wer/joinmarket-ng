@@ -1003,9 +1003,13 @@ async def _show_wallet_info(
             print("\nBalance by mixdepth:")
             for md in range(5):
                 balance = await wallet.get_balance(md)
+                print(f"  Mixdepth {md}: {balance:>15,} sats")
+
+            print("\nDeposit addresses (next unused):")
+            for md in range(5):
                 # Get next address after the last used (highest used index + 1)
                 addr, _ = wallet.get_next_after_last_used_address(md, used_addresses)
-                print(f"  Mixdepth {md}: {balance:>15,} sats  |  {addr}")
+                print(f"  Mixdepth {md}: {addr}")
 
     finally:
         await wallet.close()
@@ -1030,6 +1034,16 @@ def _show_extended_wallet_info(
 
     from jmwallet.history import get_pending_transactions
     from jmwallet.wallet.service import FIDELITY_BOND_BRANCH
+
+    # Print legend for address statuses
+    print("Address status legend:")
+    print("  new         - Unused, safe for receiving")
+    print("  deposit     - External address with funds")
+    print("  cj-out      - CoinJoin output (mixed funds)")
+    print("  non-cj-change - Regular change (not from CoinJoin)")
+    print("  used-empty  - Previously used, now empty (do not reuse)")
+    print("  flagged     - Shared with peers but tx failed (do not reuse)")
+    print()
 
     # Get pending transactions to mark addresses
     pending_txs = get_pending_transactions(wallet.data_dir)
