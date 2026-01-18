@@ -1650,13 +1650,39 @@ async def _send_transaction(
         )
 
     # Resolve fee rate
+    # Get mempool minimum fee (if available) as a floor
+    mempool_min_fee: float | None = None
+    try:
+        mempool_min_fee = await backend.get_mempool_min_fee()
+        if mempool_min_fee is not None:
+            logger.debug(f"Mempool min fee: {mempool_min_fee:.2f} sat/vB")
+    except Exception:
+        # Backend may not support this method
+        pass
+
     if fee_rate is not None:
         resolved_fee_rate = fee_rate
+        # Check against mempool min fee
+        if mempool_min_fee is not None and resolved_fee_rate < mempool_min_fee:
+            logger.warning(
+                f"Manual fee rate {resolved_fee_rate:.2f} sat/vB is below node's minimum relay "
+                f"fee {mempool_min_fee:.2f} sat/vB. Using mempool minimum instead. "
+                f"To use lower fee rates, configure minrelaytxfee in your Bitcoin node's "
+                f"bitcoin.conf (see DOCS.md for details)."
+            )
+            resolved_fee_rate = mempool_min_fee
         logger.info(f"Using manual fee rate: {resolved_fee_rate:.2f} sat/vB")
     else:
         # Use backend fee estimation
         target = block_target if block_target is not None else 3
         resolved_fee_rate = await backend.estimate_fee(target)
+        # Check against mempool min fee
+        if mempool_min_fee is not None and resolved_fee_rate < mempool_min_fee:
+            logger.info(
+                f"Estimated fee {resolved_fee_rate:.2f} sat/vB is below mempool min "
+                f"{mempool_min_fee:.2f} sat/vB, using mempool min"
+            )
+            resolved_fee_rate = mempool_min_fee
         logger.info(f"Fee estimation for {target} blocks: {resolved_fee_rate:.2f} sat/vB")
 
     wallet = WalletService(

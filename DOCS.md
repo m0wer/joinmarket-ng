@@ -1344,6 +1344,49 @@ Comprehensive tests verify dust threshold enforcement:
 - Tests with 546, 27300, and custom thresholds
 - Verifies change output inclusion/exclusion based on threshold
 
+### Minimum Relay Fee
+
+Bitcoin Core enforces a minimum relay fee (`minrelaytxfee`) that determines the lowest fee rate accepted into the node's mempool. Transactions with fee rates below this threshold are rejected with error `-26: min relay fee not met`.
+
+#### Default Values
+
+| Bitcoin Core Version | Default minrelaytxfee |
+|---------------------|----------------------|
+| v0.20.0 and later   | 0.00001 BTC/kB (1.0 sat/vB) |
+| Earlier versions    | 0.00001 BTC/kB (1.0 sat/vB) |
+
+#### Sub-satoshi Fee Rates
+
+JoinMarket NG supports sub-satoshi fee rates (e.g., 0.5 sat/vB) for cost savings during low-fee periods. However, this requires configuring your Bitcoin node to accept lower fee rates.
+
+To enable sub-satoshi fee rates, add to your `bitcoin.conf`:
+
+```ini
+# Minimum relay fee in BTC/kB
+# 0.1 sat/vB = 0.0000001 BTC/kB
+minrelaytxfee=0.0000001
+```
+
+Then restart your Bitcoin node for changes to take effect.
+
+#### Fee Rate Resolution
+
+Both the wallet CLI and taker automatically check the node's mempool minimum fee:
+
+1. If a manual `--fee-rate` is below the node's minimum, a warning is logged and the mempool minimum is used instead
+2. If fee estimation returns a value below the mempool minimum, the mempool minimum is used
+3. This prevents broadcast failures due to "min relay fee not met" errors
+
+#### Troubleshooting
+
+If you see `RPC error -26: min relay fee not met`:
+
+1. Check your node's current minimum fee: `bitcoin-cli getmempoolinfo` (look at `mempoolminfee`)
+2. Either use a higher `--fee-rate`, or configure `minrelaytxfee` in `bitcoin.conf`
+3. Restart bitcoind after changing `bitcoin.conf`
+
+Note: In CoinJoin transactions, if your fee rate is below your node's minimum but above other participants' minimums, the transaction may be broadcast by another participant but rejected by your node's mempool. This can cause the transaction to appear untracked until it confirms in a block.
+
 ---
 
 ## Bitcoin Amount Handling
