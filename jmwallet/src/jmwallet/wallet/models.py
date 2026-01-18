@@ -33,6 +33,7 @@ class AddressInfo:
     is_external: bool  # True for receive (external), False for change (internal)
     is_bond: bool = False
     locktime: int | None = None  # For fidelity bond addresses
+    has_unconfirmed: bool = False  # True if any UTXOs at this address are unconfirmed
 
     @property
     def short_path(self) -> str:

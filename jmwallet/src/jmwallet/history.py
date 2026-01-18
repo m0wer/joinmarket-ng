@@ -309,13 +309,14 @@ def get_pending_transactions(data_dir: Path | None = None) -> list[TransactionHi
 
     Returns entries that are:
     - Not yet confirmed (success=False, confirmations=0)
+    - Not yet completed (completed_at is empty) - excludes failed transactions
     - Either have a txid waiting for confirmation, or no txid yet (needs discovery)
 
     Returns:
         List of pending entries (includes entries without txid)
     """
     entries = read_history(data_dir)
-    return [e for e in entries if not e.success and e.confirmations == 0]
+    return [e for e in entries if not e.success and e.confirmations == 0 and not e.completed_at]
 
 
 def update_transaction_confirmation(

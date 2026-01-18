@@ -1455,12 +1455,17 @@ class WalletService:
         # Get UTXOs for this mixdepth
         utxos = self.utxo_cache.get(mixdepth, [])
 
-        # Build a map of address -> balance
+        # Build maps of address -> balance and address -> has_unconfirmed
         address_balances: dict[str, int] = {}
+        address_unconfirmed: dict[str, bool] = {}
         for utxo in utxos:
             if utxo.address not in address_balances:
                 address_balances[utxo.address] = 0
+                address_unconfirmed[utxo.address] = False
             address_balances[utxo.address] += utxo.value
+            # Track if any UTXO at this address is unconfirmed (0 confirmations)
+            if utxo.confirmations == 0:
+                address_unconfirmed[utxo.address] = True
 
         # Find the highest index with funds or history
         max_used_index = -1
@@ -1504,6 +1509,7 @@ class WalletService:
                     status=status,
                     path=path,
                     is_external=is_external,
+                    has_unconfirmed=address_unconfirmed.get(address, False),
                 )
             )
 
@@ -1691,12 +1697,16 @@ class WalletService:
         utxos = self.utxo_cache.get(0, [])
         bond_utxos = [u for u in utxos if u.is_timelocked]
 
-        # Build address -> balance map for bonds
+        # Build address -> balance map and address -> has_unconfirmed map for bonds
         address_balances: dict[str, int] = {}
+        address_unconfirmed: dict[str, bool] = {}
         for utxo in bond_utxos:
             if utxo.address not in address_balances:
                 address_balances[utxo.address] = 0
+                address_unconfirmed[utxo.address] = False
             address_balances[utxo.address] += utxo.value
+            if utxo.confirmations == 0:
+                address_unconfirmed[utxo.address] = True
 
         for address, locktime in self.fidelity_bond_locktime_cache.items():
             if address in self.address_cache:
@@ -1714,6 +1724,7 @@ class WalletService:
                         is_external=False,
                         is_bond=True,
                         locktime=locktime,
+                        has_unconfirmed=address_unconfirmed.get(address, False),
                     )
                 )
 

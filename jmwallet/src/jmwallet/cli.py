@@ -1060,6 +1060,8 @@ def _show_extended_wallet_info(
             status_display: str = addr_info.status
             if addr_info.address in pending_addresses:
                 status_display += " (pending)"
+            elif addr_info.has_unconfirmed:
+                status_display += " (unconfirmed)"
             print(f"{addr_info.path:<24}{addr_info.address}\t{btc_balance:.8f}\t{status_display}")
 
         print(f"Balance:\t{sats_to_btc(ext_balance):.8f}")
@@ -1079,6 +1081,8 @@ def _show_extended_wallet_info(
             status_str: str = addr_info.status
             if addr_info.address in pending_addresses:
                 status_str += " (pending)"
+            elif addr_info.has_unconfirmed:
+                status_str += " (unconfirmed)"
             print(f"{addr_info.path:<24}{addr_info.address}\t{btc_balance:.8f}\t{status_str}")
 
         print(f"Balance:\t{sats_to_btc(int_balance):.8f}")
@@ -1114,6 +1118,10 @@ def _show_extended_wallet_info(
                         locktime_str = dt.strftime("%Y-%m-%d")
                         if is_locked:
                             locktime_str += " [LOCKED]"
+
+                    # Show unconfirmed status if applicable
+                    if addr_info.has_unconfirmed:
+                        locktime_str += " (unconfirmed)"
 
                     # Pad path to ensure consistent alignment regardless of index digits
                     print(
