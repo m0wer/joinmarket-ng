@@ -387,7 +387,7 @@ The automated setup configures Tor for localhost access. For Docker deployments,
 
 **"Could not authenticate to Tor control port"**
 - Ensure CookieAuthentication is enabled in torrc
-- Check cookie file permissions: `/var/lib/tor/control_auth_cookie` (Linux) or `/var/run/tor/control.authcookie` (macOS)
+- Check cookie file permissions: `/run/tor/control.authcookie` (Linux) or `/var/run/tor/control.authcookie` (macOS)
 - You may need to add your user to the `debian-tor` group (Linux): `sudo usermod -a -G debian-tor $USER`
 
 **"Control port not accessible"**

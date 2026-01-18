@@ -81,7 +81,8 @@ def create_tor_control_config_from_env() -> TorControlConfig:
 
     Auto-detection:
         - If TOR__COOKIE_PATH is set, use it
-        - Otherwise try common paths: /var/lib/tor/control_auth_cookie, /run/tor/control.authcookie
+        - Otherwise try common paths: /run/tor/control.authcookie, /var/run/tor/control.authcookie,
+          /var/lib/tor/control_auth_cookie
     """
     from jmcore.settings import get_settings
 
@@ -93,11 +94,14 @@ def create_tor_control_config_from_env() -> TorControlConfig:
     if tor.cookie_path:
         cookie_path = Path(tor.cookie_path)
     else:
-        # Try common paths
+        # Try common paths (ordered by likelihood on modern Linux systems)
+        # - /run/tor/control.authcookie: Debian/Ubuntu with systemd (most common)
+        # - /var/run/tor/control.authcookie: Older systems (often symlink to /run)
+        # - /var/lib/tor/control_auth_cookie: Tor default example in torrc
         common_paths = [
-            Path("/var/lib/tor/control_auth_cookie"),
             Path("/run/tor/control.authcookie"),
             Path("/var/run/tor/control.authcookie"),
+            Path("/var/lib/tor/control_auth_cookie"),
         ]
         for path in common_paths:
             if path.exists():

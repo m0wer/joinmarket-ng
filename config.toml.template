@@ -22,7 +22,7 @@
 # control_enabled = true
 # control_host = "127.0.0.1"  # Defaults to socks_host if not set
 # control_port = 9051
-# cookie_path = "/var/run/tor/control.authcookie"  # Auto-detected if not set
+# cookie_path = "/run/tor/control.authcookie"  # Auto-detected if not set
 # password = ""  # Use cookie auth by default
 # target_host = "127.0.0.1"  # Target host for hidden service mapping
 
