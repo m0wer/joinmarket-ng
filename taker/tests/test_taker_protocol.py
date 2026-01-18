@@ -951,9 +951,22 @@ class TestSweepCjAmountPreservation:
         taker.is_sweep = True
         taker.preselected_utxos = mock_wallet_for_sweep.get_all_utxos()
 
+        # Set fee rate (must be done before _phase_build_tx)
+        taker._fee_rate = 1.0
+
+        # Total input: 147,483 sats (from mock wallet)
+        total_input = sum(u.value for u in taker.preselected_utxos)
+
+        # Simulate the budget that was calculated at order selection
+        # Conservative estimate: 2 taker + 2 maker + 5 buffer = 9 inputs, 3 outputs
+        # vsize = 9*68 + 3*31 + 11 = 716 vbytes at 1 sat/vB = 716 sats
+        budget = 716
+        taker._sweep_tx_fee_budget = budget
+
         # Initial cj_amount calculated during do_coinjoin (before !fill)
         # This is the amount that will be sent to makers in !fill
-        initial_cj_amount = 146_339  # From the bug report
+        # cj_amount = total_input - budget - maker_fees
+        initial_cj_amount = total_input - budget  # 146,767 sats
 
         taker.cj_amount = initial_cj_amount
 
@@ -988,9 +1001,6 @@ class TestSweepCjAmountPreservation:
 
         taker.maker_sessions = {"J55Jha4vGPR5fTFv": maker_session}
 
-        # Set fee rate (must be done before _phase_build_tx)
-        taker._fee_rate = 1.0
-
         # Call _phase_build_tx - this is where the bug occurred
         result = await taker._phase_build_tx(
             destination="bcrt1qqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcruj60yu",
@@ -1015,20 +1025,31 @@ class TestSweepCjAmountPreservation:
 
         When actual maker inputs differ from estimate:
         - Old behavior: recalculate cj_amount -> maker rejects with "wrong change"
-        - New behavior: keep cj_amount, excess becomes additional miner fee (residual)
+        - New behavior: keep cj_amount, use budget as tx_fee -> residual is minimal
+
+        With the new fix, the budget is used as the tx_fee, so the residual should
+        only come from integer rounding in calculate_sweep_amount (typically < 100 sats).
         """
         taker = Taker(mock_wallet_for_sweep, mock_backend_for_sweep, taker_config_for_sweep)
 
         # Simulate sweep mode
         taker.is_sweep = True
         taker.preselected_utxos = mock_wallet_for_sweep.get_all_utxos()
-
-        # Set cj_amount as if it was calculated with estimated 2 maker inputs
-        # (higher tx_fee estimate -> lower cj_amount)
-        taker.cj_amount = 146_339
         taker._fee_rate = 1.0
 
-        # Maker with only 1 input (lower tx_fee than estimated)
+        # Total input: 147,483 sats (from mock wallet)
+        total_input = sum(u.value for u in taker.preselected_utxos)
+
+        # Set budget that was calculated at order selection time
+        # Conservative estimate: 2 taker + 2 maker + 5 buffer = 9 inputs, 3 outputs
+        # vsize = 9*68 + 3*31 + 11 = 716 vbytes at 1 sat/vB = 716 sats
+        budget = 716
+        taker._sweep_tx_fee_budget = budget
+
+        # cj_amount calculated from budget: 147,483 - 716 = 146,767
+        taker.cj_amount = total_input - budget
+
+        # Maker with only 1 input (different from the estimated 2+buffer)
         maker_offer = Offer(
             ordertype=OfferType.SW0_ABSOLUTE,
             oid=0,
@@ -1065,23 +1086,25 @@ class TestSweepCjAmountPreservation:
         assert result is True
 
         # Verify cj_amount unchanged
-        assert taker.cj_amount == 146_339
+        assert taker.cj_amount == total_input - budget
 
-        # Calculate what the residual should be:
-        # residual = total_input - cj_amount - maker_fees - actual_tx_fee
-        # The residual represents the difference between estimated and actual tx_fee
-        # (It's positive because actual tx_fee < estimated tx_fee due to fewer inputs)
-        # This extra value goes to miners as additional fee, which is acceptable
+        # With the new fix, residual should be 0 (or minimal from rounding)
+        # because we use the budget as tx_fee, not a recalculated fee
+        # residual = total_input - cj_amount - maker_fees - budget
+        #          = 147,483 - 146,767 - 0 - 716 = 0
 
     @pytest.mark.asyncio
-    async def test_sweep_fails_on_negative_residual(
+    async def test_sweep_uses_budget_not_actual_tx_fee(
         self, mock_wallet_for_sweep, mock_backend_for_sweep, taker_config_for_sweep
     ):
-        """Test that sweep mode fails if residual is negative.
+        """Test that sweep uses the tx_fee_budget regardless of actual inputs.
 
-        A negative residual occurs when actual tx_fee > estimated tx_fee,
-        typically because a maker provided more UTXOs than we estimated.
-        We cannot reduce cj_amount as it was already sent in !fill.
+        When makers provide different inputs than estimated:
+        - Old behavior: recalculate tx_fee -> mismatch with cj_amount -> residual issue
+        - New behavior: use budget as tx_fee -> fee rate may vary but amount is stable
+
+        This test simulates a maker with many UTXOs. The fee rate will be lower
+        than requested, but the total fee amount stays at the budget.
         """
         taker = Taker(mock_wallet_for_sweep, mock_backend_for_sweep, taker_config_for_sweep)
 
@@ -1089,13 +1112,23 @@ class TestSweepCjAmountPreservation:
         taker.preselected_utxos = mock_wallet_for_sweep.get_all_utxos()
         taker._fee_rate = 1.0
 
-        # Set cj_amount from !fill (calculated with estimated 2 maker inputs + 5 buffer)
-        # From bug report: cj_amount = 146,340 sats
-        # We increase it slightly to ensure negative residual with our fake inputs/tx size
-        taker.cj_amount = 147_000
+        # Total taker input: 147,483 sats (from mock wallet)
+        total_input = sum(u.value for u in taker.preselected_utxos)
+        assert total_input == 147_483
 
-        # Maker with MANY UTXOs (6 inputs instead of estimated 2+buffer/n_makers)
-        # This causes actual tx_fee to be much higher than estimated
+        # Simulate order selection: budget was calculated conservatively
+        # With 1 maker and conservative estimate (2 inputs/maker + 5 buffer = 7 maker inputs)
+        # Total: 2 taker + 7 maker = 9 inputs, 3 outputs (CJ + maker CJ + maker change)
+        # vsize = 9*68 + 3*31 + 11 = 716 vbytes at 1 sat/vB = 716 sats
+        conservative_budget = 716
+
+        # cj_amount calculated at order selection = total - budget - maker_fees
+        # For this test with 0 maker fees: 147,483 - 716 = 146,767 sats
+        taker.cj_amount = total_input - conservative_budget
+        taker._sweep_tx_fee_budget = conservative_budget
+
+        # Maker with MANY UTXOs (6 inputs instead of estimated 7)
+        # Actually fewer than estimated, so fee rate will be HIGHER than 1 sat/vB
         maker_offer = Offer(
             ordertype=OfferType.SW0_ABSOLUTE,
             oid=0,
@@ -1110,8 +1143,6 @@ class TestSweepCjAmountPreservation:
         maker_session.pubkey = "c143f23bdecb05a9" + "00" * 24
         maker_session.responded_fill = True
         maker_session.responded_auth = True
-        # Maker has 6 UTXOs - more than our 2+buffer/n_makers estimate!
-        # 2 taker + 6 maker = 8 inputs -> higher tx_fee
         maker_session.utxos = [
             {
                 "txid": "4444444444444444444444444444444444444444444444444444444444444444",
@@ -1161,10 +1192,16 @@ class TestSweepCjAmountPreservation:
             mixdepth=3,
         )
 
-        # Should fail with negative residual
-        # From bug report: residual = 147483 - 146340 - 0 - 1970 = -827 (negative!)
-        # The tx_fee with 8 inputs is ~1970 sats (from actual log)
-        assert result is False
+        # Should succeed - we use the budget, not actual tx_fee
+        assert result is True
+
+        # Verify cj_amount unchanged
+        assert taker.cj_amount == total_input - conservative_budget
+
+        # The tx_fee used should be the budget
+        # actual vsize: 8 inputs * 68 + 3 outputs * 31 + 11 = 648 vbytes
+        # effective rate: 716 / 648 = 1.10 sat/vB (higher than requested 1.0)
+        # This is the expected behavior: fee amount is stable, rate may vary
 
 
 @pytest.mark.asyncio

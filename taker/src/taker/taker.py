@@ -894,6 +894,11 @@ class Taker:
         self.selected_utxos: list[UTXOInfo] = []  # Taker's final selected UTXOs for signing
         self.cj_destination: str = ""  # Taker's CJ destination address for broadcast verification
         self.taker_change_address: str = ""  # Taker's change address for broadcast verification
+        # For sweeps: store the tx_fee budget calculated at order selection time
+        # This is the amount reserved for tx fees when calculating cj_amount.
+        # At build time, we use this budget (not a new estimate) to ensure the
+        # actual tx fee matches what was budgeted, preventing residual fee issues.
+        self._sweep_tx_fee_budget: int = 0
 
         # E2E encryption session for communication with makers
         self.crypto_session: CryptoSession | None = None
@@ -902,7 +907,11 @@ class Taker:
         self.schedule: Schedule | None = None
 
         # Cached fee rate for the current CoinJoin (set in _resolve_fee_rate)
+        # This is the base rate from backend estimation or manual config
         self._fee_rate: float | None = None
+        # Randomized fee rate for this CoinJoin session (set once in _resolve_fee_rate)
+        # This applies tx_fee_factor randomization and is used for all fee calculations
+        self._randomized_fee_rate: float | None = None
 
         # Background task tracking
         self.running = False
@@ -1552,7 +1561,17 @@ class Taker:
                 )
                 # CJ outputs + maker changes (no taker change in sweep!)
                 estimated_outputs = 1 + n_makers + n_makers
-                estimated_tx_fee = self._estimate_tx_fee(estimated_inputs, estimated_outputs)
+                # For sweeps, use base rate for deterministic budget calculation.
+                # The cj_amount is calculated based on this budget, so it must match
+                # exactly at build time. Using randomized rate would cause residual fees.
+                estimated_tx_fee = self._estimate_tx_fee(
+                    estimated_inputs, estimated_outputs, use_base_rate=True
+                )
+
+                # Store the tx fee budget for use at build time.
+                # This is critical: the cj_amount is calculated based on this budget,
+                # so we MUST use this same value at build time to avoid residual fees.
+                self._sweep_tx_fee_budget = estimated_tx_fee
 
                 # Use sweep order selection - this calculates exact cj_amount for zero change
                 selected_offers, self.cj_amount, total_fee = (
@@ -2717,7 +2736,8 @@ class Taker:
                 # Normal mode: include taker change
                 num_outputs = 1 + len(self.maker_sessions) + 1 + len(self.maker_sessions)
 
-            tx_fee = self._estimate_tx_fee(num_inputs, num_outputs)
+            # Calculate actual tx fee based on real transaction size
+            actual_tx_fee = self._estimate_tx_fee(num_inputs, num_outputs)
 
             preselected_total = sum(u.value for u in self.preselected_utxos)
 
@@ -2729,55 +2749,68 @@ class Taker:
                     f"total {preselected_total:,} sats"
                 )
 
-                # CRITICAL: We CANNOT change cj_amount after !fill has been sent!
-                # The cj_amount was already sent to makers in the !fill message.
-                # Makers calculate their expected change as:
-                #   expected_change = my_total_in - amount - txfee + cjfee
-                # where 'amount' is the cj_amount from !fill.
-                # If we change cj_amount here, the maker will reject with "wrong change".
+                # For sweeps, we MUST use the tx_fee_budget that was calculated at order
+                # selection time. The equation that determined cj_amount was:
+                #   total_input = cj_amount + maker_fees + tx_fee_budget
                 #
-                # Residual calculation:
-                #   residual = total_in - cj_amount - maker_fees - tx_fee
+                # Using any other value for tx_fee would create a residual:
+                #   residual = total_input - cj_amount - maker_fees - tx_fee
+                #            = tx_fee_budget - tx_fee
                 #
-                # Positive residual: actual tx_fee < estimated
-                #   -> Extra goes to miners as additional fee (acceptable)
-                # Negative residual: actual tx_fee > estimated
-                #   -> Not enough funds to cover tx, must fail
+                # If tx_fee < budget: positive residual goes to miners (overpaying!)
+                # If tx_fee > budget: negative residual fails the CJ (underfunded)
                 #
-                # We use a conservative tx_fee estimate (2 inputs/maker + 5 buffer)
-                # to minimize the chance of negative residual, but it can still happen
-                # if a maker has many UTXOs (e.g., 10+ inputs).
+                # By using the budget as tx_fee, we ensure:
+                #   - The taker pays exactly what was stated at the start
+                #   - The fee rate may differ based on actual tx size
+                #   - No funds are lost to unexpected miner fees
+                #
+                # Calculate actual vsize for fee rate logging
+                actual_tx_vsize = num_inputs * 68 + num_outputs * 31 + 11
 
-                # Calculate residual
-                taker_change = preselected_total - self.cj_amount - total_maker_fee - tx_fee
+                # Use the budget as the tx_fee
+                tx_fee = self._sweep_tx_fee_budget
+
+                # Calculate residual (should be minimal - just from integer division)
+                residual = preselected_total - self.cj_amount - total_maker_fee - tx_fee
+                actual_fee_rate = tx_fee / actual_tx_vsize if actual_tx_vsize > 0 else 0
+
                 logger.info(
                     f"Sweep: cj_amount={self.cj_amount:,} (from !fill), "
-                    f"maker_fees={total_maker_fee:,}, tx_fee={tx_fee:,}, "
-                    f"residual={taker_change} sats"
+                    f"maker_fees={total_maker_fee:,}, "
+                    f"tx_fee={tx_fee:,} (budget), "
+                    f"residual={residual} sats, "
+                    f"actual_vsize={actual_tx_vsize}, "
+                    f"effective_rate={actual_fee_rate:.2f} sat/vB"
                 )
 
-                if taker_change < 0:
-                    # Negative residual means we don't have enough funds
-                    # This happens when actual tx_fee > estimated tx_fee
-                    # (e.g., maker provided more UTXOs than we estimated)
+                if residual < 0:
+                    # Negative residual means the budget was insufficient
+                    # This should only happen if there's a bug in the calculation
                     logger.error(
-                        f"Sweep failed: negative residual of {taker_change} sats. "
-                        f"Actual tx_fee ({tx_fee}) exceeded estimated tx_fee. "
-                        f"Maker provided {num_maker_inputs} inputs (we estimated fewer). "
-                        "Cannot reduce cj_amount as it was already sent in !fill message."
+                        f"Sweep failed: negative residual of {residual} sats. "
+                        f"This indicates a bug in cj_amount calculation. "
+                        f"total_input={preselected_total}, cj_amount={self.cj_amount}, "
+                        f"maker_fees={total_maker_fee}, tx_fee_budget={tx_fee}"
                     )
                     return False
 
-                # Log if residual is significant (more than expected dust)
-                if taker_change > self.config.dust_threshold:
+                # Small positive residual (typically < 100 sats) is expected from integer
+                # division in calculate_sweep_amount. This goes to miners.
+                if residual > 100:
+                    # Larger residual indicates a calculation issue
                     logger.warning(
-                        f"Sweep: residual {taker_change} sats exceeds dust threshold "
-                        f"({self.config.dust_threshold}). This will become additional miner fee. "
-                        "This can happen if actual maker fees or tx_fee are lower than estimated."
+                        f"Sweep: unexpected residual of {residual} sats. "
+                        f"Expected < 100 sats from integer rounding. "
+                        "This may indicate a fee calculation mismatch."
                     )
+
+                # The residual becomes additional miner fee (no taker change in sweep)
 
             else:
                 # NORMAL MODE: Use pre-selected UTXOs, add more if needed
+                # For normal mode, we use the actual tx_fee estimate
+                tx_fee = actual_tx_fee
                 required = self.cj_amount + total_maker_fee + tx_fee
 
                 # Use pre-selected UTXOs (which include the PoDLE UTXO)
@@ -2879,34 +2912,39 @@ class Taker:
             logger.error(f"Failed to build transaction: {e}")
             return False
 
-    def _estimate_tx_fee(self, num_inputs: int, num_outputs: int) -> int:
+    def _estimate_tx_fee(
+        self, num_inputs: int, num_outputs: int, *, use_base_rate: bool = False
+    ) -> int:
         """Estimate transaction fee.
 
-        Uses the cached fee rate from _resolve_fee_rate() which must be called
-        before this method. The fee rate is determined by:
-        1. Manual fee_rate if specified in config
-        2. Backend fee estimation with fee_block_target (default 3 blocks)
-        3. Fallback to 1 sat/vB if estimation fails
+        Uses the fee rate from _resolve_fee_rate() which must be called before
+        this method. By default, uses the session's randomized fee rate for
+        privacy. For sweep budget calculations, use_base_rate=True to get
+        a deterministic estimate.
 
-        The fee is randomized for privacy using tx_fee_factor (if > 0).
+        Args:
+            num_inputs: Number of transaction inputs
+            num_outputs: Number of transaction outputs
+            use_base_rate: If True, use the base fee rate instead of the
+                          session's randomized rate. Used for sweep cj_amount
+                          calculations where determinism is required.
+
+        Returns:
+            Estimated fee in satoshis
         """
         import math
-        import random
 
         # P2WPKH: ~68 vbytes per input, 31 vbytes per output, ~11 overhead
         vsize = num_inputs * 68 + num_outputs * 31 + 11
-        base_fee_rate = self._fee_rate if self._fee_rate is not None else 1.0
 
-        # Apply privacy randomization (like reference implementation)
-        # Fee is randomized between base and base * (1 + factor)
-        if self.config.tx_fee_factor > 0:
-            randomized_rate = random.uniform(
-                base_fee_rate, base_fee_rate * (1 + self.config.tx_fee_factor)
-            )
+        # Use base rate for deterministic calculations (sweeps),
+        # otherwise use the session's randomized rate for privacy
+        if use_base_rate:
+            rate = self._fee_rate if self._fee_rate is not None else 1.0
         else:
-            randomized_rate = base_fee_rate
+            rate = self._randomized_fee_rate if self._randomized_fee_rate is not None else 1.0
 
-        return math.ceil(vsize * randomized_rate)
+        return math.ceil(vsize * rate)
 
     async def _resolve_fee_rate(self) -> float:
         """
@@ -2952,6 +2990,7 @@ class Taker:
                 )
                 self._fee_rate = mempool_min_fee
             logger.info(f"Using manual fee rate: {self._fee_rate:.2f} sat/vB")
+            self._apply_fee_randomization()
             return self._fee_rate
 
         # 2. Block target specified - check backend capability
@@ -2974,6 +3013,7 @@ class Taker:
                 f"Fee estimation for {self.config.fee_block_target} blocks: "
                 f"{self._fee_rate:.2f} sat/vB"
             )
+            self._apply_fee_randomization()
             return self._fee_rate
 
         # 3. Default: 3-block estimation if backend supports it
@@ -2990,6 +3030,7 @@ class Taker:
             logger.info(
                 f"Fee estimation for {default_target} blocks (default): {self._fee_rate:.2f} sat/vB"
             )
+            self._apply_fee_randomization()
             return self._fee_rate
 
         # 4. Fallback for neutrino without manual fee
@@ -2999,7 +3040,38 @@ class Taker:
             "Using fallback rate: 1.0 sat/vB. "
             "Consider using --fee-rate for production."
         )
+        self._apply_fee_randomization()
         return self._fee_rate
+
+    def _apply_fee_randomization(self) -> None:
+        """Apply tx_fee_factor randomization to get the session's fee rate.
+
+        This is called once per CoinJoin session to determine the randomized
+        fee rate used for all fee calculations. The randomization provides
+        privacy by varying the fee rate within the configured range.
+
+        The randomized rate is stored in self._randomized_fee_rate and used
+        by _estimate_tx_fee() for all calculations.
+        """
+        import random
+
+        if self._fee_rate is None:
+            return
+
+        base_rate = self._fee_rate
+
+        if self.config.tx_fee_factor > 0:
+            # Randomize between base and base * (1 + factor)
+            self._randomized_fee_rate = random.uniform(
+                base_rate, base_rate * (1 + self.config.tx_fee_factor)
+            )
+            logger.debug(
+                f"Fee rate randomized: base={base_rate:.2f}, "
+                f"randomized={self._randomized_fee_rate:.2f} sat/vB "
+                f"(factor={self.config.tx_fee_factor})"
+            )
+        else:
+            self._randomized_fee_rate = base_rate
 
     def _get_taker_cj_output_index(self) -> int | None:
         """

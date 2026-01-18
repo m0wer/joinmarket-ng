@@ -103,6 +103,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sweep Transaction Mining Fee Accuracy**: Fixed a bug where sweep transactions (taker with `amount=0`) would pay significantly higher mining fees than displayed at the start of the CoinJoin. The issue was caused by two problems:
+  1. The `tx_fee_factor` randomization was applied when calculating the tx fee budget for sweep amount calculation, causing the budget to be up to 4x (with default `tx_fee_factor=3.0`) the base fee rate.
+  2. At transaction build time, a new fee estimate with different randomization was used, creating a mismatch.
+
+  With this fix:
+  - Sweep fee budgets are calculated without randomization to ensure deterministic amounts
+  - The same fee budget is used at both order selection and build time
+  - The mining fee amount stays constant; only the effective fee rate may vary based on actual transaction size
+  - Improved logging shows the tx fee budget, actual vsize, and effective fee rate
+
 - **Log Level from Config/Env Ignored**: Fixed a bug where `LOGGING__LEVEL` environment variable and `[logging] level` config setting were ignored by CLI commands. The `--log-level` CLI argument worked correctly, but the env/config values were never applied because logging was configured before settings were loaded. Now the priority is: CLI argument > env/config > default ("INFO").
 
 - **Maker cj_fee_absolute config setting ignored**: Fixed bug where setting `cj_fee_absolute` in `config.toml` had no effect because the maker always defaulted to relative fee offers. Added new `offer_type` setting to the `[maker]` config section that allows specifying which fee type to use: `sw0reloffer` (relative, default) or `sw0absoffer` (absolute). Previously, the only way to use absolute fees was via the `--cj-fee-absolute` CLI flag.
