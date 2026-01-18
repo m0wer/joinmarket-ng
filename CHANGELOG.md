@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Log Level CLI Flag Across All Components**: Added `--log-level` / `-l` flag to all CLI commands that were missing it:
+  - `jm-maker start` and `jm-maker generate-address` commands
+  - `jm-directory-server` CLI (status, health subcommands)
+  - `jm-orderbook-watcher` main entry point
+  - The flag accepts TRACE, DEBUG, INFO, WARNING, and ERROR levels (TRACE was not documented before)
+  - Updated `config.toml.template` and settings documentation to include TRACE as a valid log level
+  - Environment variable for log level is `LOGGING__LEVEL` (not `LOGGING__LOG_LEVEL` - the latter never worked)
+
 - **Wallet Name in Startup Logs**: Both maker and taker now log the Bitcoin Core descriptor wallet name (e.g., `jm_xxxxxxxx_mainnet`) during startup when using the descriptor wallet backend. This makes it easier to identify which wallet is being used, especially when running multiple instances.
 
 - **Accurate Fee Rate in Final Transaction Summary**: The taker's final transaction summary now displays the actual mining fee and fee rate calculated from the signed transaction. Previously, only the estimated fee was shown, which didn't account for residual/dust amounts absorbed into the fee when change would be below dust threshold. This is especially important for sweep transactions where the actual fee can be significantly higher than the estimate. The summary now shows actual vsize alongside byte size.

@@ -540,6 +540,7 @@ def start(
             ),
         ),
     ] = False,
+    log_level: Annotated[str, typer.Option("--log-level", "-l", help="Log level")] = "INFO",
 ) -> None:
     """
     Start the maker bot.
@@ -548,7 +549,7 @@ def start(
     environment variables, and CLI arguments. CLI arguments have the highest priority.
     """
     # Load settings
-    settings = setup_cli()
+    settings = setup_cli(log_level)
 
     # Ensure config file exists (creates template if not)
     ensure_config_file(settings.get_data_dir())
@@ -686,10 +687,11 @@ def generate_address(
         ),
     ] = None,
     backend_type: Annotated[str | None, typer.Option(help="Backend type")] = None,
+    log_level: Annotated[str, typer.Option("--log-level", "-l", help="Log level")] = "INFO",
 ) -> None:
     """Generate a new receive address."""
     # Load settings
-    settings = setup_cli()
+    settings = setup_cli(log_level)
 
     # Load mnemonic using unified resolver
     try:

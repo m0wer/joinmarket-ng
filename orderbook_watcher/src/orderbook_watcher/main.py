@@ -2,6 +2,7 @@
 Main entry point for the orderbook watcher.
 """
 
+import argparse
 import asyncio
 import os
 import signal
@@ -27,9 +28,11 @@ def setup_logging(level: str) -> None:
     )
 
 
-async def run_watcher() -> None:
+async def run_watcher(log_level: str | None = None) -> None:
     settings = get_settings()
-    setup_logging(settings.logging.level)
+    # Use CLI log level if provided, otherwise fall back to settings
+    effective_log_level = log_level if log_level else settings.logging.level
+    setup_logging(effective_log_level)
 
     network = settings.network_config.network
     watcher_settings = settings.orderbook_watcher
@@ -104,8 +107,17 @@ async def run_watcher() -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="JoinMarket Orderbook Watcher")
+    parser.add_argument(
+        "--log-level",
+        "-l",
+        default=None,
+        help="Log level (default: from config or INFO)",
+    )
+    args = parser.parse_args()
+
     try:
-        asyncio.run(run_watcher())
+        asyncio.run(run_watcher(log_level=args.log_level))
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
     except Exception as e:

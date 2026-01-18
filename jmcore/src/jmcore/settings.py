@@ -517,7 +517,7 @@ class LoggingSettings(BaseModel):
 
     level: str = Field(
         default="INFO",
-        description="Log level: DEBUG, INFO, WARNING, ERROR",
+        description="Log level: TRACE, DEBUG, INFO, WARNING, ERROR",
     )
     sensitive: bool = Field(
         default=False,

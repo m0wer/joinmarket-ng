@@ -101,7 +101,7 @@ def setup_logging(level: str = "INFO") -> None:
     Configure loguru logging with consistent format.
 
     Args:
-        level: Log level (DEBUG, INFO, WARNING, ERROR)
+        level: Log level (TRACE, DEBUG, INFO, WARNING, ERROR)
     """
     logger.remove()
     logger.add(

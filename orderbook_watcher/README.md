@@ -108,7 +108,7 @@ All configuration is done via environment variables or config file (`~/.joinmark
 | `ORDERBOOK_WATCHER__HTTP_HOST` | HTTP server bind address | 0.0.0.0 |
 | `ORDERBOOK_WATCHER__HTTP_PORT` | HTTP server port | 8000 |
 | `ORDERBOOK_WATCHER__UPDATE_INTERVAL` | Orderbook update interval in seconds | 60 |
-| `LOGGING__LOG_LEVEL` | Logging level (DEBUG/INFO/WARNING/ERROR) | INFO |
+| `LOGGING__LEVEL` | Logging level (TRACE/DEBUG/INFO/WARNING/ERROR) | INFO |
 | `NETWORK__MAX_MESSAGE_SIZE` | Maximum message size in bytes | 2097152 |
 | `NETWORK__CONNECTION_TIMEOUT` | Connection timeout in seconds | 30.0 |
 

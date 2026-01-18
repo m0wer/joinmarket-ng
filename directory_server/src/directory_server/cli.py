@@ -8,6 +8,7 @@ import sys
 from urllib.error import URLError
 from urllib.request import urlopen
 
+from jmcore.cli_common import setup_logging
 from jmcore.settings import get_settings
 
 
@@ -168,6 +169,12 @@ def main() -> None:
         default=settings.directory_server.health_check_port,
         help=f"Health check server port (default: {settings.directory_server.health_check_port})",
     )
+    parser.add_argument(
+        "--log-level",
+        "-l",
+        default=settings.logging.level,
+        help=f"Log level (default: {settings.logging.level})",
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -180,6 +187,9 @@ def main() -> None:
     health_parser.set_defaults(func=health_command)
 
     args = parser.parse_args()
+
+    # Configure logging
+    setup_logging(args.log_level)
 
     if not args.command:
         parser.print_help()
