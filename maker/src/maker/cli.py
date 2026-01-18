@@ -231,7 +231,14 @@ def build_maker_config(
         actual_cj_fee_absolute = settings.maker.cj_fee_absolute
     else:
         # Use settings values (from config file or defaults)
-        parsed_offer_type = OfferType.SW0_RELATIVE
+        # Parse offer_type from settings
+        try:
+            parsed_offer_type = OfferType(settings.maker.offer_type)
+        except ValueError:
+            raise ValueError(
+                f"Invalid offer_type in config: {settings.maker.offer_type}. "
+                "Must be one of: sw0reloffer, sw0absoffer, swreloffer, swabsoffer"
+            )
         actual_cj_fee_relative = settings.maker.cj_fee_relative
         actual_cj_fee_absolute = settings.maker.cj_fee_absolute
 

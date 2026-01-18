@@ -72,6 +72,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Maker cj_fee_absolute config setting ignored**: Fixed bug where setting `cj_fee_absolute` in `config.toml` had no effect because the maker always defaulted to relative fee offers. Added new `offer_type` setting to the `[maker]` config section that allows specifying which fee type to use: `sw0reloffer` (relative, default) or `sw0absoffer` (absolute). Previously, the only way to use absolute fees was via the `--cj-fee-absolute` CLI flag.
+
 - **Tor cookie path auto-detection order**: Reordered the auto-detection paths for Tor cookie authentication to prioritize `/run/tor/control.authcookie` (common on Debian/Ubuntu with systemd) over `/var/lib/tor/control_auth_cookie`. Previously, the less common path was checked first, causing auto-detection to fail on most modern Linux systems.
 
 - **Taker --fee-rate validation error with default fee_block_target**: Fixed bug where specifying `--fee-rate` on the CLI would fail with "Cannot specify both fee_rate and fee_block_target" error even when fee_block_target was not explicitly set. The issue was that `build_taker_config()` unconditionally fell back to `wallet.default_fee_block_target` (default: 3) even when `fee_rate` was provided. Now `fee_block_target` is only set when `fee_rate` is not provided.

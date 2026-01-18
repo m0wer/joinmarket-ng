@@ -264,6 +264,10 @@ class MakerSettings(BaseModel):
         ge=0,
         description="Minimum CoinJoin amount in satoshis",
     )
+    offer_type: str = Field(
+        default="sw0reloffer",
+        description="Offer type: sw0reloffer (relative) or sw0absoffer (absolute)",
+    )
     cj_fee_relative: str = Field(
         default="0.001",
         description="Relative CoinJoin fee (0.001 = 0.1%)",

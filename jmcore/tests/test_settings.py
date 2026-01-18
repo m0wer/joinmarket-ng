@@ -128,6 +128,7 @@ class TestSettingsDefaults:
         settings = JoinMarketSettings()
 
         assert settings.maker.min_size == 100000
+        assert settings.maker.offer_type == "sw0reloffer"
         assert settings.maker.cj_fee_relative == "0.001"
         assert settings.maker.cj_fee_absolute == 500
         assert settings.maker.merge_algorithm == "default"
@@ -187,6 +188,14 @@ class TestSettingsFromEnv:
         assert settings.maker.cj_fee_relative == "0.002"
         assert settings.maker.merge_algorithm == "greedy"
 
+    def test_env_override_maker_offer_type(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that environment variables can set maker offer_type."""
+        monkeypatch.setenv("MAKER__OFFER_TYPE", "sw0absoffer")
+
+        settings = JoinMarketSettings()
+
+        assert settings.maker.offer_type == "sw0absoffer"
+
 
 class TestSettingsFromToml:
     """Tests for loading settings from TOML config file."""
@@ -216,6 +225,22 @@ min_size = 200000
         assert settings.bitcoin.rpc_url == "http://my-bitcoin:8332"
         assert settings.bitcoin.backend_type == "neutrino"
         assert settings.maker.min_size == 200000
+
+    def test_toml_maker_offer_type_absolute(
+        self, temp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test that offer_type can be set to absolute via TOML config."""
+        config_path = temp_data_dir / "config.toml"
+        config_path.write_text("""
+[maker]
+offer_type = "sw0absoffer"
+cj_fee_absolute = 1000
+""")
+
+        settings = JoinMarketSettings()
+
+        assert settings.maker.offer_type == "sw0absoffer"
+        assert settings.maker.cj_fee_absolute == 1000
 
     def test_env_overrides_toml(self, temp_data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that environment variables override TOML config."""
