@@ -131,10 +131,42 @@ async def find_fidelity_bonds(
             # Not a timelocked UTXO
             continue
 
-        # Get the key for this address
-        key = wallet.get_key_for_address(utxo_info.address)
-        pubkey = key.get_public_key_bytes(compressed=True) if key else None
-        private_key = key.private_key if key else None
+        # Check if this is an external bond (index=-1 indicates cold storage)
+        # External bonds have path format: m/84'/0'/0'/2/-1:locktime
+        index_locktime = path_parts[-1]  # e.g., "-1:1769904000" or "0:1768435200"
+        index_str = index_locktime.split(":")[0]
+        is_external_bond = index_str == "-1"
+
+        pubkey: bytes | None = None
+        private_key: PrivateKey | None = None
+
+        # Check registry for bond info (needed for both external bonds and certificates)
+        registry_bond = None
+        if registry is not None:
+            registry_bond = registry.get_bond_by_address(utxo_info.address)
+
+        if is_external_bond:
+            # External bond: get pubkey from registry, no private key available
+            if registry_bond:
+                try:
+                    pubkey = bytes.fromhex(registry_bond.pubkey)
+                    logger.debug(
+                        f"External bond {utxo_info.address[:20]}... using pubkey from registry"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to get pubkey for external bond {utxo_info.address}: {e}"
+                    )
+            if pubkey is None:
+                logger.warning(
+                    f"External bond {utxo_info.address[:20]}... not found in registry, skipping"
+                )
+                continue
+        else:
+            # Hot wallet bond: derive key from wallet
+            key = wallet.get_key_for_address(utxo_info.address)
+            pubkey = key.get_public_key_bytes(compressed=True) if key else None
+            private_key = key.private_key if key else None
 
         # Get confirmation_time (Unix timestamp) from block height
         # For unconfirmed UTXOs (height=None), we can't calculate bond value yet
@@ -156,22 +188,20 @@ async def find_fidelity_bonds(
         cert_signature: bytes | None = None
         cert_expiry: int | None = None
 
-        if registry is not None:
-            registry_bond = registry.get_bond_by_address(utxo_info.address)
-            if registry_bond and registry_bond.has_certificate:
-                try:
-                    cert_pubkey = bytes.fromhex(registry_bond.cert_pubkey)  # type: ignore
-                    cert_privkey = PrivateKey(
-                        bytes.fromhex(registry_bond.cert_privkey)  # type: ignore
-                    )
-                    cert_signature = bytes.fromhex(registry_bond.cert_signature)  # type: ignore
-                    cert_expiry = registry_bond.cert_expiry
-                    logger.debug(
-                        f"Found certificate for bond {utxo_info.address[:20]}... "
-                        f"(expiry: {cert_expiry} periods)"
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to parse certificate for {utxo_info.address}: {e}")
+        if registry_bond is not None and registry_bond.has_certificate:
+            try:
+                cert_pubkey = bytes.fromhex(registry_bond.cert_pubkey)  # type: ignore
+                cert_privkey = PrivateKey(
+                    bytes.fromhex(registry_bond.cert_privkey)  # type: ignore
+                )
+                cert_signature = bytes.fromhex(registry_bond.cert_signature)  # type: ignore
+                cert_expiry = registry_bond.cert_expiry
+                logger.debug(
+                    f"Found certificate for bond {utxo_info.address[:20]}... "
+                    f"(expiry: {cert_expiry} periods)"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to parse certificate for {utxo_info.address}: {e}")
 
         bonds.append(
             FidelityBondInfo(

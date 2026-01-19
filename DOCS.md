@@ -1545,10 +1545,33 @@ jm-wallet registry-show bc1q...
 **Registry fields:**
 - `address`: P2WSH bond address
 - `locktime`: Unix timestamp when funds can be spent
+- `index`: Derivation index (-1 for external/cold storage bonds)
+- `path`: Derivation path (e.g., `m/84'/0'/0'/2/0` or `external` for cold storage)
+- `pubkey`: The bond UTXO public key (hex, 33 bytes compressed)
 - `witness_script_hex`: The redeem script (needed for spending)
 - `txid`, `vout`, `value`: UTXO info (populated after `registry-sync`)
+- `confirmations`: Number of confirmations (updated by `registry-sync`)
 - `is_funded`: Whether the bond has a confirmed UTXO
 - `is_expired`: Whether the locktime has passed
+
+**Certificate fields (for cold storage bonds):**
+- `cert_pubkey`: Hot wallet certificate public key (hex, 33 bytes)
+- `cert_privkey`: Hot wallet certificate private key (hex, 32 bytes)
+- `cert_signature`: Certificate signature from cold wallet (hex, DER format)
+- `cert_expiry`: Certificate expiry in 2016-block periods
+
+**Key storage summary:**
+
+| Bond Type | UTXO Private Key | Signing Key |
+|-----------|-----------------|-------------|
+| Hot wallet | Derived from mnemonic | Same as UTXO key |
+| Cold storage | Hardware wallet (never exported) | `cert_privkey` in registry |
+
+**Security notes:**
+- Hot wallet bonds: The UTXO private key is derived from the mnemonic using path `m/84'/0'/0'/2/<index>:<locktime>`
+- Cold storage bonds: The UTXO private key stays on the hardware wallet. Only the certificate keypair (`cert_pubkey`/`cert_privkey`) is stored in the registry
+- The registry file (`fidelity_bonds.json`) contains sensitive data for cold storage bonds - protect it accordingly
+- If using cold storage, the `cert_privkey` allows signing nick proofs but **cannot spend the bond funds**
 
 ### Descriptor Wallet Lifecycle
 

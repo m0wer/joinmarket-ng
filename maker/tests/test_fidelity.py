@@ -505,6 +505,107 @@ class TestFindFidelityBonds:
         bonds = await find_fidelity_bonds(mock_wallet)
         assert bonds == []
 
+    @pytest.mark.asyncio
+    async def test_finds_external_bond_with_certificate(self, test_pubkey):
+        """External bonds (index=-1) should be found using registry data."""
+        from jmwallet.wallet.bond_registry import BondRegistry
+        from jmwallet.wallet.bond_registry import FidelityBondInfo as RegistryBondInfo
+
+        # External bond UTXO with -1 index (indicates cold storage)
+        mock_utxo = MagicMock()
+        mock_utxo.path = "m/84'/0'/0'/2/-1:1769904000"  # Branch 2, external bond
+        mock_utxo.value = 29791
+        mock_utxo.confirmations = 16
+        mock_utxo.height = 932978
+        mock_utxo.address = "bc1qxhxgfy77xl7fzdc3ayx27n03fh6dctkgd6tlgufpvzjzzcpmklgs4sdxyl"
+        mock_utxo.txid = "6c0c4d6c35ed740ffd7afea488c14f1c341995bf35374dc881b" + "0" * 21
+        mock_utxo.vout = 0
+
+        mock_backend = AsyncMock()
+        mock_backend.get_block_time.return_value = 1700000000
+
+        mock_wallet = MagicMock()
+        mock_wallet.utxo_cache = {
+            FIDELITY_BOND_MIXDEPTH: [mock_utxo],
+        }
+        mock_wallet.backend = mock_backend
+
+        # Create a mock registry with the external bond
+        # Use properly formatted hex strings:
+        # - cert_pubkey: 33 bytes (66 hex chars) - compressed pubkey
+        # - cert_privkey: 32 bytes (64 hex chars) - private key
+        # - cert_signature: DER signature (~71 bytes, variable)
+        registry_bond = RegistryBondInfo(
+            address=mock_utxo.address,
+            locktime=1769904000,
+            locktime_human="2026-02-01 00:00:00",
+            index=-1,
+            path="external",
+            pubkey=test_pubkey.hex(),
+            witness_script_hex="0480977e69b17521036bdcf2eb82e29903f303",
+            network="mainnet",
+            created_at="2026-01-19T18:59:47.515228",
+            txid=mock_utxo.txid,
+            vout=0,
+            value=29791,
+            confirmations=16,
+            cert_pubkey="03" + "ab" * 32,  # 33 bytes (66 hex chars)
+            cert_privkey="cd" * 32,  # 32 bytes (64 hex chars)
+            # DER signature format: 30 <len> 02 <r_len> <r> 02 <s_len> <s>
+            cert_signature="30" + "44" + "02" + "20" + "ab" * 32 + "02" + "20" + "cd" * 32,
+            cert_expiry=52,
+        )
+        mock_registry = BondRegistry(version=1, bonds=[registry_bond])
+
+        with (
+            patch("jmwallet.wallet.bond_registry.load_registry", return_value=mock_registry),
+            patch("maker.fidelity.calculate_timelocked_fidelity_bond_value", return_value=50000),
+        ):
+            bonds = await find_fidelity_bonds(mock_wallet)
+
+        assert len(bonds) == 1
+        bond = bonds[0]
+        assert bond.txid == mock_utxo.txid
+        assert bond.value == 29791
+        assert bond.locktime == 1769904000
+        # External bonds get pubkey from registry, no private_key
+        assert bond.pubkey == test_pubkey
+        assert bond.private_key is None  # No private key for external bonds
+        # Certificate should be loaded
+        assert bond.cert_pubkey is not None
+        assert bond.cert_privkey is not None
+        assert bond.cert_signature is not None
+        assert bond.cert_expiry == 52
+
+    @pytest.mark.asyncio
+    async def test_external_bond_without_registry_is_skipped(self):
+        """External bonds (index=-1) without registry entry should be skipped."""
+        # External bond UTXO with -1 index
+        mock_utxo = MagicMock()
+        mock_utxo.path = "m/84'/0'/0'/2/-1:1769904000"
+        mock_utxo.value = 29791
+        mock_utxo.confirmations = 16
+        mock_utxo.height = 932978
+        mock_utxo.address = "bc1qunknown"
+        mock_utxo.txid = "deadbeef" * 8
+        mock_utxo.vout = 0
+
+        mock_wallet = MagicMock()
+        mock_wallet.utxo_cache = {
+            FIDELITY_BOND_MIXDEPTH: [mock_utxo],
+        }
+
+        # Empty registry - bond not found
+        from jmwallet.wallet.bond_registry import BondRegistry
+
+        mock_registry = BondRegistry(version=1, bonds=[])
+
+        with patch("jmwallet.wallet.bond_registry.load_registry", return_value=mock_registry):
+            bonds = await find_fidelity_bonds(mock_wallet)
+
+        # Bond should be skipped because it's not in registry
+        assert len(bonds) == 0
+
 
 class TestGetBestFidelityBond:
     """Tests for selecting the highest-value bond."""
