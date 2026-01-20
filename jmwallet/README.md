@@ -450,7 +450,7 @@ For detailed help on any command, see the auto-generated help sections below.
 │ --data-dir                         PATH     Data directory (default:         │
 │                                             ~/.joinmarket-ng or              │
 │                                             $JOINMARKET_DATA_DIR)            │
-│ --log-level                -l      TEXT     [default: INFO]                  │
+│ --log-level                -l      TEXT     Log level                        │
 │ --help                                      Show this message and exit.      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
@@ -481,7 +481,7 @@ For detailed help on any command, see the auto-generated help sections below.
 │ --rpc-user                         TEXT     [env var: BITCOIN_RPC_USER]      │
 │ --rpc-password                     TEXT     [env var: BITCOIN_RPC_PASSWORD]  │
 │ --locktime                 -L      INTEGER  Locktime(s) to scan for          │
-│ --log-level                -l      TEXT     [default: INFO]                  │
+│ --log-level                -l      TEXT     Log level                        │
 │ --help                                      Show this message and exit.      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
@@ -516,7 +516,7 @@ For detailed help on any command, see the auto-generated help sections below.
 │                                             $JOINMARKET_DATA_DIR)            │
 │ --no-save                                   Do not save the bond to the      │
 │                                             registry                         │
-│ --log-level                -l      TEXT     [default: INFO]                  │
+│ --log-level                -l      TEXT     Log level                        │
 │ --help                                      Show this message and exit.      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
@@ -567,7 +567,7 @@ For detailed help on any command, see the auto-generated help sections below.
 │ --data-dir                         PATH     Data directory (default:         │
 │                                             ~/.joinmarket-ng or              │
 │                                             $JOINMARKET_DATA_DIR)            │
-│ --log-level                -l      TEXT     [default: INFO]                  │
+│ --log-level                -l      TEXT     Log level                        │
 │ --help                                      Show this message and exit.      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
@@ -698,7 +698,7 @@ For detailed help on any command, see the auto-generated help sections below.
 │ --data-dir                         PATH     Data directory (default:         │
 │                                             ~/.joinmarket-ng or              │
 │                                             $JOINMARKET_DATA_DIR)            │
-│ --log-level                -l      TEXT     [default: INFO]                  │
+│ --log-level                -l      TEXT     Log level                        │
 │ --help                                      Show this message and exit.      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
@@ -731,7 +731,7 @@ For detailed help on any command, see the auto-generated help sections below.
 │ --data-dir                         PATH  Data directory (default:            │
 │                                          ~/.joinmarket-ng or                 │
 │                                          $JOINMARKET_DATA_DIR)               │
-│ --log-level                -l      TEXT  [default: INFO]                     │
+│ --log-level                -l      TEXT  Log level                           │
 │ --help                                   Show this message and exit.         │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
@@ -790,13 +790,19 @@ For detailed help on any command, see the auto-generated help sections below.
  public key is used to create a certificate signed by the cold wallet.
  The certificate chain is:   UTXO keypair (cold) -> signs -> certificate (hot)
  -> signs -> nick proofs
+ If --bond-address is provided, the keypair is saved to the bond registry and
+ will be automatically used when importing the certificate.
  SECURITY: - The hot wallet private key should be stored securely - If
  compromised, an attacker can impersonate your bond until cert expires - But
  they CANNOT spend your bond funds (those remain in cold storage)
 
 ╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ --log-level        TEXT  [default: INFO]                                     │
-│ --help                   Show this message and exit.                         │
+│ --bond-address        TEXT  Bond address to associate keypair with (saves to │
+│                             registry)                                        │
+│ --data-dir            PATH  Data directory (default: ~/.joinmarket-ng or     │
+│                             $JOINMARKET_DATA_DIR)                            │
+│ --log-level           TEXT  [default: INFO]                                  │
+│ --help                      Show this message and exit.                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -817,24 +823,28 @@ For detailed help on any command, see the auto-generated help sections below.
  Sparrow Wallet.
  IMPORTANT: This command does NOT require your mnemonic or private keys. It
  only prepares the message that you will sign with your hardware wallet.
- The certificate message format is:
- "fidelity-bond-cert|<cert_pubkey>|<cert_expiry>"
- Where cert_expiry is the number of 2016-block periods (difficulty adjustment
- periods).
+ If --cert-pubkey is not provided and the bond already has a hot keypair saved
+ in the registry (from generate-hot-keypair --bond-address), it will be used.
+ The certificate message format for Sparrow is plain ASCII text:
+ "fidelity-bond-cert|<cert_pubkey_hex>|<cert_expiry>"
+ Where cert_expiry is the ABSOLUTE period number (current_period +
+ validity_periods). The reference implementation validates that current_block <
+ cert_expiry * 2016.
 
 ╭─ Arguments ──────────────────────────────────────────────────────────────────╮
 │ *    bond_address      TEXT  Bond P2WSH address [required]                   │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ *  --cert-pubkey               TEXT     Certificate public key (hex)         │
-│                                         [required]                           │
-│    --cert-expiry-blocks        INTEGER  Certificate expiry in blocks         │
-│                                         [default: 104832]                    │
-│    --data-dir                  PATH     Data directory (default:             │
-│                                         ~/.joinmarket-ng or                  │
-│                                         $JOINMARKET_DATA_DIR)                │
-│    --log-level                 TEXT     [default: INFO]                      │
-│    --help                               Show this message and exit.          │
+│ --cert-pubkey             TEXT     Certificate public key (hex)              │
+│ --validity-periods        INTEGER  Certificate validity in 2016-block        │
+│                                    periods from now (1=~2wk, 52=~2yr)        │
+│                                    [default: 52]                             │
+│ --data-dir                PATH     Data directory (default: ~/.joinmarket-ng │
+│                                    or $JOINMARKET_DATA_DIR)                  │
+│ --mempool-api             TEXT     Mempool API URL for fetching block height │
+│                                    [default: https://mempool.space/api]      │
+│ --log-level               TEXT     [default: INFO]                           │
+│ --help                             Show this message and exit.               │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -851,32 +861,36 @@ For detailed help on any command, see the auto-generated help sections below.
 
  This imports a certificate generated with 'prepare-certificate-message' into
  the bond registry, allowing the hot wallet to use it for making offers.
- You need to provide: - cert_pubkey: Hot wallet public key (from
- generate-hot-keypair) - cert_privkey: Hot wallet private key (from
- generate-hot-keypair) - cert_signature: Certificate signature from hardware
- wallet (base64 or hex) - cert_expiry: Certificate expiry in periods (from
- prepare-certificate-message)
- The signature must have been created by signing the certificate message with
- the bond UTXO's private key (in your hardware wallet).
+ IMPORTANT: The --cert-expiry value must match EXACTLY what was used in
+ prepare-certificate-message. This is an ABSOLUTE period number, not a
+ duration.
+ If --cert-pubkey and --cert-privkey are not provided, they will be loaded from
+ the bond registry (from a previous 'generate-hot-keypair --bond-address'
+ call).
+ The signature should be the base64 output from Sparrow's message signing tool,
+ using the 'Standard (Electrum)' format.
 
 ╭─ Arguments ──────────────────────────────────────────────────────────────────╮
 │ *    address      TEXT  Bond address [required]                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ *  --cert-pubkey              TEXT     Certificate pubkey (hex) [required]   │
-│ *  --cert-privkey             TEXT     Certificate private key (hex)         │
-│                                        [required]                            │
-│ *  --cert-signature           TEXT     Certificate signature (base64 or hex) │
-│                                        [required]                            │
-│ *  --cert-expiry              INTEGER  Certificate expiry (periods)          │
-│                                        [required]                            │
-│    --data-dir                 PATH     Data directory (default:              │
-│                                        ~/.joinmarket-ng or                   │
-│                                        $JOINMARKET_DATA_DIR)                 │
-│    --skip-verification                 Skip signature verification (not      │
-│                                        recommended)                          │
-│    --log-level                TEXT     [default: INFO]                       │
-│    --help                              Show this message and exit.           │
+│ --cert-pubkey              TEXT     Certificate pubkey (hex)                 │
+│ --cert-privkey             TEXT     Certificate private key (hex)            │
+│ --cert-signature           TEXT     Certificate signature (base64)           │
+│ --cert-expiry              INTEGER  Certificate expiry as ABSOLUTE period    │
+│                                     number (from                             │
+│                                     prepare-certificate-message)             │
+│                                     [default: 0]                             │
+│ --data-dir                 PATH     Data directory (default:                 │
+│                                     ~/.joinmarket-ng or                      │
+│                                     $JOINMARKET_DATA_DIR)                    │
+│ --skip-verification                 Skip signature verification (not         │
+│                                     recommended)                             │
+│ --mempool-api              TEXT     Mempool API URL for fetching block       │
+│                                     height                                   │
+│                                     [default: https://mempool.space/api]     │
+│ --log-level                TEXT     [default: INFO]                          │
+│ --help                              Show this message and exit.              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 

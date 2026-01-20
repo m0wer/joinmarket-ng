@@ -572,7 +572,6 @@ Use env vars for RPC credentials (see jmwallet README).
 │                                                             confirmation     │
 │                                                             prompt           │
 │    --log-level      -l                     TEXT             Log level        │
-│                                                             [default: INFO]  │
 │    --help                                                   Show this        │
 │                                                             message and      │
 │                                                             exit.            │
@@ -641,7 +640,6 @@ Use env vars for RPC credentials (see jmwallet README).
 │                                                       (overrides             │
 │                                                       TOR__SOCKS_PORT)       │
 │ --log-level             -l      TEXT                  Log level              │
-│                                                       [default: INFO]        │
 │ --help                                                Show this message and  │
 │                                                       exit.                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯

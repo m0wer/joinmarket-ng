@@ -621,6 +621,7 @@ Thresholds are configurable via environment variables if needed (see config.py).
 │                                                       --cj-fee-relative and  │
 │                                                       --cj-fee-absolute to   │
 │                                                       set fees for each.     │
+│ --log-level             -l      TEXT                  Log level              │
 │ --help                                                Show this message and  │
 │                                                       exit.                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -657,6 +658,7 @@ Thresholds are configurable via environment variables if needed (see config.py).
 │                                                       (defaults to           │
 │                                                       --network)             │
 │ --backend-type                  TEXT                  Backend type           │
+│ --log-level             -l      TEXT                  Log level              │
 │ --help                                                Show this message and  │
 │                                                       exit.                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
