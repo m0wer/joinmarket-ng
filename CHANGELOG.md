@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-01-20
+
 ### Added
 
 - **Fidelity Bond Tool ASCII Signature Format Support**: The `fidelity_bond_tool.py` script now correctly verifies certificate signatures in both binary and ASCII message formats. Previously, it only tried the binary format (raw pubkey bytes in the message), which failed for cold storage bonds where the certificate was signed using Sparrow Wallet's message signing feature. The ASCII format (hex pubkey string in the message) is now also tried, matching the behavior of the reference implementation and our `verify_fidelity_bond_proof` function. The tool now also reports which format was used for successful verification.
@@ -589,6 +591,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tor configuration instructions.
 
 [Unreleased]: https://github.com/m0wer/joinmarket-ng/compare/0.9.0...HEAD
+[0.11.0]: https://github.com/m0wer/joinmarket-ng/compare/0.10.0...0.11.0
 [0.10.0]: https://github.com/m0wer/joinmarket-ng/compare/0.9.0...0.10.0
 [0.9.0]: https://github.com/m0wer/joinmarket-ng/compare/0.8.0...0.9.0
 [0.8.0]: https://github.com/m0wer/joinmarket-ng/compare/0.7.0...0.8.0
