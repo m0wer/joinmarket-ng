@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Fidelity Bond Tool ASCII Signature Format Support**: The `fidelity_bond_tool.py` script now correctly verifies certificate signatures in both binary and ASCII message formats. Previously, it only tried the binary format (raw pubkey bytes in the message), which failed for cold storage bonds where the certificate was signed using Sparrow Wallet's message signing feature. The ASCII format (hex pubkey string in the message) is now also tried, matching the behavior of the reference implementation and our `verify_fidelity_bond_proof` function. The tool now also reports which format was used for successful verification.
 
+- **Enhanced Fidelity Bond Modal in Orderbook Watcher**: The bond details modal now shows comprehensive verification information similar to `fidelity_bond_tool.py`:
+  - **Verification summary banner** at the top with color-coded status (green=valid, yellow=expired cert, blue=pending)
+  - **Certificate details section** showing UTXO pubkey (cold wallet), certificate pubkey (hot wallet), and certificate type (self-signed vs delegated)
+  - **Certificate expiry validation** fetches current block height from Mempool API and shows remaining validity or expiration status
+  - **Improved locktime display** shows human-readable unlock date with time remaining
+  - Helps diagnose why a bond may show value 0 (e.g., expired certificate)
+
 - **Improved Offer Type Configuration Documentation and Logging**: Enhanced maker configuration to make the `offer_type` setting more intuitive:
   - Updated `config.toml.template` with clearer documentation explaining that `offer_type` must be explicitly set to use absolute fees (simply setting `cj_fee_absolute` alone is not sufficient)
   - Added startup logging that clearly shows the configured offer type and fee (e.g., "Offer config: type=sw0reloffer, relative fee=0.001 (0.1000%)")

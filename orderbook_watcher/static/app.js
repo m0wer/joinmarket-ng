@@ -388,9 +388,41 @@ function formatNumber(num) {
     return num.toLocaleString();
 }
 
-function showBondModal(bondData, bondAmount) {
+// Global cache for current block height
+let cachedBlockHeight = null;
+let blockHeightFetchTime = 0;
+const BLOCK_HEIGHT_CACHE_MS = 60000; // Cache for 1 minute
+
+async function fetchCurrentBlockHeight() {
+    const now = Date.now();
+    if (cachedBlockHeight && (now - blockHeightFetchTime) < BLOCK_HEIGHT_CACHE_MS) {
+        return cachedBlockHeight;
+    }
+
+    try {
+        let mempoolApi = orderbookData.mempool_url || 'https://mempool.space';
+        // Use clearnet API even on onion for simplicity (API calls work)
+        if (mempoolApi.includes('.onion')) {
+            mempoolApi = 'https://mempool.space';
+        }
+        const response = await fetch(`${mempoolApi}/api/blocks/tip/height`);
+        if (response.ok) {
+            cachedBlockHeight = parseInt(await response.text());
+            blockHeightFetchTime = now;
+            return cachedBlockHeight;
+        }
+    } catch (e) {
+        console.warn('Failed to fetch block height:', e);
+    }
+    return null;
+}
+
+async function showBondModal(bondData, bondAmount, bondValue) {
     const modal = document.getElementById('bond-modal');
     if (!modal) return;
+
+    // Fetch current block height for validation
+    const currentBlockHeight = await fetchCurrentBlockHeight();
 
     document.getElementById('bond-maker-nick').textContent = bondData.maker_nick;
 
@@ -408,21 +440,102 @@ function showBondModal(bondData, bondAmount) {
         const btcAmount = (bondAmount / 100000000).toFixed(8);
         document.getElementById('bond-amount').textContent = `${formatNumber(bondAmount)} sats (${btcAmount} BTC)`;
     } else {
-        document.getElementById('bond-amount').textContent = 'Pending...';
+        document.getElementById('bond-amount').textContent = 'Pending verification...';
     }
 
-    document.getElementById('bond-locktime').textContent = new Date(bondData.locktime * 1000).toISOString();
+    // Format locktime with human-readable date
+    const locktimeDate = new Date(bondData.locktime * 1000);
+    const now = new Date();
+    const isExpired = locktimeDate <= now;
+    const locktimeStr = locktimeDate.toISOString().split('T')[0];
+    const locktimeStatus = isExpired ? ' (unlockable)' : ` (locked for ${formatTimeUntil(locktimeDate)})`;
+    document.getElementById('bond-locktime').textContent = `${locktimeStr}${locktimeStatus}`;
+
+    // UTXO and Certificate public keys
     document.getElementById('bond-utxo-pub').textContent = bondData.utxo_pub;
-    document.getElementById('bond-cert-expiry').textContent = bondData.cert_expiry;
+    document.getElementById('bond-cert-pub').textContent = bondData.cert_pub || 'N/A';
+
+    // Certificate type (self-signed vs cold storage)
+    const isSelfSigned = bondData.utxo_pub === bondData.cert_pub;
+    const certTypeEl = document.getElementById('bond-cert-type');
+    if (isSelfSigned) {
+        certTypeEl.textContent = 'Self-signed (hot wallet)';
+    } else {
+        certTypeEl.textContent = 'Delegated certificate (cold storage)';
+    }
+
+    // Certificate expiry with validation
+    const certExpiryBlock = bondData.cert_expiry; // Already in blocks (period * 2016)
+    const certExpiryPeriod = Math.floor(certExpiryBlock / 2016);
+    let certExpiryStr = `Block ${formatNumber(certExpiryBlock)} (period ${certExpiryPeriod})`;
+
+    let certExpired = false;
+    if (currentBlockHeight) {
+        if (currentBlockHeight >= certExpiryBlock) {
+            certExpired = true;
+            const blocksAgo = currentBlockHeight - certExpiryBlock;
+            certExpiryStr += ` - EXPIRED ${formatNumber(blocksAgo)} blocks ago`;
+        } else {
+            const blocksRemaining = certExpiryBlock - currentBlockHeight;
+            const weeksRemaining = Math.floor(blocksRemaining / 2016) * 2;
+            certExpiryStr += ` - ~${weeksRemaining} weeks remaining`;
+        }
+    }
+    document.getElementById('bond-cert-expiry').textContent = certExpiryStr;
+
+    // Scripts
     document.getElementById('bond-redeem-script').textContent = bondData.redeem_script || 'N/A';
     document.getElementById('bond-p2wsh-script').textContent = bondData.p2wsh_script || 'N/A';
 
+    // Verification commands
     document.getElementById('rpc-decodescript').textContent =
         `bitcoin-cli decodescript ${bondData.redeem_script || '<redeem_script>'}`;
     document.getElementById('rpc-gettxout').textContent =
         `bitcoin-cli gettxout ${bondData.utxo_txid} ${bondData.utxo_vout}`;
 
+    // Update verification summary banner
+    const summaryEl = document.getElementById('bond-verification-summary');
+    const iconEl = document.getElementById('bond-verification-icon');
+    const textEl = document.getElementById('bond-verification-text');
+
+    // Remove all status classes
+    summaryEl.classList.remove('valid', 'expired', 'invalid', 'pending');
+
+    if (certExpired) {
+        summaryEl.classList.add('expired');
+        iconEl.textContent = '!';
+        textEl.textContent = 'Certificate expired - bond value will show as 0 in reference implementation';
+    } else if (bondValue > 0) {
+        summaryEl.classList.add('valid');
+        iconEl.textContent = '\u2713'; // checkmark
+        textEl.textContent = `Valid fidelity bond with value ${formatNumber(Math.round(bondValue))}`;
+    } else if (bondAmount > 0) {
+        summaryEl.classList.add('pending');
+        iconEl.textContent = '?';
+        textEl.textContent = 'Bond UTXO found but value calculation pending';
+    } else {
+        summaryEl.classList.add('pending');
+        iconEl.textContent = '...';
+        textEl.textContent = 'Awaiting UTXO verification from blockchain';
+    }
+
     modal.style.display = 'block';
+}
+
+function formatTimeUntil(date) {
+    const now = new Date();
+    const diffMs = date - now;
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+    if (diffDays > 365) {
+        const years = Math.floor(diffDays / 365);
+        return `~${years} year${years > 1 ? 's' : ''}`;
+    } else if (diffDays > 30) {
+        const months = Math.floor(diffDays / 30);
+        return `~${months} month${months > 1 ? 's' : ''}`;
+    } else {
+        return `${diffDays} day${diffDays !== 1 ? 's' : ''}`;
+    }
 }
 
 function renderTable() {
@@ -492,7 +605,8 @@ function renderTable() {
                 b => b.counterparty === offer.counterparty &&
                      b.utxo.txid === offer.fidelity_bond_data.utxo_txid
             )?.amount || 0;
-            bondCell.addEventListener('click', () => showBondModal(offer.fidelity_bond_data, bondAmount));
+            const bondVal = offer.fidelity_bond_value || 0;
+            bondCell.addEventListener('click', () => showBondModal(offer.fidelity_bond_data, bondAmount, bondVal));
         }
 
         fragment.appendChild(row);

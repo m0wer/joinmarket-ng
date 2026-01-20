@@ -471,6 +471,57 @@ tbody tr:hover {
     color: #79c0ff;
 }
 
+/* Bond Verification Summary */
+.bond-verification-summary {
+    padding: 12px 16px;
+    border-radius: 6px;
+    margin-bottom: 20px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.bond-verification-summary.valid {
+    background-color: rgba(46, 160, 67, 0.15);
+    border: 1px solid #238636;
+    color: #3fb950;
+}
+
+.bond-verification-summary.expired {
+    background-color: rgba(187, 128, 9, 0.15);
+    border: 1px solid #9e6a03;
+    color: #d29922;
+}
+
+.bond-verification-summary.invalid {
+    background-color: rgba(248, 81, 73, 0.15);
+    border: 1px solid #f85149;
+    color: #f85149;
+}
+
+.bond-verification-summary.pending {
+    background-color: rgba(88, 166, 255, 0.15);
+    border: 1px solid #58a6ff;
+    color: #58a6ff;
+}
+
+#bond-verification-icon {
+    font-size: 18px;
+}
+
+/* Bond Modal Section Headers */
+.bond-modal-content h3 {
+    color: #8b949e;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 25px;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #30363d;
+}
+
 /* Feature Stats Section */
 .feature-stats {
     background: #161b22;

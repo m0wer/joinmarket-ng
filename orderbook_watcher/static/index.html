@@ -94,6 +94,12 @@
             <span class="close-modal">&times;</span>
             <h2>Fidelity Bond Details</h2>
 
+            <!-- Verification Summary Banner -->
+            <div id="bond-verification-summary" class="bond-verification-summary">
+                <span id="bond-verification-icon"></span>
+                <span id="bond-verification-text"></span>
+            </div>
+
             <div class="bond-detail">
                 <label>Maker Nick:</label>
                 <code id="bond-maker-nick"></code>
@@ -115,19 +121,33 @@
             </div>
 
             <div class="bond-detail">
-                <label>Locktime (ISO 8601):</label>
+                <label>Locktime (Unlock Date):</label>
                 <code id="bond-locktime"></code>
             </div>
 
+            <h3>Certificate Details</h3>
+
             <div class="bond-detail">
-                <label>UTXO Public Key:</label>
+                <label>UTXO Public Key (Cold Wallet):</label>
                 <code id="bond-utxo-pub"></code>
             </div>
 
             <div class="bond-detail">
-                <label>Certificate Expiry (Block Height):</label>
+                <label>Certificate Public Key (Hot Wallet):</label>
+                <code id="bond-cert-pub"></code>
+            </div>
+
+            <div class="bond-detail">
+                <label>Certificate Type:</label>
+                <code id="bond-cert-type"></code>
+            </div>
+
+            <div class="bond-detail">
+                <label>Certificate Expiry:</label>
                 <code id="bond-cert-expiry"></code>
             </div>
+
+            <h3>Script Details</h3>
 
             <div class="bond-detail">
                 <label>Redeem Script (hex):</label>
