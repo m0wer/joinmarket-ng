@@ -254,7 +254,7 @@ def parse_bond_proof(proof_b64: str, maker_nick: str, taker_nick: str) -> dict:
 
     # Verify nick signature
     nick_msg = (taker_nick + "|" + maker_nick).encode("ascii")
-    nick_sig_valid = None
+    nick_sig_valid: bool | str | None = None
     if nick_sig and cert_pub:
         try:
             nick_sig_valid = verify_bitcoin_message_signature(
@@ -264,18 +264,37 @@ def parse_bond_proof(proof_b64: str, maker_nick: str, taker_nick: str) -> dict:
             nick_sig_valid = f"Error: {e}"
 
     # Verify cert signature
-    cert_msg = (
+    # Binary format: pubkey as raw bytes (reference implementation default)
+    cert_msg_binary = (
         b"fidelity-bond-cert|"
         + cert_pub
         + b"|"
         + str(cert_expiry_encoded).encode("ascii")
     )
-    cert_sig_valid = None
+    # ASCII format: pubkey as hex string (for cold storage / Sparrow compatibility)
+    cert_msg_ascii = (
+        b"fidelity-bond-cert|"
+        + cert_pub.hex().encode("ascii")
+        + b"|"
+        + str(cert_expiry_encoded).encode("ascii")
+    )
+    cert_sig_valid: bool | str | None = None
+    cert_sig_format: str | None = None
+    cert_msg_used = cert_msg_binary  # Default for display
     if cert_sig and utxo_pub:
         try:
-            cert_sig_valid = verify_bitcoin_message_signature(
-                cert_msg, cert_sig, utxo_pub
-            )
+            # Try binary format first (hot wallet / self-signed)
+            if verify_bitcoin_message_signature(cert_msg_binary, cert_sig, utxo_pub):
+                cert_sig_valid = True
+                cert_sig_format = "binary"
+                cert_msg_used = cert_msg_binary
+            # Try ASCII format (cold wallet / Sparrow signed)
+            elif verify_bitcoin_message_signature(cert_msg_ascii, cert_sig, utxo_pub):
+                cert_sig_valid = True
+                cert_sig_format = "ascii"
+                cert_msg_used = cert_msg_ascii
+            else:
+                cert_sig_valid = False
         except Exception as e:
             cert_sig_valid = f"Error: {e}"
 
@@ -296,8 +315,9 @@ def parse_bond_proof(proof_b64: str, maker_nick: str, taker_nick: str) -> dict:
             "padded_hex": cert_sig_padded.hex(),
             "der_start_offset": cert_sig_start,
             "der_sig_hex": cert_sig.hex() if cert_sig else None,
-            "message": cert_msg.decode("ascii", errors="replace"),
-            "message_hex": cert_msg.hex(),
+            "message": cert_msg_used.decode("ascii", errors="replace"),
+            "message_hex": cert_msg_used.hex(),
+            "message_format": cert_sig_format,
             "valid": cert_sig_valid,
         },
         "cert_pubkey": {
