@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Descriptor Wallet Gap Limit Bug**: Fixed a critical bug where wallets with more than 1000 addresses would show 0 balance in `jm-wallet info` despite having funds. The issue was threefold:
+  1. `_find_address_path()` only scanned up to index 100, so addresses beyond that were marked "unknown"
+  2. `DEFAULT_SCAN_RANGE` (1000) was used as a max index rather than a true gap limit
+  3. No mechanism existed to upgrade descriptor ranges when wallets grew beyond the initial range
+
+  The fix includes:
+  - `_find_address_path()` now scans up to the full descriptor range (retrieved from Bitcoin Core)
+  - Pre-populate address cache during sync for O(1) lookups
+  - Automatic detection and upgrade of descriptor ranges when highest used index approaches the limit
+  - Added `get_descriptor_ranges()`, `get_max_descriptor_range()`, and `upgrade_descriptor_ranges()` methods to DescriptorWalletBackend
+  - Added `check_and_upgrade_descriptor_range()` method to WalletService that automatically expands ranges as needed
+
 - **recover-bonds Now Waits for Wallet Rescan**: Fixed a bug where `jm-wallet recover-bonds` would attempt to query UTXOs before the wallet rescan completed, causing "Wallet is currently rescanning" errors or missing bond discovery. The command now properly waits for each batch of descriptor imports to finish rescanning before querying for UTXOs. Added `wait_for_rescan_complete()` method to the descriptor wallet backend.
 
 - **list-bonds Now Updates Registry with Discovered Bonds**: Fixed a bug where `jm-wallet list-bonds --locktime` would find bonds on the blockchain but not save them to `fidelity_bonds.json`. Now when bonds are discovered via `--locktime` scanning, they are automatically added to the registry with full UTXO information (txid, vout, value, confirmations). Existing registry entries also get their UTXO info updated.

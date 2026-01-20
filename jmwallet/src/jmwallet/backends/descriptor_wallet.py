@@ -36,8 +36,9 @@ DEFAULT_RPC_TIMEOUT = 30.0
 # Timeout for descriptor import - can take a while for large ranges
 IMPORT_RPC_TIMEOUT = 120.0
 
-# Default gap limit for descriptor ranges
-DEFAULT_GAP_LIMIT = 1000
+# Default initial range size for descriptor imports (number of addresses to derive)
+# This is NOT a gap limit - it's the initial number of addresses imported into Bitcoin Core
+DEFAULT_INITIAL_RANGE = 1000
 
 # Default scan lookback period (approximately 1 year of blocks)
 # Bitcoin averages ~144 blocks/day * 365 days ≈ 52,560 blocks
@@ -306,7 +307,7 @@ class DescriptorWalletBackend(BlockchainBackend):
             descriptors: List of output descriptors. Can be:
                 - Simple strings: "wpkh(xpub.../0/*)"
                 - Dicts with range:
-                  {"desc": "wpkh(xpub.../0/*)", "range": [0, DEFAULT_GAP_LIMIT - 1]}
+                  {"desc": "wpkh(xpub.../0/*)", "range": [0, DEFAULT_INITIAL_RANGE - 1]}
             rescan: If True, rescan blockchain (behavior depends on smart_scan).
                    If False, only track new transactions (timestamp="now").
             timestamp: Override timestamp. If None, uses smart calculation or 0/"now".
@@ -324,7 +325,7 @@ class DescriptorWalletBackend(BlockchainBackend):
             await backend.import_descriptors([
                 {
                     "desc": "wpkh(xpub.../0/*)",
-                    "range": [0, DEFAULT_GAP_LIMIT - 1],
+                    "range": [0, DEFAULT_INITIAL_RANGE - 1],
                     "internal": False,
                 },
             ], rescan=True, smart_scan=True)
@@ -1039,6 +1040,126 @@ class DescriptorWalletBackend(BlockchainBackend):
         except Exception as e:
             logger.warning(f"Failed to get addresses with history: {e}")
             return addresses
+
+    async def get_descriptor_ranges(self) -> dict[str, tuple[int, int]]:
+        """
+        Get the current range for each imported descriptor.
+
+        Returns:
+            Dictionary mapping descriptor base (without checksum) to (start, end) range.
+            For non-ranged descriptors (addr(...)), returns empty range.
+
+        Example:
+            ranges = await backend.get_descriptor_ranges()
+            # {"wpkh(xpub.../0/*)": (0, 999), "wpkh(xpub.../1/*)": (0, 999)}
+        """
+        if not self._wallet_loaded:
+            return {}
+
+        try:
+            result = await self._rpc_call("listdescriptors")
+            ranges: dict[str, tuple[int, int]] = {}
+
+            for desc_info in result.get("descriptors", []):
+                desc = desc_info.get("desc", "")
+                # Remove checksum for cleaner key
+                desc_base = desc.split("#")[0] if "#" in desc else desc
+
+                # Get range - may be [start, end] or just end for simple ranges
+                range_info = desc_info.get("range")
+                if range_info is not None:
+                    if isinstance(range_info, list) and len(range_info) >= 2:
+                        ranges[desc_base] = (range_info[0], range_info[1])
+                    elif isinstance(range_info, int):
+                        ranges[desc_base] = (0, range_info)
+
+            return ranges
+        except Exception as e:
+            logger.warning(f"Failed to get descriptor ranges: {e}")
+            return {}
+
+    async def get_max_descriptor_range(self) -> int:
+        """
+        Get the maximum range end across all imported descriptors.
+
+        Returns:
+            Maximum end index, or DEFAULT_INITIAL_RANGE if no descriptors found.
+        """
+        ranges = await self.get_descriptor_ranges()
+        if not ranges:
+            return DEFAULT_INITIAL_RANGE
+
+        max_end = 0
+        for start, end in ranges.values():
+            if end > max_end:
+                max_end = end
+
+        return max_end if max_end > 0 else DEFAULT_INITIAL_RANGE
+
+    async def upgrade_descriptor_ranges(
+        self,
+        descriptors: Sequence[str | dict[str, Any]],
+        new_range_end: int,
+        rescan: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Upgrade descriptor ranges to track more addresses.
+
+        This re-imports existing descriptors with a larger range. Bitcoin Core
+        will automatically track the new addresses without re-scanning the entire
+        blockchain (unless rescan=True is specified).
+
+        This is useful when a wallet has grown beyond the initially imported range.
+        For example, if originally imported with range [0, 999] and now need to
+        track addresses up to index 5000.
+
+        Args:
+            descriptors: List of descriptors to upgrade (same format as import_descriptors)
+            new_range_end: New end index for the range (e.g., 5000 for [0, 5000])
+            rescan: Whether to rescan blockchain for the new addresses.
+                   Usually not needed if wallet was already tracking some range.
+
+        Returns:
+            Import result from Bitcoin Core
+
+        Note:
+            Re-importing with a larger range is safe - Bitcoin Core will extend
+            the tracking without duplicating or losing existing data.
+        """
+        if not self._wallet_loaded:
+            raise RuntimeError("Wallet not loaded. Call create_wallet() first.")
+
+        # Update ranges in descriptor dicts
+        updated_descriptors = []
+        for desc in descriptors:
+            if isinstance(desc, str):
+                # String descriptor - add range
+                updated_descriptors.append(
+                    {
+                        "desc": desc,
+                        "range": [0, new_range_end],
+                    }
+                )
+            elif isinstance(desc, dict):
+                # Dict descriptor - update range
+                updated = dict(desc)
+                if "*" in updated.get("desc", ""):  # Only ranged descriptors
+                    updated["range"] = [0, new_range_end]
+                updated_descriptors.append(updated)
+
+        logger.info(
+            f"Upgrading {len(updated_descriptors)} descriptor(s) to range [0, {new_range_end}]"
+        )
+
+        # Re-import with new range
+        # timestamp="now" means don't rescan unless explicitly requested
+        return await self.import_descriptors(
+            updated_descriptors,
+            rescan=rescan,
+            timestamp=0 if rescan else "now",
+            smart_scan=False,  # Don't use smart scan for upgrades
+            background_full_rescan=False,
+        )
 
     async def unload_wallet(self) -> None:
         """Unload the wallet from Bitcoin Core."""

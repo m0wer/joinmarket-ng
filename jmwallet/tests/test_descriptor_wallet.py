@@ -1331,18 +1331,289 @@ class TestAddressHistory:
             mixdepth_count=5,
         )
 
-        # Mock _find_address_path to return a path for our test addresses
-        def mock_find_path(address: str) -> tuple[int, int, int] | None:
-            if address == addr_with_utxo:
-                return (0, 0, 0)
-            elif address == addr_spent:
-                return (0, 0, 1)  # Different index
-            return None
-
-        wallet._find_address_path = mock_find_path  # type: ignore[method-assign]
+        # Pre-populate address cache with our test addresses
+        # This simulates what _populate_address_cache would do for real addresses
+        wallet.address_cache[addr_with_utxo] = (0, 0, 0)
+        wallet.address_cache[addr_spent] = (0, 0, 1)
 
         await wallet.sync_with_descriptor_wallet()
 
         # Both addresses should be in addresses_with_history
         assert addr_with_utxo in wallet.addresses_with_history
         assert addr_spent in wallet.addresses_with_history
+
+
+class TestDescriptorRangeUpgrade:
+    """Tests for descriptor range detection and upgrade functionality."""
+
+    @pytest.mark.asyncio
+    async def test_get_descriptor_ranges(self) -> None:
+        """Test getting descriptor ranges from wallet."""
+        backend = DescriptorWalletBackend(wallet_name="test_ranges")
+        backend._wallet_loaded = True
+
+        async def mock_rpc_call(
+            method: str,
+            params: list | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            if method == "listdescriptors":
+                return {
+                    "descriptors": [
+                        {
+                            "desc": "wpkh(xpub.../0/*)#checksum",
+                            "range": [0, 999],
+                        },
+                        {
+                            "desc": "wpkh(xpub.../1/*)#checksum",
+                            "range": [0, 999],
+                        },
+                        {
+                            "desc": "addr(bc1q...)#checksum",
+                            # No range for addr() descriptors
+                        },
+                    ]
+                }
+            raise ValueError(f"Unexpected RPC: {method}")
+
+        backend._rpc_call = mock_rpc_call  # type: ignore[method-assign]
+
+        ranges = await backend.get_descriptor_ranges()
+
+        assert len(ranges) == 2  # Only ranged descriptors
+        assert ranges["wpkh(xpub.../0/*)"] == (0, 999)
+        assert ranges["wpkh(xpub.../1/*)"] == (0, 999)
+
+    @pytest.mark.asyncio
+    async def test_get_max_descriptor_range(self) -> None:
+        """Test getting maximum descriptor range."""
+        backend = DescriptorWalletBackend(wallet_name="test_max_range")
+        backend._wallet_loaded = True
+
+        async def mock_rpc_call(
+            method: str,
+            params: list | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            if method == "listdescriptors":
+                return {
+                    "descriptors": [
+                        {"desc": "wpkh(xpub.../0/*)#abc", "range": [0, 4999]},
+                        {"desc": "wpkh(xpub.../1/*)#def", "range": [0, 2999]},
+                    ]
+                }
+            raise ValueError(f"Unexpected RPC: {method}")
+
+        backend._rpc_call = mock_rpc_call  # type: ignore[method-assign]
+
+        max_range = await backend.get_max_descriptor_range()
+
+        assert max_range == 4999
+
+    @pytest.mark.asyncio
+    async def test_get_max_descriptor_range_empty(self) -> None:
+        """Test max range returns default when no descriptors."""
+        backend = DescriptorWalletBackend(wallet_name="test_empty_range")
+        backend._wallet_loaded = True
+
+        async def mock_rpc_call(
+            method: str,
+            params: list | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            if method == "listdescriptors":
+                return {"descriptors": []}
+            raise ValueError(f"Unexpected RPC: {method}")
+
+        backend._rpc_call = mock_rpc_call  # type: ignore[method-assign]
+
+        max_range = await backend.get_max_descriptor_range()
+
+        # Should return DEFAULT_INITIAL_RANGE when no descriptors found
+        from jmwallet.backends.descriptor_wallet import DEFAULT_INITIAL_RANGE
+
+        assert max_range == DEFAULT_INITIAL_RANGE
+
+    @pytest.mark.asyncio
+    async def test_upgrade_descriptor_ranges(self) -> None:
+        """Test upgrading descriptor ranges."""
+        backend = DescriptorWalletBackend(wallet_name="test_upgrade")
+        backend._wallet_loaded = True
+
+        import_calls: list[dict] = []
+
+        async def mock_rpc_call(
+            method: str,
+            params: list | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            if method == "getdescriptorinfo":
+                desc = params[0] if params else ""
+                return {"descriptor": f"{desc}#mockchecksum"}
+            if method == "importdescriptors":
+                import_calls.append({"method": method, "params": params})
+                return [{"success": True}]
+            if method == "listdescriptors":
+                return {"descriptors": [{"desc": "test", "range": [0, 999]}]}
+            raise ValueError(f"Unexpected RPC: {method}")
+
+        backend._rpc_call = mock_rpc_call  # type: ignore[method-assign]
+
+        descriptors = [
+            {"desc": "wpkh(xpub.../0/*)", "range": [0, 999]},
+            {"desc": "wpkh(xpub.../1/*)", "range": [0, 999]},
+        ]
+
+        result = await backend.upgrade_descriptor_ranges(descriptors, 4999, rescan=False)
+
+        assert result["success_count"] == 1
+        assert len(import_calls) == 1
+
+        # Check that ranges were updated
+        imported = import_calls[0]["params"][0]
+        assert imported[0]["range"] == [0, 4999]
+        assert imported[1]["range"] == [0, 4999]
+
+    @pytest.mark.asyncio
+    async def test_check_and_upgrade_descriptor_range_no_upgrade_needed(self) -> None:
+        """Test that no upgrade happens when range is sufficient."""
+        from jmwallet.wallet.service import WalletService
+
+        backend = DescriptorWalletBackend(wallet_name="test_no_upgrade")
+        backend._wallet_loaded = True
+        backend._descriptors_imported = True
+
+        async def mock_rpc_call(
+            method: str,
+            params: list | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            if method == "listdescriptors":
+                return {
+                    "descriptors": [
+                        {"desc": "wpkh(xpub.../0/*)#abc", "range": [0, 999]},
+                    ]
+                }
+            raise ValueError(f"Unexpected RPC: {method}")
+
+        backend._rpc_call = mock_rpc_call  # type: ignore[method-assign]
+
+        test_mnemonic = (
+            "abandon abandon abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon about"
+        )
+        wallet = WalletService(
+            mnemonic=test_mnemonic,
+            backend=backend,
+            network="mainnet",
+            mixdepth_count=5,
+        )
+
+        # Set up addresses_with_history with low indices
+        wallet.address_cache["bc1q_test1"] = (0, 0, 50)
+        wallet.address_cache["bc1q_test2"] = (0, 1, 100)
+        wallet.addresses_with_history = {"bc1q_test1", "bc1q_test2"}
+
+        # Current range (999) > highest used (100) + gap_limit (100)
+        upgraded = await wallet.check_and_upgrade_descriptor_range(gap_limit=100)
+
+        assert upgraded is False
+
+    @pytest.mark.asyncio
+    async def test_check_and_upgrade_descriptor_range_upgrade_needed(self) -> None:
+        """Test that upgrade happens when range is insufficient."""
+        from jmwallet.wallet.service import WalletService
+
+        backend = DescriptorWalletBackend(wallet_name="test_upgrade_needed")
+        backend._wallet_loaded = True
+        backend._descriptors_imported = True
+
+        upgrade_called = False
+        new_range_used = 0
+
+        async def mock_rpc_call(
+            method: str,
+            params: list | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            nonlocal upgrade_called, new_range_used
+            if method == "listdescriptors":
+                return {
+                    "descriptors": [
+                        {"desc": "wpkh(xpub.../0/*)#abc", "range": [0, 999]},
+                    ]
+                }
+            if method == "getdescriptorinfo":
+                desc = params[0] if params else ""
+                return {"descriptor": f"{desc}#mockchecksum"}
+            if method == "importdescriptors":
+                upgrade_called = True
+                # Extract the new range
+                if params and params[0]:
+                    new_range_used = params[0][0].get("range", [0, 0])[1]
+                return [{"success": True} for _ in (params[0] if params else [])]
+            raise ValueError(f"Unexpected RPC: {method}")
+
+        backend._rpc_call = mock_rpc_call  # type: ignore[method-assign]
+
+        test_mnemonic = (
+            "abandon abandon abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon about"
+        )
+        wallet = WalletService(
+            mnemonic=test_mnemonic,
+            backend=backend,
+            network="mainnet",
+            mixdepth_count=5,
+        )
+
+        # Set up addresses_with_history with HIGH indices (beyond current range)
+        wallet.address_cache["bc1q_high_idx"] = (0, 0, 950)
+        wallet.addresses_with_history = {"bc1q_high_idx"}
+
+        # With gap_limit=100, we need range >= 950 + 100 + 1 = 1051
+        # Current range is 999, so upgrade should be triggered
+        upgraded = await wallet.check_and_upgrade_descriptor_range(gap_limit=100)
+
+        assert upgraded is True
+        assert upgrade_called is True
+        assert new_range_used >= 1051
+
+    @pytest.mark.asyncio
+    async def test_populate_address_cache(self) -> None:
+        """Test pre-populating address cache."""
+        from jmwallet.wallet.service import WalletService
+
+        backend = DescriptorWalletBackend(wallet_name="test_cache")
+        backend._wallet_loaded = True
+
+        test_mnemonic = (
+            "abandon abandon abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon about"
+        )
+        wallet = WalletService(
+            mnemonic=test_mnemonic,
+            backend=backend,
+            network="mainnet",
+            mixdepth_count=5,
+        )
+
+        # Should start empty
+        assert len(wallet.address_cache) == 0
+
+        # Populate for small range
+        await wallet._populate_address_cache(10)
+
+        # Should have 5 mixdepths * 2 branches * 10 indices = 100 addresses
+        assert len(wallet.address_cache) == 100
+
+        # Verify addresses are properly cached
+        addr = wallet.get_address(0, 0, 5)
+        assert addr in wallet.address_cache
+        assert wallet.address_cache[addr] == (0, 0, 5)

@@ -992,6 +992,16 @@ class WalletService:
 
         logger.info("Syncing via descriptor wallet (listunspent)...")
 
+        # Get the current descriptor range from Bitcoin Core and cache it
+        # This is used by _find_address_path to know how far to scan
+        current_range = await self.backend.get_max_descriptor_range()
+        self._current_descriptor_range = current_range
+        logger.debug(f"Current descriptor range: [0, {current_range}]")
+
+        # Pre-populate address cache for the entire descriptor range
+        # This is more efficient than deriving addresses one by one during lookup
+        await self._populate_address_cache(current_range)
+
         # Get all wallet UTXOs at once
         all_utxos = await self.backend.get_all_utxos()
 
@@ -1033,8 +1043,11 @@ class WalletService:
                 fidelity_bond_utxos.append(utxo_info)
                 continue
 
-            # Try to find address in cache
-            path_info = self._find_address_path(address)
+            # Try to find address in cache (should be pre-populated now)
+            path_info = self.address_cache.get(address)
+            if path_info is None:
+                # Fallback to derivation scan (shouldn't happen often now)
+                path_info = self._find_address_path(address)
             if path_info is None:
                 # Check if this is a P2WSH address (likely a fidelity bond we don't know about)
                 # P2WSH: OP_0 (0x00) + PUSH32 (0x20) + 32-byte hash = 68 hex chars
@@ -1078,16 +1091,24 @@ class WalletService:
             if hasattr(self.backend, "get_addresses_with_history"):
                 history_addresses = await self.backend.get_addresses_with_history()
                 for address in history_addresses:
-                    # Check if this address belongs to our wallet
-                    path_info = self._find_address_path(address)
+                    # Check if this address belongs to our wallet (use cache first)
+                    path_info = self.address_cache.get(address)
                     if path_info is not None:
                         self.addresses_with_history.add(address)
-                        # Also add to address cache if not already there
-                        if address not in self.address_cache:
-                            self.address_cache[address] = path_info
                 logger.debug(f"Tracked {len(self.addresses_with_history)} addresses with history")
         except Exception as e:
             logger.debug(f"Could not fetch addresses with history: {e}")
+
+        # Check if descriptor range needs to be upgraded
+        # This handles wallets that have grown beyond the initial range
+        try:
+            upgraded = await self.check_and_upgrade_descriptor_range(gap_limit=100)
+            if upgraded:
+                # Re-populate address cache with the new range
+                new_range = await self.backend.get_max_descriptor_range()
+                await self._populate_address_cache(new_range)
+        except Exception as e:
+            logger.warning(f"Could not check/upgrade descriptor range: {e}")
 
         total_utxos = sum(len(u) for u in result.values())
         total_value = sum(sum(u.value for u in utxos) for utxos in result.values())
@@ -1098,7 +1119,132 @@ class WalletService:
 
         return result
 
-    def _find_address_path(self, address: str) -> tuple[int, int, int] | None:
+    async def check_and_upgrade_descriptor_range(
+        self,
+        gap_limit: int = 100,
+    ) -> bool:
+        """
+        Check if descriptor range needs upgrading and upgrade if necessary.
+
+        This method detects if the wallet has used addresses beyond the current
+        descriptor range and automatically upgrades the range if needed.
+
+        The algorithm:
+        1. Get the current descriptor range from Bitcoin Core
+        2. Check addresses with history to find the highest used index
+        3. If highest used index + gap_limit > current range, upgrade
+
+        Args:
+            gap_limit: Number of empty addresses to maintain beyond highest used
+
+        Returns:
+            True if upgrade was performed, False otherwise
+
+        Raises:
+            RuntimeError: If backend is not DescriptorWalletBackend
+        """
+        if not isinstance(self.backend, DescriptorWalletBackend):
+            raise RuntimeError(
+                "check_and_upgrade_descriptor_range() requires DescriptorWalletBackend"
+            )
+
+        # Get current range
+        current_range = await self.backend.get_max_descriptor_range()
+        logger.debug(f"Current descriptor range: [0, {current_range}]")
+
+        # Find highest used index across all mixdepths/branches
+        highest_used = await self._find_highest_used_index_from_history()
+
+        # Calculate required range
+        required_range = highest_used + gap_limit + 1
+
+        if required_range <= current_range:
+            logger.debug(
+                f"Descriptor range sufficient: highest used={highest_used}, "
+                f"current range={current_range}"
+            )
+            return False
+
+        # Need to upgrade
+        logger.info(
+            f"Upgrading descriptor range: highest used={highest_used}, "
+            f"current={current_range}, new={required_range}"
+        )
+
+        # Generate descriptors with new range
+        descriptors = self._generate_import_descriptors(required_range)
+
+        # Upgrade (no rescan needed - addresses already exist in blockchain)
+        await self.backend.upgrade_descriptor_ranges(descriptors, required_range, rescan=False)
+
+        # Update our cached range
+        self._current_descriptor_range = required_range
+
+        logger.info(f"Descriptor range upgraded to [0, {required_range}]")
+        return True
+
+    async def _find_highest_used_index_from_history(self) -> int:
+        """
+        Find the highest address index that has ever been used.
+
+        Uses addresses_with_history which is populated from Bitcoin Core's
+        transaction history.
+
+        Returns:
+            Highest used address index, or -1 if no addresses used
+        """
+        highest_index = -1
+
+        # Check addresses from blockchain history
+        for address in self.addresses_with_history:
+            if address in self.address_cache:
+                _, _, index = self.address_cache[address]
+                if index > highest_index:
+                    highest_index = index
+
+        # Also check current UTXOs
+        for mixdepth in range(self.mixdepth_count):
+            utxos = self.utxo_cache.get(mixdepth, [])
+            for utxo in utxos:
+                if utxo.address in self.address_cache:
+                    _, _, index = self.address_cache[utxo.address]
+                    if index > highest_index:
+                        highest_index = index
+
+        return highest_index
+
+    async def _populate_address_cache(self, max_index: int) -> None:
+        """
+        Pre-populate the address cache for efficient address lookups.
+
+        This derives addresses for all mixdepths and branches up to max_index,
+        storing them in the address_cache for O(1) lookups during sync.
+
+        Args:
+            max_index: Maximum address index to derive (typically the descriptor range)
+        """
+        # Only populate if we haven't already cached enough addresses
+        current_cache_size = len(self.address_cache)
+        expected_size = self.mixdepth_count * 2 * max_index  # mixdepths * branches * indices
+
+        # If cache already has enough entries, skip
+        if current_cache_size >= expected_size * 0.9:  # 90% threshold
+            logger.debug(f"Address cache already populated ({current_cache_size} entries)")
+            return
+
+        logger.debug(f"Populating address cache for range [0, {max_index}]...")
+
+        for mixdepth in range(self.mixdepth_count):
+            for change in [0, 1]:
+                for index in range(max_index):
+                    # get_address automatically caches
+                    self.get_address(mixdepth, change, index)
+
+        logger.debug(f"Address cache populated with {len(self.address_cache)} entries")
+
+    def _find_address_path(
+        self, address: str, max_scan: int | None = None
+    ) -> tuple[int, int, int] | None:
         """
         Find the derivation path for an address.
 
@@ -1106,6 +1252,8 @@ class WalletService:
 
         Args:
             address: Bitcoin address
+            max_scan: Maximum index to scan per branch. If None, uses the current
+                     descriptor range from _current_descriptor_range or DEFAULT_SCAN_RANGE.
 
         Returns:
             Tuple of (mixdepth, change, index) or None if not found
@@ -1114,9 +1262,12 @@ class WalletService:
         if address in self.address_cache:
             return self.address_cache[address]
 
-        # Try to find by deriving addresses (expensive)
-        # This scans a limited range to find the address
-        max_scan = 100  # Limit to avoid expensive scans
+        # Determine scan range - use the current descriptor range if available
+        if max_scan is None:
+            max_scan = int(getattr(self, "_current_descriptor_range", DEFAULT_SCAN_RANGE))
+
+        # Try to find by deriving addresses (expensive but necessary)
+        # We must scan up to the descriptor range to find all addresses
         for mixdepth in range(self.mixdepth_count):
             for change in [0, 1]:
                 for index in range(max_scan):
