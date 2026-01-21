@@ -22,6 +22,7 @@ from jmcore.directory_client import DirectoryClient, DirectoryClientError
 from jmcore.models import Offer
 from jmcore.network import HiddenServiceListener, TCPConnection
 from jmcore.notifications import get_notifier
+from jmcore.paths import read_nick_state
 from jmcore.protocol import (
     COMMAND_PREFIX,
     FEATURE_NEUTRINO_COMPAT,
@@ -372,6 +373,14 @@ class MakerBot:
         # Track last log time for rate-limited logging
         # Key: log_key, Value: timestamp of last log
         self._rate_limited_log_times: dict[str, float] = {}
+
+        # Own wallet nicks to exclude from CoinJoin sessions (self-CoinJoin protection)
+        # Read the taker nick from state file if running both components from same wallet
+        self._own_wallet_nicks: set[str] = set()
+        taker_nick = read_nick_state(config.data_dir, "taker")
+        if taker_nick:
+            self._own_wallet_nicks.add(taker_nick)
+            logger.info(f"Self-CoinJoin protection: excluding taker nick {taker_nick}")
 
     async def _setup_tor_hidden_service(self) -> str | None:
         """
@@ -1840,6 +1849,14 @@ class MakerBot:
         simultaneously, each with a unique ID.
         """
         try:
+            # Check for self-CoinJoin (same wallet running both maker and taker)
+            if taker_nick in self._own_wallet_nicks:
+                logger.warning(
+                    f"Rejecting !fill from {taker_nick}: self-CoinJoin protection "
+                    "(same wallet running both maker and taker)"
+                )
+                return
+
             parts = msg.split()
             if len(parts) < 5:
                 logger.warning(f"Invalid !fill format (need at least 5 parts): {msg}")

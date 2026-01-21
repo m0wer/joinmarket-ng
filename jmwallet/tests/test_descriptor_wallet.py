@@ -1432,10 +1432,10 @@ class TestDescriptorRangeUpgrade:
 
         max_range = await backend.get_max_descriptor_range()
 
-        # Should return DEFAULT_INITIAL_RANGE when no descriptors found
-        from jmwallet.backends.descriptor_wallet import DEFAULT_INITIAL_RANGE
+        # Should return DEFAULT_GAP_LIMIT
+        from jmwallet.backends.descriptor_wallet import DEFAULT_GAP_LIMIT
 
-        assert max_range == DEFAULT_INITIAL_RANGE
+        assert max_range == DEFAULT_GAP_LIMIT
 
     @pytest.mark.asyncio
     async def test_upgrade_descriptor_ranges(self) -> None:

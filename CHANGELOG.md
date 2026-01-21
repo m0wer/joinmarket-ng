@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.11.1] - 2026-01-20
+### Added
+
+- **Nick State Files for External Tracking**: All components (maker, taker, directory server, orderbook watcher) now write their nick to a state file at startup (`~/.joinmarket-ng/state/<component>.nick`). This allows operators to easily identify running bots' nicks for external monitoring and tracking. The files are automatically cleaned up on shutdown.
+
+- **Nick Included in Startup Notifications**: Startup notifications now include the component's nick in the notification body, making it easier for operators to identify which bot sent the notification without needing to check logs.
+
+- **Self-CoinJoin Protection**: When running both maker and taker from the same wallet/data directory, the components now automatically detect and protect against self-CoinJoins:
+  - Taker reads the maker nick state file and automatically excludes it from peer selection
+  - Maker reads the taker nick state file and rejects fill requests from its own taker nick
+  - This protection is automatic and requires no configuration
 
 ### Fixed
 
@@ -615,7 +624,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tor configuration instructions.
 
 [Unreleased]: https://github.com/m0wer/joinmarket-ng/compare/0.9.0...HEAD
-[0.11.1]: https://github.com/m0wer/joinmarket-ng/compare/0.11.0...0.11.1
 [0.11.0]: https://github.com/m0wer/joinmarket-ng/compare/0.10.0...0.11.0
 [0.10.0]: https://github.com/m0wer/joinmarket-ng/compare/0.9.0...0.10.0
 [0.9.0]: https://github.com/m0wer/joinmarket-ng/compare/0.8.0...0.9.0

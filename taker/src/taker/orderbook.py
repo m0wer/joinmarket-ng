@@ -696,6 +696,7 @@ class OrderbookManager:
         bondless_makers_allowance: float = 0.125,
         bondless_require_zero_fee: bool = True,
         data_dir: Any = None,  # Path | None, but avoid import
+        own_wallet_nicks: set[str] | None = None,
     ):
         self.max_cj_fee = max_cj_fee
         self.bondless_makers_allowance = bondless_makers_allowance
@@ -704,6 +705,12 @@ class OrderbookManager:
         self.bonds: dict[str, Any] = {}  # maker -> bond info
         self.ignored_makers: set[str] = set()
         self.honest_makers: set[str] = set()
+
+        # Own wallet nicks to exclude from peer selection (e.g., same wallet's maker nick)
+        # This is populated from state files and protects against self-CoinJoins
+        self.own_wallet_nicks: set[str] = own_wallet_nicks or set()
+        if self.own_wallet_nicks:
+            logger.info(f"Excluding own wallet nicks from peer selection: {self.own_wallet_nicks}")
 
         # Persistence for ignored makers
         self.ignored_makers_path = get_ignored_makers_path(data_dir)
@@ -801,8 +808,9 @@ class OrderbookManager:
         if honest_only:
             available_offers = [o for o in self.offers if o.counterparty in self.honest_makers]
 
-        # Combine ignored_makers with any additional excluded nicks
+        # Combine ignored_makers, own_wallet_nicks, and any additional excluded nicks
         combined_ignored = self.ignored_makers.copy()
+        combined_ignored.update(self.own_wallet_nicks)
         if exclude_nicks:
             combined_ignored.update(exclude_nicks)
 
@@ -845,8 +853,9 @@ class OrderbookManager:
         if honest_only:
             available_offers = [o for o in self.offers if o.counterparty in self.honest_makers]
 
-        # Combine ignored_makers with any additional excluded nicks
+        # Combine ignored_makers, own_wallet_nicks, and any additional excluded nicks
         combined_ignored = self.ignored_makers.copy()
+        combined_ignored.update(self.own_wallet_nicks)
         if exclude_nicks:
             combined_ignored.update(exclude_nicks)
 

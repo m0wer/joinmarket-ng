@@ -19,6 +19,7 @@ from jmcore.cli_common import resolve_mnemonic, setup_cli
 from jmcore.config import TorControlConfig
 from jmcore.models import NetworkType, OfferType
 from jmcore.notifications import get_notifier
+from jmcore.paths import remove_nick_state, write_nick_state
 from jmcore.settings import (
     JoinMarketSettings,
     ensure_config_file,
@@ -661,11 +662,18 @@ def start(
 
     async def run_bot() -> None:
         try:
-            # Send startup notification immediately
+            # Write nick state file for external tracking and cross-component protection
+            nick = bot.nick
+            data_dir = config.data_dir
+            write_nick_state(data_dir, "maker", nick)
+            logger.info(f"Nick state written to {data_dir}/state/maker.nick")
+
+            # Send startup notification immediately (including nick)
             notifier = get_notifier(settings, component_name="Maker")
             await notifier.notify_startup(
                 component="Maker",
                 network=config.network.value,
+                nick=nick,
             )
             await bot.start()
             while True:
@@ -673,6 +681,8 @@ def start(
         except asyncio.CancelledError:
             pass
         finally:
+            # Clean up nick state file on shutdown
+            remove_nick_state(config.data_dir, "maker")
             await bot.stop()
 
     try:

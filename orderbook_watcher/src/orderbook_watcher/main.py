@@ -8,7 +8,10 @@ import os
 import signal
 import sys
 
+from jmcore.crypto import NickIdentity
 from jmcore.notifications import get_notifier
+from jmcore.paths import remove_nick_state, write_nick_state
+from jmcore.protocol import JM_VERSION
 from jmcore.settings import get_settings
 from loguru import logger
 
@@ -36,10 +39,16 @@ async def run_watcher(log_level: str | None = None) -> None:
 
     network = settings.network_config.network
     watcher_settings = settings.orderbook_watcher
+    data_dir = settings.get_data_dir()
+
+    # Generate a nick for the orderbook watcher
+    nick_identity = NickIdentity(JM_VERSION)
+    watcher_nick = nick_identity.nick
 
     logger.info("=" * 80)
     logger.info("Starting JoinMarket Orderbook Watcher")
     logger.info(f"Network: {network.value}")
+    logger.info(f"Nick: {watcher_nick}")
     logger.info(f"HTTP server: {watcher_settings.http_host}:{watcher_settings.http_port}")
     logger.info(f"Update interval: {watcher_settings.update_interval}s")
     logger.info(f"Mempool API: {watcher_settings.mempool_api_url}")
@@ -65,6 +74,10 @@ async def run_watcher(log_level: str | None = None) -> None:
         logger.info(f"  - {node[0]}:{node[1]}")
     logger.info("=" * 80)
 
+    # Write nick state file for external tracking
+    write_nick_state(data_dir, "orderbook", watcher_nick)
+    logger.info(f"Nick state written to {data_dir}/state/orderbook.nick")
+
     aggregator = OrderbookAggregator(
         directory_nodes=directory_nodes,
         network=network.value,
@@ -89,11 +102,12 @@ async def run_watcher(log_level: str | None = None) -> None:
         loop.add_signal_handler(sig, shutdown_handler)
 
     try:
-        # Send startup notification immediately
+        # Send startup notification immediately (including nick)
         notifier = get_notifier(settings, component_name="Orderbook")
         await notifier.notify_startup(
             component="Orderbook Watcher",
             network=network.value,
+            nick=watcher_nick,
         )
         await server.start()
         await shutdown_event.wait()
@@ -103,6 +117,8 @@ async def run_watcher(log_level: str | None = None) -> None:
         logger.error(f"Watcher error: {e}")
         raise
     finally:
+        # Clean up nick state file on shutdown
+        remove_nick_state(data_dir, "orderbook")
         await server.stop()
 
 

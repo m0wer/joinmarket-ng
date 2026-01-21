@@ -82,3 +82,134 @@ def get_ignored_makers_path(data_dir: Path | None = None) -> Path:
         data_dir = get_default_data_dir()
 
     return data_dir / "ignored_makers.txt"
+
+
+def get_nick_state_path(data_dir: Path | str | None = None, component: str = "") -> Path:
+    """
+    Get the path to a component's nick state file.
+
+    The nick state file stores the current nick of a running component,
+    allowing operators to easily identify the nick and enabling cross-component
+    protection (e.g., taker excluding own maker nick from peer selection).
+
+    Args:
+        data_dir: Optional data directory (defaults to get_default_data_dir())
+        component: Component name (e.g., 'maker', 'taker', 'directory', 'orderbook')
+
+    Returns:
+        Path to state/<component>.nick (e.g., ~/.joinmarket-ng/state/maker.nick)
+    """
+    if data_dir is None:
+        data_dir = get_default_data_dir()
+    elif isinstance(data_dir, str):
+        data_dir = Path(data_dir)
+
+    # Use state/ subdirectory to keep state files organized
+    state_dir = data_dir / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    return state_dir / f"{component}.nick"
+
+
+def write_nick_state(data_dir: Path | str | None, component: str, nick: str) -> Path:
+    """
+    Write a component's nick to its state file.
+
+    Creates the state directory if it doesn't exist.
+
+    Args:
+        data_dir: Optional data directory (defaults to get_default_data_dir())
+        component: Component name (e.g., 'maker', 'taker', 'directory', 'orderbook')
+        nick: The nick to write (e.g., 'J5XXXXXXXXX')
+
+    Returns:
+        Path to the written state file
+    """
+    path = get_nick_state_path(data_dir, component)
+    path.write_text(nick + "\n")
+    return path
+
+
+def read_nick_state(data_dir: Path | str | None, component: str) -> str | None:
+    """
+    Read a component's nick from its state file.
+
+    Args:
+        data_dir: Optional data directory (defaults to get_default_data_dir())
+        component: Component name (e.g., 'maker', 'taker', 'directory', 'orderbook')
+
+    Returns:
+        The nick string if file exists and is readable, None otherwise
+    """
+    if data_dir is None:
+        data_dir = get_default_data_dir()
+    elif isinstance(data_dir, str):
+        data_dir = Path(data_dir)
+
+    path = get_nick_state_path(data_dir, component)
+    if path.exists():
+        try:
+            return path.read_text().strip()
+        except OSError:
+            return None
+    return None
+
+
+def remove_nick_state(data_dir: Path | str | None, component: str) -> bool:
+    """
+    Remove a component's nick state file (e.g., on shutdown).
+
+    Args:
+        data_dir: Optional data directory (defaults to get_default_data_dir())
+        component: Component name (e.g., 'maker', 'taker', 'directory', 'orderbook')
+
+    Returns:
+        True if file was removed, False if it didn't exist or removal failed
+    """
+    if data_dir is None:
+        data_dir = get_default_data_dir()
+    elif isinstance(data_dir, str):
+        data_dir = Path(data_dir)
+
+    path = get_nick_state_path(data_dir, component)
+    if path.exists():
+        try:
+            path.unlink()
+            return True
+        except OSError:
+            return False
+    return False
+
+
+def get_all_nick_states(data_dir: Path | str | None = None) -> dict[str, str]:
+    """
+    Read all component nick state files from the data directory.
+
+    Useful for discovering all running components and their nicks.
+
+    Args:
+        data_dir: Optional data directory (defaults to get_default_data_dir())
+
+    Returns:
+        Dict mapping component names to their nicks (e.g., {'maker': 'J5XXX', 'taker': 'J5YYY'})
+    """
+    if data_dir is None:
+        data_dir = get_default_data_dir()
+    elif isinstance(data_dir, str):
+        data_dir = Path(data_dir)
+
+    state_dir = data_dir / "state"
+    if not state_dir.exists():
+        return {}
+
+    result: dict[str, str] = {}
+    for path in state_dir.glob("*.nick"):
+        component = path.stem  # e.g., 'maker' from 'maker.nick'
+        try:
+            nick = path.read_text().strip()
+            if nick:
+                result[component] = nick
+        except OSError:
+            continue
+
+    return result

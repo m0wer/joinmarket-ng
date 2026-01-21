@@ -7,6 +7,7 @@ import signal
 import sys
 
 from jmcore.notifications import get_notifier
+from jmcore.paths import remove_nick_state, write_nick_state
 from jmcore.settings import get_settings
 from loguru import logger
 
@@ -30,10 +31,11 @@ async def run_server() -> None:
 
     # Initialize notifier with settings before creating server
     # This ensures DirectoryServer can use get_notifier() with config file settings
-    get_notifier(settings, component_name="Directory")
+    notifier = get_notifier(settings, component_name="Directory")
 
     network = settings.network_config.network
     server_nick = f"directory-{network.value}"
+    data_dir = settings.get_data_dir()
 
     logger.info("=" * 80)
     logger.info("Starting JoinMarket NG Directory Server")
@@ -42,6 +44,10 @@ async def run_server() -> None:
     logger.info(f"Port: {settings.directory_server.port}")
     logger.info(f"Max peers: {settings.directory_server.max_peers}")
     logger.info("=" * 80)
+
+    # Write nick state file for external tracking
+    write_nick_state(data_dir, "directory", server_nick)
+    logger.info(f"Nick state written to {data_dir}/state/directory.nick")
 
     server = DirectoryServer(settings.directory_server, network)
 
@@ -61,11 +67,19 @@ async def run_server() -> None:
     loop.add_signal_handler(signal.SIGUSR1, status_handler)
 
     try:
+        # Send startup notification (including nick)
+        await notifier.notify_startup(
+            component="Directory Server",
+            network=network.value,
+            nick=server_nick,
+        )
         await server.start()
     except Exception as e:
         logger.error(f"Server error: {e}")
         raise
     finally:
+        # Clean up nick state file on shutdown
+        remove_nick_state(data_dir, "directory")
         await server.stop()
 
 

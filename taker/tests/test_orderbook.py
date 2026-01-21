@@ -701,6 +701,44 @@ class TestOrderbookManager:
         assert "maker1" not in orders
         assert "maker2" not in orders
 
+    def test_select_makers_excludes_own_wallet_nicks(
+        self, sample_offers: list[Offer], max_cj_fee: MaxCjFee, tmp_path: Path
+    ) -> None:
+        """Test that own_wallet_nicks are automatically excluded from selection."""
+        # Initialize with own wallet nicks (simulating same wallet maker nick)
+        own_wallet_nicks = {"maker1"}
+        manager = OrderbookManager(max_cj_fee, data_dir=tmp_path, own_wallet_nicks=own_wallet_nicks)
+        manager.update_offers(sample_offers)
+
+        # Try to select makers (should not get maker1)
+        orders, _ = manager.select_makers(cj_amount=100_000, n=3)
+
+        # Verify own wallet nick is excluded
+        assert "maker1" not in orders
+
+    def test_select_makers_own_wallet_nicks_combined_with_excluded(
+        self, sample_offers: list[Offer], max_cj_fee: MaxCjFee, tmp_path: Path
+    ) -> None:
+        """Test own_wallet_nicks combined with exclude_nicks and ignored_makers."""
+        # Initialize with own wallet nick
+        own_wallet_nicks = {"maker1"}
+        manager = OrderbookManager(max_cj_fee, data_dir=tmp_path, own_wallet_nicks=own_wallet_nicks)
+        manager.update_offers(sample_offers)
+
+        # Ignore maker2
+        manager.add_ignored_maker("maker2")
+
+        # Exclude maker3 via parameter
+        exclude = {"maker3"}
+
+        # Select makers
+        orders, _ = manager.select_makers(cj_amount=100_000, n=2, exclude_nicks=exclude)
+
+        # Verify all three are excluded
+        assert "maker1" not in orders  # own wallet nick
+        assert "maker2" not in orders  # ignored
+        assert "maker3" not in orders  # excluded via parameter
+
 
 class TestMixedBondedBondlessSelection:
     """Tests for the mixed bonded/bondless selection strategy."""

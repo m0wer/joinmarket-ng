@@ -740,12 +740,23 @@ class Notifier:
         component: str,
         version: str = "",
         network: str = "",
+        nick: str = "",
     ) -> bool:
-        """Notify when a component starts up."""
+        """
+        Notify when a component starts up.
+
+        Args:
+            component: Component name (e.g., "Maker", "Taker", "Directory", "Orderbook Watcher")
+            version: Optional version string
+            network: Optional network name (e.g., "mainnet", "signet")
+            nick: Optional component nick (e.g., "J5XXXXXXXXX")
+        """
         if not self.config.notify_startup:
             return False
 
         body = f"Component: {component}"
+        if nick:
+            body += f"\nNick: {self._format_nick(nick)}"
         if version:
             body += f"\nVersion: {version}"
         if network:

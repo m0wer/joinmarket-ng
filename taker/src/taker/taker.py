@@ -29,6 +29,7 @@ from jmcore.encryption import CryptoSession
 from jmcore.models import Offer
 from jmcore.network import OnionPeer
 from jmcore.notifications import get_notifier
+from jmcore.paths import read_nick_state
 from jmcore.protocol import JM_VERSION, NOT_SERVING_ONION_HOSTNAME, parse_utxo_list
 from jmwallet.backends.base import BlockchainBackend
 from jmwallet.history import (
@@ -871,11 +872,19 @@ class Taker:
         )
 
         # Orderbook manager
+        # Read maker nick from state file to exclude from peer selection (self-CoinJoin protection)
+        own_wallet_nicks: set[str] = set()
+        maker_nick = read_nick_state(config.data_dir, "maker")
+        if maker_nick:
+            own_wallet_nicks.add(maker_nick)
+            logger.info(f"Self-CoinJoin protection: excluding maker nick {maker_nick}")
+
         self.orderbook_manager = OrderbookManager(
             config.max_cj_fee,
             bondless_makers_allowance=config.bondless_makers_allowance,
             bondless_require_zero_fee=config.bondless_makers_allowance_require_zero_fee,
             data_dir=config.data_dir,
+            own_wallet_nicks=own_wallet_nicks,
         )
 
         # PoDLE manager for commitment tracking

@@ -18,6 +18,7 @@ import typer
 from jmcore.cli_common import resolve_mnemonic, setup_cli
 from jmcore.models import NetworkType
 from jmcore.notifications import get_notifier
+from jmcore.paths import remove_nick_state, write_nick_state
 from jmcore.settings import (
     DEFAULT_DIRECTORY_SERVERS,
     JoinMarketSettings,
@@ -565,11 +566,18 @@ async def _run_coinjoin(
     taker = Taker(wallet, backend, config, confirmation_callback=confirmation_callback)
 
     try:
-        # Send startup notification
+        # Write nick state file for external tracking and cross-component protection
+        nick = taker.nick
+        data_dir = config.data_dir
+        write_nick_state(data_dir, "taker", nick)
+        logger.info(f"Nick state written to {data_dir}/state/taker.nick")
+
+        # Send startup notification (including nick)
         notifier = get_notifier(settings, component_name="Taker")
         await notifier.notify_startup(
             component="Taker (CoinJoin)",
             network=config.network.value,
+            nick=nick,
         )
         await taker.start()
 
@@ -589,6 +597,8 @@ async def _run_coinjoin(
             raise typer.Exit(1)
 
     finally:
+        # Clean up nick state file on shutdown
+        remove_nick_state(config.data_dir, "taker")
         await taker.stop()
 
 
@@ -804,11 +814,18 @@ async def _run_tumble(
     taker = Taker(wallet, backend, config)
 
     try:
-        # Send startup notification
+        # Write nick state file for external tracking and cross-component protection
+        nick = taker.nick
+        data_dir = config.data_dir
+        write_nick_state(data_dir, "taker", nick)
+        logger.info(f"Nick state written to {data_dir}/state/taker.nick")
+
+        # Send startup notification (including nick)
         notifier = get_notifier(settings, component_name="Taker")
         await notifier.notify_startup(
             component="Taker (Tumble)",
             network=config.network.value,
+            nick=nick,
         )
         await taker.start()
 
@@ -822,6 +839,8 @@ async def _run_tumble(
             raise typer.Exit(1)
 
     finally:
+        # Clean up nick state file on shutdown
+        remove_nick_state(config.data_dir, "taker")
         await taker.stop()
 
 

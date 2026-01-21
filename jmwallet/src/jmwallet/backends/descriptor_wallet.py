@@ -36,9 +36,8 @@ DEFAULT_RPC_TIMEOUT = 30.0
 # Timeout for descriptor import - can take a while for large ranges
 IMPORT_RPC_TIMEOUT = 120.0
 
-# Default initial range size for descriptor imports (number of addresses to derive)
-# This is NOT a gap limit - it's the initial number of addresses imported into Bitcoin Core
-DEFAULT_INITIAL_RANGE = 1000
+# Default gap limit for descriptor ranges
+DEFAULT_GAP_LIMIT = 1000
 
 # Default scan lookback period (approximately 1 year of blocks)
 # Bitcoin averages ~144 blocks/day * 365 days ≈ 52,560 blocks
@@ -307,7 +306,7 @@ class DescriptorWalletBackend(BlockchainBackend):
             descriptors: List of output descriptors. Can be:
                 - Simple strings: "wpkh(xpub.../0/*)"
                 - Dicts with range:
-                  {"desc": "wpkh(xpub.../0/*)", "range": [0, DEFAULT_INITIAL_RANGE - 1]}
+                  {"desc": "wpkh(xpub.../0/*)", "range": [0, DEFAULT_GAP_LIMIT - 1]}
             rescan: If True, rescan blockchain (behavior depends on smart_scan).
                    If False, only track new transactions (timestamp="now").
             timestamp: Override timestamp. If None, uses smart calculation or 0/"now".
@@ -325,7 +324,7 @@ class DescriptorWalletBackend(BlockchainBackend):
             await backend.import_descriptors([
                 {
                     "desc": "wpkh(xpub.../0/*)",
-                    "range": [0, DEFAULT_INITIAL_RANGE - 1],
+                    "range": [0, DEFAULT_GAP_LIMIT - 1],
                     "internal": False,
                 },
             ], rescan=True, smart_scan=True)
@@ -1083,18 +1082,18 @@ class DescriptorWalletBackend(BlockchainBackend):
         Get the maximum range end across all imported descriptors.
 
         Returns:
-            Maximum end index, or DEFAULT_INITIAL_RANGE if no descriptors found.
+            Maximum end index, or DEFAULT_GAP_LIMIT if no descriptors found.
         """
         ranges = await self.get_descriptor_ranges()
         if not ranges:
-            return DEFAULT_INITIAL_RANGE
+            return DEFAULT_GAP_LIMIT
 
         max_end = 0
         for start, end in ranges.values():
             if end > max_end:
                 max_end = end
 
-        return max_end if max_end > 0 else DEFAULT_INITIAL_RANGE
+        return max_end if max_end > 0 else DEFAULT_GAP_LIMIT
 
     async def upgrade_descriptor_ranges(
         self,

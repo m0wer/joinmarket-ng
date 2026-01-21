@@ -162,6 +162,11 @@ JoinMarket NG uses a dedicated data directory for persistent files that need to 
 ├── cmtdata/
 │   ├── commitmentlist     PoDLE commitment blacklist (makers, network-wide)
 │   └── commitments.json   PoDLE used commitments (takers, local tracking)
+├── state/
+│   ├── maker.nick         Current maker nick (for external tracking)
+│   ├── taker.nick         Current taker nick (for external tracking)
+│   ├── directory.nick     Current directory server nick
+│   └── orderbook.nick     Current orderbook watcher nick
 ├── coinjoin_history.csv   CoinJoin transaction history log
 └── fidelity_bonds.json    Fidelity bond registry (addresses, scripts, UTXO info)
 ```
@@ -221,6 +226,18 @@ JoinMarket NG uses a dedicated data directory for persistent files that need to 
   - **UTXO Reuse**: Makers can immediately reuse their input UTXOs in new CoinJoins without waiting for confirmation (history tracking is independent of UTXO availability)
 - CSV format for easy analysis with external tools
 - View with: `jm-wallet history --stats` or `jm-wallet history --limit 10`
+
+**Nick State Files** (`state/<component>.nick`):
+- Written at startup by each component (maker, taker, directory, orderbook)
+- Contains the component's current nick (e.g., `J5ABCDEFGHI` or `directory-mainnet`)
+- Automatically deleted on shutdown
+- **Use Cases**:
+  - External monitoring: Scripts can read these files to track which nicks belong to your bots
+  - Startup notifications: Nick is included in the notification body for easy identification
+  - **Self-CoinJoin Protection**: When running both maker and taker from the same data directory:
+    - Taker automatically reads `state/maker.nick` and excludes that nick from peer selection
+    - Maker automatically reads `state/taker.nick` and rejects fill requests from own taker
+    - This prevents accidentally doing a CoinJoin with yourself (wastes fees, no privacy benefit)
 
 ### Periodic Wallet Rescan
 
