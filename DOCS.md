@@ -929,6 +929,24 @@ The `F:` prefix identifies the features field and maintains backward compatibili
 
 JoinMarket NG supports push notifications for CoinJoin events via [Apprise](https://github.com/caronc/apprise), enabling alerts through 100+ services including Gotify, Telegram, Discord, Pushover, and email.
 
+### Privacy Warning
+
+**Sending CoinJoin transaction details to third-party services defeats the purpose of using CoinJoin for privacy.** These services can log your transaction IDs, amounts, and timing information, allowing them to link your CoinJoin activity to your identity.
+
+**Recommended approach (from most to least private):**
+
+1. **Don't use notifications** - If you don't need real-time alerts, avoid them entirely
+2. **Self-hosted services** - Gotify, ntfy, or Nextcloud Talk on your own server
+3. **End-to-end encrypted** - Matrix/Element with encryption enabled
+4. **Third-party services** (privacy risk) - Telegram, Discord, Pushover, Slack, email
+
+**Configuration to reduce exposure:**
+
+- Keep `include_txids = false` (default) to hide transaction IDs
+- Set `include_amounts = false` to hide CoinJoin amounts
+- Disable `notify_mempool` and `notify_confirmed` if you only need failure alerts
+- Use `use_tor = true` (default) to route notifications through Tor
+
 ### Installation
 
 Notifications are an optional feature but `apprise` is installed by default.
@@ -957,7 +975,10 @@ Configuration can be set via config file (`~/.joinmarket-ng/config.toml`) or env
 |----------|---------|-------------|
 | `NOTIFICATIONS__INCLUDE_AMOUNTS` | `true` | Include satoshi amounts in notifications |
 | `NOTIFICATIONS__INCLUDE_TXIDS` | `false` | Include transaction IDs (privacy risk) |
+| `NOTIFICATIONS__EXPLORER_URL` | `null` | Block explorer URL for tx links (e.g., `https://mempool.sgn.space`) |
 | `NOTIFICATIONS__INCLUDE_NICK` | `true` | Include peer nicks (full, not truncated) |
+
+The `explorer_url` setting adds a clickable link to the transaction in mempool/confirmed notifications. Only used when `include_txids` is enabled. Consider using a self-hosted explorer for privacy.
 
 **Tor/Proxy settings:**
 
@@ -989,9 +1010,10 @@ When enabled, notifications use `TOR__SOCKS_HOST` and `TOR__SOCKS_PORT` environm
 
 ```toml
 [notifications]
-urls = ["gotify://your-server.com/token", "tgram://bot/chat"]
+urls = ["gotify://your-server.com/token"]  # Prefer self-hosted!
 include_amounts = true
-include_txids = false
+include_txids = false  # Keep false for privacy
+explorer_url = "https://mempool.sgn.space"  # Only used if include_txids = true
 include_nick = true
 use_tor = true
 
@@ -1007,19 +1029,22 @@ notify_confirmed = true
 ### Example URLs
 
 ```bash
-# Gotify (self-hosted)
+# Gotify (self-hosted, recommended)
 export NOTIFICATIONS__URLS='["gotify://your-server.com/AaBbCcDdEeFf"]'
 
-# Telegram
+# ntfy (self-hosted, recommended)
+export NOTIFICATIONS__URLS='["ntfy://your-server.com/topic"]'
+
+# Telegram (PRIVACY RISK - third-party service)
 export NOTIFICATIONS__URLS='["tgram://bot_token/chat_id"]'
 
-# Discord webhook
+# Discord webhook (PRIVACY RISK - third-party service)
 export NOTIFICATIONS__URLS='["discord://webhook_id/webhook_token"]'
 
 # Multiple services (JSON array)
-export NOTIFICATIONS__URLS='["gotify://host/token", "tgram://bot/chat"]'
+export NOTIFICATIONS__URLS='["gotify://host/token", "ntfy://host/topic"]'
 
-# Email
+# Email (PRIVACY RISK unless self-hosted)
 export NOTIFICATIONS__URLS='["mailto://user:pass@smtp.example.com"]'
 ```
 

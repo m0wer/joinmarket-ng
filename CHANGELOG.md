@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Mempool and Confirmation Notifications**: Maker and taker now send notifications when CoinJoin transactions are detected in the mempool and when they receive their first confirmation. This completes the transaction lifecycle notifications: fill request -> signed -> mempool -> confirmed.
+
+- **Explorer URL in Notifications**: New `explorer_url` config option allows including a clickable block explorer link in mempool/confirmed notifications. Only used when `include_txids` is enabled. Example: `explorer_url = "https://mempool.sgn.space"`.
+
+- **Privacy Warning for Notifications**: Added prominent privacy warning in DOCS.md. Sending CoinJoin details to third-party services (Telegram, Discord, etc.) defeats the purpose of using CoinJoin. Self-hosted services (Gotify, ntfy, Nextcloud Talk) are recommended.
+
 ## [0.11.2] - 2026-01-21
 
 ### Changed

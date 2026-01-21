@@ -1079,7 +1079,8 @@ class Taker:
 
         confirmations = tx_info.confirmations
 
-        if confirmations > 0:
+        # Only notify/update on first confirmation detection
+        if confirmations > 0 and entry.confirmations == 0:
             # Update history with confirmation
             update_transaction_confirmation(
                 txid=entry.txid,
@@ -1090,6 +1091,16 @@ class Taker:
             logger.info(
                 f"CoinJoin {entry.txid[:16]}... confirmed! "
                 f"({confirmations} confirmation{'s' if confirmations != 1 else ''})"
+            )
+
+            # Notify confirmation
+            asyncio.create_task(
+                get_notifier().notify_confirmed(
+                    txid=entry.txid,
+                    cj_amount=entry.cj_amount,
+                    confirmations=confirmations,
+                    role="taker",
+                )
             )
 
     async def _check_pending_without_mempool(self, entry: TransactionHistoryEntry) -> None:
@@ -1111,6 +1122,10 @@ class Taker:
                 f"Transaction {entry.txid[:16]}... has no destination_address, "
                 "cannot verify with Neutrino"
             )
+            return
+
+        # Already confirmed, skip
+        if entry.confirmations > 0:
             return
 
         # Get current block height for efficient scanning
@@ -1142,6 +1157,16 @@ class Taker:
 
             logger.info(
                 f"CoinJoin {entry.txid[:16]}... confirmed! (verified via Neutrino block filters)"
+            )
+
+            # Notify confirmation
+            asyncio.create_task(
+                get_notifier().notify_confirmed(
+                    txid=entry.txid,
+                    cj_amount=entry.cj_amount,
+                    confirmations=1,
+                    role="taker",
+                )
             )
         else:
             # Not found yet - could be in mempool or not broadcast
@@ -1198,8 +1223,25 @@ class Taker:
                                 f"CoinJoin {txid[:16]}... already confirmed "
                                 f"({confirmations} confirmation{'s' if confirmations != 1 else ''})"
                             )
+                            # Confirmed immediately (rare, possible with fast blocks)
+                            asyncio.create_task(
+                                get_notifier().notify_confirmed(
+                                    txid=txid,
+                                    cj_amount=self.cj_amount,
+                                    confirmations=confirmations,
+                                    role="taker",
+                                )
+                            )
                         else:
                             logger.info(f"CoinJoin {txid[:16]}... visible in mempool")
+                            # Transaction in mempool - notify
+                            asyncio.create_task(
+                                get_notifier().notify_mempool(
+                                    txid=txid,
+                                    cj_amount=self.cj_amount,
+                                    role="taker",
+                                )
+                            )
             else:
                 # Neutrino: can only check confirmed blocks, not mempool
                 # For Neutrino, we need to wait for block confirmation
@@ -1224,6 +1266,15 @@ class Taker:
                             data_dir=self.config.data_dir,
                         )
                         logger.info(f"CoinJoin {txid[:16]}... confirmed via Neutrino block filters")
+                        # Confirmed via Neutrino - notify
+                        asyncio.create_task(
+                            get_notifier().notify_confirmed(
+                                txid=txid,
+                                cj_amount=self.cj_amount,
+                                confirmations=1,
+                                role="taker",
+                            )
+                        )
                     else:
                         logger.debug(
                             f"CoinJoin {txid[:16]}... not yet confirmed "

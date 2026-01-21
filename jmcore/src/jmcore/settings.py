@@ -240,7 +240,13 @@ class NotificationSettings(BaseModel):
     )
     include_txids: bool = Field(
         default=False,
-        description="Include transaction IDs in notifications (privacy risk)",
+        description="Include transaction IDs in notifications. "
+        "PRIVACY WARNING: Enabling this exposes your CoinJoin activity to the notification service.",
+    )
+    explorer_url: str | None = Field(
+        default=None,
+        description="Block explorer URL for transaction links (e.g., 'https://mempool.space'). "
+        "Only used if include_txids is True. Consider using a self-hosted explorer for privacy.",
     )
     include_nick: bool = Field(
         default=True,

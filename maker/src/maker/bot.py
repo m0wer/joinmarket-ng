@@ -1361,6 +1361,14 @@ class MakerBot:
                             )
                             # Update entry for confirmation check below
                             entry.txid = txid
+                            # Notify that transaction is now visible (in mempool or confirmed)
+                            asyncio.create_task(
+                                get_notifier().notify_mempool(
+                                    txid=txid,
+                                    cj_amount=entry.cj_amount,
+                                    role="maker",
+                                )
+                            )
                         elif age_minutes >= timeout_minutes:
                             # Timed out waiting for taker to broadcast
                             mark_pending_transaction_failed(
@@ -1420,6 +1428,15 @@ class MakerBot:
                         confirmations=confirmations,
                         backend=self.backend,
                         data_dir=self.config.data_dir,
+                    )
+                    # Notify confirmation
+                    asyncio.create_task(
+                        get_notifier().notify_confirmed(
+                            txid=entry.txid,
+                            cj_amount=entry.cj_amount,
+                            confirmations=confirmations,
+                            role="maker",
+                        )
                     )
 
             except Exception as e:

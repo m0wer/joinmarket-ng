@@ -4,33 +4,13 @@ Notification system for JoinMarket components.
 Provides operator notifications through Apprise, supporting multiple notification
 channels (Gotify, Telegram, Pushover, Discord, email, etc.).
 
-Configuration is via environment variables:
-- NOTIFY_URLS: Comma-separated list of Apprise URLs (required to enable notifications)
-- NOTIFY_ENABLED: Set to "false" to disable all notifications (default: true if NOTIFY_URLS set)
-- NOTIFY_TITLE_PREFIX: Prefix for notification titles (default: "JoinMarket")
-
-Example NOTIFY_URLS:
-- Gotify: gotify://hostname/token
-- Telegram: tgram://bot_token/chat_id
-- Pushover: pover://user_key@token
-- Discord: discord://webhook_id/webhook_token
-- Slack: slack://hook_id
-- Email: mailto://user:pass@smtp.example.com
-- Multiple: gotify://host/token,tgram://bot/chat
-
-For full list of supported services: https://github.com/caronc/apprise#supported-notifications
+See DOCS.md "Operator Notifications" section for configuration and privacy guidance.
 
 Usage:
     from jmcore.notifications import get_notifier
 
     notifier = get_notifier()
     await notifier.notify_fill_request(taker_nick, cj_amount, offer_id)
-
-The module is designed to be:
-1. Fire-and-forget: Notification failures don't affect protocol operations
-2. Async-first: All notifications are sent asynchronously
-3. Privacy-aware: Sensitive data (txids, amounts) can be optionally excluded
-4. Configurable: Per-event type enable/disable through environment variables
 """
 
 from __future__ import annotations
@@ -89,6 +69,11 @@ class NotificationConfig(BaseModel):
     include_txids: bool = Field(
         default=False,
         description="Include transaction IDs in notifications (privacy risk)",
+    )
+    explorer_url: str | None = Field(
+        default=None,
+        description="Block explorer URL for transaction links (e.g., 'https://mempool.space'). "
+        "Only used if include_txids is True.",
     )
     include_nick: bool = Field(
         default=True,
@@ -192,6 +177,7 @@ def convert_settings_to_notification_config(
         component_name=effective_component_name,
         include_amounts=ns.include_amounts,
         include_txids=ns.include_txids,
+        explorer_url=ns.explorer_url,
         include_nick=ns.include_nick,
         use_tor=ns.use_tor,
         tor_socks_host=settings.tor.socks_host,
@@ -395,6 +381,17 @@ class Notifier:
             return "[hidden]"
         return f"{txid[:16]}..."
 
+    def _format_explorer_link(self, txid: str) -> str:
+        """Format a clickable explorer link for the transaction.
+
+        Returns an empty string if txids are hidden or no explorer URL is configured.
+        """
+        if not self.config.include_txids or not self.config.explorer_url:
+            return ""
+        # Strip trailing slash from explorer URL if present
+        base_url = self.config.explorer_url.rstrip("/")
+        return f"{base_url}/tx/{txid}"
+
     # =========================================================================
     # Maker notifications
     # =========================================================================
@@ -471,13 +468,18 @@ class Notifier:
         if not self.config.notify_mempool:
             return False
 
+        body = (
+            f"Role: {role.capitalize()}\n"
+            f"TxID: {self._format_txid(txid)}\n"
+            f"Amount: {self._format_amount(cj_amount)}"
+        )
+        explorer_link = self._format_explorer_link(txid)
+        if explorer_link:
+            body += f"\n{explorer_link}"
+
         return await self._send(
             title="CoinJoin in Mempool",
-            body=(
-                f"Role: {role.capitalize()}\n"
-                f"TxID: {self._format_txid(txid)}\n"
-                f"Amount: {self._format_amount(cj_amount)}"
-            ),
+            body=body,
             priority=NotificationPriority.INFO,
         )
 
@@ -492,14 +494,19 @@ class Notifier:
         if not self.config.notify_confirmed:
             return False
 
+        body = (
+            f"Role: {role.capitalize()}\n"
+            f"TxID: {self._format_txid(txid)}\n"
+            f"Amount: {self._format_amount(cj_amount)}\n"
+            f"Confirmations: {confirmations}"
+        )
+        explorer_link = self._format_explorer_link(txid)
+        if explorer_link:
+            body += f"\n{explorer_link}"
+
         return await self._send(
             title="CoinJoin Confirmed",
-            body=(
-                f"Role: {role.capitalize()}\n"
-                f"TxID: {self._format_txid(txid)}\n"
-                f"Amount: {self._format_amount(cj_amount)}\n"
-                f"Confirmations: {confirmations}"
-            ),
+            body=body,
             priority=NotificationPriority.SUCCESS,
         )
 

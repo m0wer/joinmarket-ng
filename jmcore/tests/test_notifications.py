@@ -282,6 +282,34 @@ class TestNotifier:
 
         assert notifier._format_txid("a" * 64) == "[hidden]"
 
+    def test_format_explorer_link(self) -> None:
+        """Test explorer link formatting with various configurations."""
+        txid = "a" * 64
+
+        # With txids enabled and explorer URL set
+        config = NotificationConfig(include_txids=True, explorer_url="https://mempool.space")
+        notifier = Notifier(config)
+        assert notifier._format_explorer_link(txid) == f"https://mempool.space/tx/{txid}"
+
+        # With trailing slash in explorer URL
+        config = NotificationConfig(include_txids=True, explorer_url="https://mempool.space/")
+        notifier = Notifier(config)
+        assert notifier._format_explorer_link(txid) == f"https://mempool.space/tx/{txid}"
+
+    def test_format_explorer_link_hidden(self) -> None:
+        """Test explorer link is empty when txids are hidden."""
+        config = NotificationConfig(include_txids=False, explorer_url="https://mempool.space")
+        notifier = Notifier(config)
+
+        assert notifier._format_explorer_link("a" * 64) == ""
+
+    def test_format_explorer_link_no_url(self) -> None:
+        """Test explorer link is empty when no explorer URL is configured."""
+        config = NotificationConfig(include_txids=True, explorer_url=None)
+        notifier = Notifier(config)
+
+        assert notifier._format_explorer_link("a" * 64) == ""
+
     @pytest.mark.asyncio
     async def test_notify_fill_request_disabled(self) -> None:
         """Test that fill notification respects toggle."""
