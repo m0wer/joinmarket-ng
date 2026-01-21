@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Usage: docker build --build-arg SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) ...
 ARG SOURCE_DATE_EPOCH
 
-# Install jmcore dependencies
+# Install jmcore dependencies (with hash verification)
 # Note: SOURCE_DATE_EPOCH is passed as ARG, which is available during RUN commands
 COPY jmcore/requirements.txt /build/jmcore/requirements.txt
 RUN if [ -n "$SOURCE_DATE_EPOCH" ]; then export SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH; fi && \

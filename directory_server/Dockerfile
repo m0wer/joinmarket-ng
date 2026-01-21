@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Usage: docker build --build-arg SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) ...
 ARG SOURCE_DATE_EPOCH
 
-# Install jmcore dependencies
+# Install jmcore dependencies (with hash verification)
 COPY jmcore/requirements.txt /build/jmcore/requirements.txt
 RUN if [ -n "$SOURCE_DATE_EPOCH" ]; then export SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH; fi && \
     pip install --no-cache-dir --user -r /build/jmcore/requirements.txt
@@ -93,7 +93,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Reproducible builds: SOURCE_DATE_EPOCH must be set via --build-arg for reproducible builds
 ARG SOURCE_DATE_EPOCH
 
-# Install jmcore dependencies
+# Install jmcore dependencies (with hash verification)
 COPY jmcore/requirements.txt /build/jmcore/requirements.txt
 RUN if [ -n "$SOURCE_DATE_EPOCH" ]; then export SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH; fi && \
     pip install --no-cache-dir --user -r /build/jmcore/requirements.txt

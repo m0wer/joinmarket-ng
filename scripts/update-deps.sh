@@ -46,7 +46,7 @@ if [ "$UPDATE_PROD" = true ]; then
 
         if [ "$dir" = "jmcore" ]; then
             # jmcore has no local deps, compile directly
-            pip-compile --strip-extras pyproject.toml -o requirements.txt
+            pip-compile --strip-extras --generate-hashes pyproject.toml -o requirements.txt
         else
             # For other packages, we need to temporarily remove local package references
             # from pyproject.toml because pip-compile can't resolve them from PyPI.
@@ -58,7 +58,7 @@ if [ "$UPDATE_PROD" = true ]; then
             sed -i '/^[[:space:]][[:space:]]*"jmwallet"/d' pyproject.toml
 
             # Compile
-            pip-compile --strip-extras pyproject.toml -o requirements.txt
+            pip-compile --strip-extras --generate-hashes pyproject.toml -o requirements.txt
 
             # Restore original pyproject.toml
             mv pyproject.toml.bak pyproject.toml
@@ -78,14 +78,14 @@ if [ "$UPDATE_DEV" = true ]; then
         cd "$dir"
 
         if [ "$dir" = "jmcore" ]; then
-            pip-compile --strip-extras --extra dev pyproject.toml -o requirements-dev.txt
+            pip-compile --strip-extras --generate-hashes --extra dev pyproject.toml -o requirements-dev.txt
         else
             cp pyproject.toml pyproject.toml.bak
             sed -i '/^[[:space:]][[:space:]]*"jmcore"/d' pyproject.toml
             sed -i '/^[[:space:]][[:space:]]*"jmwallet"/d' pyproject.toml
 
             # Compile dev deps
-            pip-compile --strip-extras --extra dev pyproject.toml -o requirements-dev.txt
+            pip-compile --strip-extras --generate-hashes --extra dev pyproject.toml -o requirements-dev.txt
 
             # Restore original
             mv pyproject.toml.bak pyproject.toml
@@ -97,7 +97,7 @@ if [ "$UPDATE_DEV" = true ]; then
 fi
 
 echo "========================================="
-echo "✓ All dependencies updated successfully"
+echo "All dependencies updated successfully"
 echo "========================================="
 echo ""
 echo "Next steps:"

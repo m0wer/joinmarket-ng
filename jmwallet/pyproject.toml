@@ -8,8 +8,8 @@ dependencies = [
     # coincurve <21.0.0 does not support Python 3.14
     # coincurve 21.0.0 has a bug that prevents installation on 3.14
     # See: https://github.com/ofek/coincurve/issues/219
-    # Install from git until a fixed version is released
-    "coincurve @ git+https://github.com/ofek/coincurve.git@master",
+    # Pinned to commit hash until a fixed version is released
+    "coincurve @ https://github.com/ofek/coincurve/archive/7829b29c08ebb1cc80386a1cdaf8c2243c4ef5c5.zip",
     "cryptography>=46.0.0",
     "httpx>=0.25.0",
     "loguru>=0.7.0",

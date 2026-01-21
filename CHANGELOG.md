@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Dependency Lock Files with Hashes**: Updated all dependency lock files (`requirements.txt` and `requirements-dev.txt`) to include SHA256 hashes for enhanced security. This ensures package integrity verification during installation. The `scripts/update-deps.sh` script now uses `pip-compile --generate-hashes` flag. The `coincurve` dependency is pinned to a specific commit hash for reproducibility and hash verification.
+
 ### Added
 
 - **Nick State Files for External Tracking**: All components (maker, taker, directory server, orderbook watcher) now write their nick to a state file at startup (`~/.joinmarket-ng/state/<component>.nick`). This allows operators to easily identify running bots' nicks for external monitoring and tracking. The files are automatically cleaned up on shutdown.
