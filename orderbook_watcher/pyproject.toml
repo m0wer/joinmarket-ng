@@ -96,4 +96,4 @@ strict_equality = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "-v --cov=orderbook_watcher --cov-report=html --cov-report=term"
+addopts = "-v --cov=orderbook_watcher --cov-report=html --cov-report=term --timeout=60"

@@ -38,7 +38,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --cov=taker --cov-report=html --cov-report=term"
+addopts = "-v --cov=taker --cov-report=html --cov-report=term --timeout=60"
 
 [tool.mypy]
 python_version = "3.11"

@@ -88,4 +88,16 @@ class HealthCheckServer:
         if self.httpd:
             self.httpd.shutdown()
             self.httpd.server_close()  # Explicitly close the socket
+
+            # Wait for thread to actually terminate to avoid race conditions
+            # This is important in Python 3.12+ where thread cleanup is stricter
+            if self.thread and self.thread.is_alive():
+                self.thread.join(timeout=5.0)
+                if self.thread.is_alive():
+                    logger.warning("Health check server thread did not terminate in time")
+
+            # Clear class-level state to avoid leakage between test runs
+            HealthCheckHandler.server_instance = None
+            self.httpd = None
+            self.thread = None
             logger.info("Health check server stopped")
