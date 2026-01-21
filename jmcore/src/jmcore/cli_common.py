@@ -398,6 +398,11 @@ def load_mnemonic_from_file(
             mnemonic = decrypted.decode("utf-8")
         except InvalidToken as e:
             raise ValueError("Decryption failed - wrong password or corrupted file") from e
+        except UnicodeDecodeError as e:
+            raise ValueError(
+                f"Decrypted content is not valid UTF-8. File may be corrupted or "
+                f"encrypted with a different tool: {path}"
+            ) from e
     except ImportError as e:
         raise ValueError(
             "Fernet encryption requires cryptography library. Install with: pip install cryptography"
@@ -433,6 +438,7 @@ def resolve_mnemonic(
     3. MNEMONIC_FILE environment variable
     4. MNEMONIC environment variable
     5. Config file wallet.mnemonic_file setting
+    6. Default wallet path (~/.joinmarket-ng/wallets/default.mnemonic)
 
     BIP39 passphrase priority:
     1. --bip39-passphrase argument
@@ -441,8 +447,10 @@ def resolve_mnemonic(
     4. Interactive prompt (if --prompt-bip39-passphrase is set)
     5. Empty string (default - no passphrase)
 
-    If the mnemonic file is encrypted and no password is provided,
-    the user will be prompted interactively.
+    For encrypted mnemonic files, the password is resolved as:
+    1. --password CLI argument
+    2. Config file wallet.mnemonic_password setting
+    3. Interactive prompt (if auto_prompt is enabled)
 
     Args:
         settings: JoinMarketSettings instance
@@ -492,6 +500,17 @@ def resolve_mnemonic(
             config_password = settings.wallet.mnemonic_password.get_secret_value()
         resolved_mnemonic = load_mnemonic_from_file(config_path, config_password)
         source = f"config file ({config_path})"
+
+    # Priority 6: Default wallet path
+    else:
+        default_wallet = settings.get_data_dir() / "wallets" / "default.mnemonic"
+        if default_wallet.exists():
+            # Use config password if CLI password not provided
+            config_password = password
+            if config_password is None and settings.wallet.mnemonic_password:
+                config_password = settings.wallet.mnemonic_password.get_secret_value()
+            resolved_mnemonic = load_mnemonic_from_file(default_wallet, config_password)
+            source = f"default wallet ({default_wallet})"
 
     if resolved_mnemonic is None:
         if required:

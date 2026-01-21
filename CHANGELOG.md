@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Encrypted Mnemonic Decryption Error Handling**: Fixed an unhandled `UnicodeDecodeError` that could occur when loading encrypted mnemonic files from config. If the decrypted content is not valid UTF-8 (e.g., file corrupted or encrypted with a different tool), the error is now caught and a clear error message is displayed instead of a raw codec error.
+
+- **Default Wallet Uses Config Password**: Fixed an issue where `wallet.mnemonic_password` from config was not used when loading the default wallet at `~/.joinmarket-ng/wallets/default.mnemonic`. Previously, setting `mnemonic_password` in config only worked if `mnemonic_file` was also explicitly set. Now the config password is used for the default wallet path as well, eliminating the need to set `mnemonic_file` when using the default location. Also consolidated mnemonic resolution logic from jmwallet into the shared `resolve_mnemonic` function in jmcore.
+
 - **Directory Server Uses Random Nick**: Fixed the directory server to use a random JM-format nick (e.g., `J5FA1Gj7Ln4vSGne`) instead of a hardcoded `directory-{network}` nick. This matches the reference implementation behavior where directory servers use the same nick format as any other peer.
 
 - **Descriptor Wallet Gap Limit Bug**: Fixed a critical bug where wallets with more than 1000 addresses would show 0 balance in `jm-wallet info` despite having funds. The issue was threefold:

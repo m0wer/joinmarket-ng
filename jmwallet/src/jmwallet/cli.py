@@ -16,10 +16,10 @@ import typer
 from jmcore.cli_common import (
     ResolvedBackendSettings,
     resolve_backend_settings,
+    resolve_mnemonic,
     setup_cli,
     setup_logging,
 )
-from jmcore.settings import JoinMarketSettings
 from loguru import logger
 
 if TYPE_CHECKING:
@@ -158,6 +158,11 @@ def decrypt_mnemonic(encrypted_data: bytes, password: str) -> str:
         return decrypted.decode("utf-8")
     except InvalidToken as e:
         raise ValueError("Decryption failed - wrong password or corrupted file") from e
+    except UnicodeDecodeError as e:
+        raise ValueError(
+            "Decrypted content is not valid UTF-8. File may be corrupted or "
+            "encrypted with a different tool"
+        ) from e
 
 
 def prompt_password_with_confirmation(max_attempts: int = 3) -> str:
@@ -848,140 +853,6 @@ def generate(
         raise typer.Exit(1)
 
 
-def _resolve_mnemonic(
-    mnemonic: str | None,
-    mnemonic_file: Path | None,
-    password: str | None = None,
-    prompt_password: bool = False,
-) -> str:
-    """
-    Resolve mnemonic from argument, file, or environment variable.
-
-    Priority:
-    1. --mnemonic argument
-    2. --mnemonic-file argument
-    3. MNEMONIC_FILE environment variable (path to mnemonic file)
-    4. MNEMONIC environment variable
-    5. Config file wallet.mnemonic_file setting
-    6. Default wallet path (~/.joinmarket-ng/wallets/default.mnemonic)
-    """
-    if mnemonic:
-        return mnemonic
-
-    # Check for mnemonic file (from argument or environment)
-    actual_mnemonic_file = mnemonic_file
-    actual_password = password
-    mnemonic_source = None  # Track where the mnemonic file path came from
-
-    if not actual_mnemonic_file:
-        env_mnemonic_file = os.environ.get("MNEMONIC_FILE")
-        if env_mnemonic_file:
-            actual_mnemonic_file = Path(env_mnemonic_file)
-            mnemonic_source = "MNEMONIC_FILE environment variable"
-
-    # If still no mnemonic file, check config file
-    if not actual_mnemonic_file:
-        try:
-            from jmcore.settings import get_settings
-
-            settings = get_settings()
-            config_mnemonic_file = getattr(settings.wallet, "mnemonic_file", None)
-            if config_mnemonic_file:
-                actual_mnemonic_file = Path(config_mnemonic_file)
-                mnemonic_source = "config file (wallet.mnemonic_file)"
-                # Use config file password if not provided via CLI
-                config_password = getattr(settings.wallet, "mnemonic_password", None)
-                if actual_password is None and config_password:
-                    actual_password = config_password.get_secret_value()
-        except Exception as e:
-            # If settings loading fails, log error but continue without config file mnemonic
-            logger.error(f"Failed to load mnemonic from config: {e}")
-            pass
-    elif mnemonic_file:
-        mnemonic_source = "--mnemonic-file argument"
-
-    # If still no mnemonic file, try default wallet path
-    if not actual_mnemonic_file:
-        default_wallet = Path.home() / ".joinmarket-ng" / "wallets" / "default.mnemonic"
-        if default_wallet.exists():
-            actual_mnemonic_file = default_wallet
-            mnemonic_source = "default wallet path"
-
-    if actual_mnemonic_file:
-        if not actual_mnemonic_file.exists():
-            source_msg = f" (from {mnemonic_source})" if mnemonic_source else ""
-            raise FileNotFoundError(f"Mnemonic file not found: {actual_mnemonic_file}{source_msg}")
-
-        # Try loading without password first
-        try:
-            return load_mnemonic_file(actual_mnemonic_file, actual_password)
-        except ValueError:
-            # File is encrypted, need password
-            if prompt_password or actual_password is None:
-                actual_password = typer.prompt("Enter mnemonic file password", hide_input=True)
-            return load_mnemonic_file(actual_mnemonic_file, actual_password)
-
-    env_mnemonic = os.environ.get("MNEMONIC")
-    if env_mnemonic:
-        return env_mnemonic
-
-    raise ValueError(
-        "Mnemonic required. Use --mnemonic, --mnemonic-file, MNEMONIC_FILE, MNEMONIC env var, "
-        "set wallet.mnemonic_file in config.toml, or create default wallet with: "
-        "jm-wallet generate --save"
-    )
-
-
-def _resolve_bip39_passphrase(
-    bip39_passphrase: str | None = None,
-    prompt_bip39_passphrase: bool = False,
-    settings: JoinMarketSettings | None = None,
-) -> str:
-    """
-    Resolve BIP39 passphrase from argument, environment variable, config, or prompt.
-
-    Priority:
-    1. --bip39-passphrase argument
-    2. BIP39_PASSPHRASE environment variable
-    3. Config file wallet.bip39_passphrase setting
-    4. Interactive prompt (if --prompt-bip39-passphrase is set)
-    5. Empty string (default - no passphrase)
-
-    Args:
-        bip39_passphrase: BIP39 passphrase from command line argument
-        prompt_bip39_passphrase: Whether to prompt for passphrase interactively
-        settings: JoinMarketSettings instance for config file lookup
-
-    Returns:
-        The resolved BIP39 passphrase (empty string if none provided)
-    """
-    # If explicitly provided via argument, use it
-    if bip39_passphrase is not None:
-        return bip39_passphrase
-
-    # Check environment variable
-    env_passphrase = os.environ.get("BIP39_PASSPHRASE")
-    if env_passphrase is not None:
-        return env_passphrase
-
-    # Check config file
-    if settings is not None and settings.wallet.bip39_passphrase is not None:
-        return settings.wallet.bip39_passphrase.get_secret_value()
-
-    # Prompt if requested
-    if prompt_bip39_passphrase:
-        passphrase = typer.prompt(
-            "Enter BIP39 passphrase (13th/25th word) - press Enter for none",
-            default="",
-            hide_input=True,
-            show_default=False,
-        )
-        return passphrase
-
-    # Default: no passphrase
-    return ""
-
-
 @app.command()
 def info(
     mnemonic: Annotated[str | None, typer.Option("--mnemonic", help="BIP39 mnemonic")] = None,
@@ -1043,15 +914,21 @@ def info(
     settings = setup_cli(log_level)
 
     try:
-        resolved_mnemonic = _resolve_mnemonic(mnemonic, mnemonic_file, password, True)
+        resolved = resolve_mnemonic(
+            settings,
+            mnemonic=mnemonic,
+            mnemonic_file=mnemonic_file,
+            password=password,
+            bip39_passphrase=bip39_passphrase,
+            prompt_bip39_passphrase=prompt_bip39_passphrase,
+        )
+        if not resolved:
+            raise ValueError("No mnemonic provided")
+        resolved_mnemonic = resolved.mnemonic
+        resolved_bip39_passphrase = resolved.bip39_passphrase
     except (FileNotFoundError, ValueError) as e:
         logger.error(str(e))
         raise typer.Exit(1)
-
-    # Resolve BIP39 passphrase
-    resolved_bip39_passphrase = _resolve_bip39_passphrase(
-        bip39_passphrase, prompt_bip39_passphrase, settings
-    )
 
     # Resolve backend settings with CLI overrides taking priority
     backend = resolve_backend_settings(
@@ -1424,15 +1301,21 @@ def list_bonds(
     settings = setup_cli(log_level)
 
     try:
-        resolved_mnemonic = _resolve_mnemonic(mnemonic, mnemonic_file, password, True)
+        resolved = resolve_mnemonic(
+            settings,
+            mnemonic=mnemonic,
+            mnemonic_file=mnemonic_file,
+            password=password,
+            bip39_passphrase=bip39_passphrase,
+            prompt_bip39_passphrase=prompt_bip39_passphrase,
+        )
+        if not resolved:
+            raise ValueError("No mnemonic provided")
+        resolved_mnemonic = resolved.mnemonic
+        resolved_bip39_passphrase = resolved.bip39_passphrase
     except (FileNotFoundError, ValueError) as e:
         logger.error(str(e))
         raise typer.Exit(1)
-
-    # Resolve BIP39 passphrase
-    resolved_bip39_passphrase = _resolve_bip39_passphrase(
-        bip39_passphrase, prompt_bip39_passphrase, settings
-    )
 
     # Resolve backend settings with CLI overrides taking priority
     backend = resolve_backend_settings(
@@ -1665,15 +1548,21 @@ def generate_bond_address(
     settings = setup_cli(log_level)
 
     try:
-        resolved_mnemonic = _resolve_mnemonic(mnemonic, mnemonic_file, password, True)
+        resolved = resolve_mnemonic(
+            settings,
+            mnemonic=mnemonic,
+            mnemonic_file=mnemonic_file,
+            password=password,
+            bip39_passphrase=bip39_passphrase,
+            prompt_bip39_passphrase=prompt_bip39_passphrase,
+        )
+        if not resolved:
+            raise ValueError("No mnemonic provided")
+        resolved_mnemonic = resolved.mnemonic
+        resolved_bip39_passphrase = resolved.bip39_passphrase
     except (FileNotFoundError, ValueError) as e:
         logger.error(str(e))
         raise typer.Exit(1)
-
-    # Resolve BIP39 passphrase
-    resolved_bip39_passphrase = _resolve_bip39_passphrase(
-        bip39_passphrase, prompt_bip39_passphrase, settings
-    )
 
     # Resolve network from config if not provided
     resolved_network = network if network is not None else settings.network_config.network.value
@@ -1876,15 +1765,21 @@ def send(
         raise typer.Exit(1)
 
     try:
-        resolved_mnemonic = _resolve_mnemonic(mnemonic, mnemonic_file, password, True)
+        resolved = resolve_mnemonic(
+            settings,
+            mnemonic=mnemonic,
+            mnemonic_file=mnemonic_file,
+            password=password,
+            bip39_passphrase=bip39_passphrase,
+            prompt_bip39_passphrase=prompt_bip39_passphrase,
+        )
+        if not resolved:
+            raise ValueError("No mnemonic provided")
+        resolved_mnemonic = resolved.mnemonic
+        resolved_bip39_passphrase = resolved.bip39_passphrase
     except (FileNotFoundError, ValueError) as e:
         logger.error(str(e))
         raise typer.Exit(1)
-
-    # Resolve BIP39 passphrase
-    resolved_bip39_passphrase = _resolve_bip39_passphrase(
-        bip39_passphrase, prompt_bip39_passphrase, settings
-    )
 
     # Resolve backend settings
     backend_settings = resolve_backend_settings(
@@ -2721,15 +2616,21 @@ def recover_bonds(
     settings = setup_cli(log_level)
 
     try:
-        resolved_mnemonic = _resolve_mnemonic(mnemonic, mnemonic_file, password, True)
+        resolved = resolve_mnemonic(
+            settings,
+            mnemonic=mnemonic,
+            mnemonic_file=mnemonic_file,
+            password=password,
+            bip39_passphrase=bip39_passphrase,
+            prompt_bip39_passphrase=prompt_bip39_passphrase,
+        )
+        if not resolved:
+            raise ValueError("No mnemonic provided")
+        resolved_mnemonic = resolved.mnemonic
+        resolved_bip39_passphrase = resolved.bip39_passphrase
     except (FileNotFoundError, ValueError) as e:
         logger.error(str(e))
         raise typer.Exit(1)
-
-    # Resolve BIP39 passphrase
-    resolved_bip39_passphrase = _resolve_bip39_passphrase(
-        bip39_passphrase, prompt_bip39_passphrase, settings
-    )
 
     # Resolve backend settings
     backend_settings = resolve_backend_settings(
@@ -2972,15 +2873,21 @@ def registry_sync(
     settings = setup_cli(log_level)
 
     try:
-        resolved_mnemonic = _resolve_mnemonic(mnemonic, mnemonic_file, password, True)
-    except (FileNotFoundError, ValueError) as e:
+        resolved = resolve_mnemonic(
+            settings,
+            mnemonic=mnemonic,
+            mnemonic_file=mnemonic_file,
+            password=password,
+            bip39_passphrase=bip39_passphrase,
+            prompt_bip39_passphrase=prompt_bip39_passphrase,
+        )
+        if not resolved:
+            raise ValueError("No mnemonic provided")
+        resolved_mnemonic = resolved.mnemonic
+        resolved_bip39_passphrase = resolved.bip39_passphrase
+    except (FileNotFoundError, ValueError, UnicodeDecodeError) as e:
         logger.error(str(e))
         raise typer.Exit(1)
-
-    # Resolve BIP39 passphrase
-    resolved_bip39_passphrase = _resolve_bip39_passphrase(
-        bip39_passphrase, prompt_bip39_passphrase, settings
-    )
 
     # Resolve backend settings
     backend_settings = resolve_backend_settings(
