@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-01-22
+
 ### Fixed
 
 - **Descriptor Wallet Sync Hanging with Deep History**: Fixed a critical bug where wallets with address history at indices beyond the current descriptor range would cause sync to hang or fail to find those addresses. This affected users migrating from other wallet software or with extensive transaction history. The fix includes:
@@ -657,6 +659,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tor configuration instructions.
 
 [Unreleased]: https://github.com/m0wer/joinmarket-ng/compare/0.9.0...HEAD
+[0.11.3]: https://github.com/m0wer/joinmarket-ng/compare/0.11.2...0.11.3
 [0.11.2]: https://github.com/m0wer/joinmarket-ng/compare/0.11.1...0.11.2
 [0.11.0]: https://github.com/m0wer/joinmarket-ng/compare/0.10.0...0.11.0
 [0.10.0]: https://github.com/m0wer/joinmarket-ng/compare/0.9.0...0.10.0
