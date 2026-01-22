@@ -1087,19 +1087,42 @@ class WalletService:
 
         # Fetch all addresses with transaction history (including spent)
         # This is important to track addresses that have been used but are now empty
+        addresses_beyond_range: list[str] = []
         try:
             if hasattr(self.backend, "get_addresses_with_history"):
                 history_addresses = await self.backend.get_addresses_with_history()
                 for address in history_addresses:
                     # Check if this address belongs to our wallet
                     # Use _find_address_path which checks cache first, then derives if needed
-                    # This ensures we find addresses even if cache wasn't populated far enough
                     path_info = self._find_address_path(address)
                     if path_info is not None:
                         self.addresses_with_history.add(address)
+                    else:
+                        # Address not found in current range - may be beyond descriptor range
+                        addresses_beyond_range.append(address)
                 logger.debug(f"Tracked {len(self.addresses_with_history)} addresses with history")
+                if addresses_beyond_range:
+                    logger.info(
+                        f"Found {len(addresses_beyond_range)} address(es) from history "
+                        f"not in current range [0, {current_range}], searching extended range..."
+                    )
         except Exception as e:
             logger.debug(f"Could not fetch addresses with history: {e}")
+
+        # Search for addresses beyond the current range
+        # This handles wallets previously used with different software (e.g., reference impl)
+        # that may have used addresses at indices beyond our current descriptor range
+        if addresses_beyond_range:
+            extended_addresses_found = 0
+            for address in addresses_beyond_range:
+                path_info = self._find_address_path_extended(address)
+                if path_info is not None:
+                    self.addresses_with_history.add(address)
+                    extended_addresses_found += 1
+            if extended_addresses_found > 0:
+                logger.info(
+                    f"Found {extended_addresses_found} address(es) in extended range search"
+                )
 
         # Check if descriptor range needs to be upgraded
         # This handles wallets that have grown beyond the initial range
@@ -1225,6 +1248,8 @@ class WalletService:
         Args:
             max_index: Maximum address index to derive (typically the descriptor range)
         """
+        import time
+
         # Only populate if we haven't already cached enough addresses
         current_cache_size = len(self.address_cache)
         expected_size = self.mixdepth_count * 2 * max_index  # mixdepths * branches * indices
@@ -1234,15 +1259,40 @@ class WalletService:
             logger.debug(f"Address cache already populated ({current_cache_size} entries)")
             return
 
-        logger.debug(f"Populating address cache for range [0, {max_index}]...")
+        total_addresses = expected_size
+        logger.info(
+            f"Populating address cache for range [0, {max_index}] "
+            f"({total_addresses:,} addresses)..."
+        )
+
+        start_time = time.time()
+        count = 0
+        last_log_time = start_time
 
         for mixdepth in range(self.mixdepth_count):
             for change in [0, 1]:
                 for index in range(max_index):
                     # get_address automatically caches
                     self.get_address(mixdepth, change, index)
+                    count += 1
 
-        logger.debug(f"Address cache populated with {len(self.address_cache)} entries")
+                    # Log progress every 5 seconds for large caches
+                    current_time = time.time()
+                    if current_time - last_log_time >= 5.0:
+                        progress = count / total_addresses * 100
+                        elapsed = current_time - start_time
+                        rate = count / elapsed if elapsed > 0 else 0
+                        remaining = (total_addresses - count) / rate if rate > 0 else 0
+                        logger.info(
+                            f"Address cache progress: {count:,}/{total_addresses:,} "
+                            f"({progress:.1f}%) - ETA: {remaining:.0f}s"
+                        )
+                        last_log_time = current_time
+
+        elapsed = time.time() - start_time
+        logger.info(
+            f"Address cache populated with {len(self.address_cache):,} entries in {elapsed:.1f}s"
+        )
 
     def _find_address_path(
         self, address: str, max_scan: int | None = None
@@ -1275,6 +1325,44 @@ class WalletService:
                 for index in range(max_scan):
                     derived_addr = self.get_address(mixdepth, change, index)
                     if derived_addr == address:
+                        return (mixdepth, change, index)
+
+        return None
+
+    def _find_address_path_extended(
+        self, address: str, extend_by: int = 5000
+    ) -> tuple[int, int, int] | None:
+        """
+        Find the derivation path for an address, searching beyond the current range.
+
+        This is used for addresses from transaction history that might be at
+        indices beyond the current descriptor range (e.g., from previous use
+        with a different wallet software).
+
+        Args:
+            address: Bitcoin address
+            extend_by: How far beyond the current range to search
+
+        Returns:
+            Tuple of (mixdepth, change, index) or None if not found
+        """
+        # Check cache first
+        if address in self.address_cache:
+            return self.address_cache[address]
+
+        current_range = int(getattr(self, "_current_descriptor_range", DEFAULT_SCAN_RANGE))
+        extended_max = current_range + extend_by
+
+        # Search from current_range to extended_max (the normal range was already searched)
+        for mixdepth in range(self.mixdepth_count):
+            for change in [0, 1]:
+                for index in range(current_range, extended_max):
+                    derived_addr = self.get_address(mixdepth, change, index)
+                    if derived_addr == address:
+                        logger.info(
+                            f"Found address at extended index {index} "
+                            f"(beyond current range {current_range})"
+                        )
                         return (mixdepth, change, index)
 
         return None

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Descriptor Wallet Sync Hanging with Deep History**: Fixed a critical bug where wallets with address history at indices beyond the current descriptor range would cause sync to hang or fail to find those addresses. This affected users migrating from other wallet software or with extensive transaction history. The fix includes:
+  - Added `_find_address_path_extended()` to search beyond the current descriptor range when addresses are not found
+  - Addresses from transaction history beyond the current range now trigger an extended search (up to 5000 indices beyond)
+  - Once found, the descriptor range is automatically upgraded to accommodate the high-index addresses
+  - Added detailed progress logging for address cache population (shows ETA for large caches)
+  - Added logging to track addresses found beyond the current range
+
 ## [0.11.2] - 2026-01-21
 
 ### Changed

@@ -1719,3 +1719,236 @@ class TestDescriptorRangeUpgrade:
         addr_1_info = next(a for a in addresses if a.index == 1)
         assert addr_1_info.status == "used-empty"
         assert addr_1_info.balance == 0
+
+    @pytest.mark.asyncio
+    async def test_sync_with_deep_history_wallet(self) -> None:
+        """Test that sync handles wallets with deep history efficiently.
+
+        This test simulates a wallet with a large transaction history where:
+        1. Many addresses have been used across different indices
+        2. The descriptor range is large (e.g., 5000)
+        3. There are many addresses with history to process
+
+        The test verifies that:
+        - Sync completes without hanging
+        - All addresses with history are tracked
+        - Performance is reasonable (no O(n*m) explosion)
+        """
+        import time
+
+        from jmwallet.wallet.service import WalletService
+
+        backend = DescriptorWalletBackend(wallet_name="test_deep_history")
+        backend._wallet_loaded = True
+        backend._descriptors_imported = True
+
+        test_mnemonic = (
+            "abandon abandon abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon about"
+        )
+        wallet = WalletService(
+            mnemonic=test_mnemonic,
+            backend=backend,
+            network="mainnet",
+            mixdepth_count=5,
+        )
+
+        # Pre-derive some addresses at high indices (simulating deep history)
+        # In a real wallet, these might be at indices 2000, 3000, etc.
+        high_index_addresses: list[str] = []
+        for idx in [100, 500, 900]:
+            addr = wallet.get_address(0, 0, idx)
+            high_index_addresses.append(addr)
+
+        # Clear cache to simulate fresh start
+        wallet.address_cache.clear()
+
+        # Track how many times expensive derivation is called
+        derivation_count = 0
+        original_get_address = wallet.get_address
+
+        def counting_get_address(mixdepth: int, change: int, index: int) -> str:
+            nonlocal derivation_count
+            derivation_count += 1
+            return original_get_address(mixdepth, change, index)
+
+        wallet.get_address = counting_get_address  # type: ignore[method-assign]
+
+        # Current descriptor range is [0, 999]
+        current_range = 1000
+
+        async def mock_rpc_call(
+            method: str,
+            params: list | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            if method == "listunspent":
+                # Return a UTXO at index 900
+                return [
+                    {
+                        "txid": "a" * 64,
+                        "vout": 0,
+                        "address": high_index_addresses[2],  # Index 900
+                        "amount": 0.01,
+                        "confirmations": 10,
+                        "scriptPubKey": "0014" + "ab" * 20,
+                    }
+                ]
+            if method == "listdescriptors":
+                return {
+                    "descriptors": [
+                        {"desc": "wpkh(xpub.../0/*)#abc", "range": [0, current_range - 1]},
+                        {"desc": "wpkh(xpub.../1/*)#def", "range": [0, current_range - 1]},
+                    ]
+                }
+            if method == "listtransactions":
+                # Return transactions for multiple addresses at various indices
+                return [
+                    {"address": addr, "category": "receive", "amount": 0.001}
+                    for addr in high_index_addresses
+                ]
+            if method == "getdescriptorinfo":
+                desc = params[0] if params else ""
+                return {"descriptor": f"{desc}#mockchecksum"}
+            if method == "importdescriptors":
+                return [{"success": True}]
+            if method == "getblockchaininfo":
+                return {"blocks": 800000}
+            raise ValueError(f"Unexpected RPC: {method}")
+
+        backend._rpc_call = mock_rpc_call  # type: ignore[method-assign]
+
+        # Run sync and measure time
+        start_time = time.time()
+        await wallet.sync_with_descriptor_wallet()
+        elapsed = time.time() - start_time
+
+        # Verify all addresses with history were tracked
+        for addr in high_index_addresses:
+            assert addr in wallet.addresses_with_history, (
+                f"Address at high index should be tracked: {addr}"
+            )
+
+        # The UTXO at index 900 should be found
+        assert len(wallet.utxo_cache[0]) == 1
+        assert wallet.utxo_cache[0][0].address == high_index_addresses[2]
+
+        # Performance check: sync should complete in reasonable time
+        # Address cache population for 1000 addresses takes ~4-5s on typical hardware
+        # In the bug scenario, this could take minutes due to O(n*m) derivation
+        assert elapsed < 15.0, f"Sync took too long: {elapsed:.2f}s"
+
+        # Log derivation count for debugging
+        # With proper caching, this should be ~= mixdepths * 2 * current_range
+        # NOT mixdepths * 2 * current_range * num_addresses_to_check
+        expected_derivations = 5 * 2 * current_range  # 10,000
+        # Allow some overhead for additional lookups
+        assert derivation_count < expected_derivations * 1.5, (
+            f"Too many derivations: {derivation_count} (expected ~{expected_derivations})"
+        )
+
+    @pytest.mark.asyncio
+    async def test_sync_with_very_large_range_upgrade(self) -> None:
+        """Test that upgrading to a very large descriptor range doesn't hang.
+
+        This test simulates a scenario where:
+        1. Wallet initially has range [0, 999]
+        2. History shows addresses used at very high indices
+        3. Range needs to be upgraded significantly
+
+        This is a regression test for the sync hanging issue reported by users
+        with large wallets.
+        """
+        import time
+
+        from jmwallet.wallet.service import WalletService
+
+        backend = DescriptorWalletBackend(wallet_name="test_large_range")
+        backend._wallet_loaded = True
+        backend._descriptors_imported = True
+
+        test_mnemonic = (
+            "abandon abandon abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon about"
+        )
+        wallet = WalletService(
+            mnemonic=test_mnemonic,
+            backend=backend,
+            network="mainnet",
+            mixdepth_count=5,
+        )
+
+        # Simulate a wallet that was used with the reference implementation
+        # which might have addresses at very high indices
+        # (reference impl uses different gap limit logic)
+
+        # For this test, we'll have addresses at indices up to 2000
+        # which is beyond the default range of 1000
+        very_high_index = 2000
+        high_index_address = wallet.get_address(0, 0, very_high_index)
+        wallet.address_cache.clear()
+
+        current_range = 1000
+        upgrade_called = False
+        new_range_after_upgrade = current_range
+
+        async def mock_rpc_call(
+            method: str,
+            params: list | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            nonlocal upgrade_called, new_range_after_upgrade
+
+            if method == "listunspent":
+                return []  # No UTXOs
+            if method == "listdescriptors":
+                # Return current range (which gets updated after upgrade)
+                range_end = new_range_after_upgrade - 1
+                return {
+                    "descriptors": [
+                        {"desc": "wpkh(xpub.../0/*)#abc", "range": [0, range_end]},
+                        {"desc": "wpkh(xpub.../1/*)#def", "range": [0, range_end]},
+                    ]
+                }
+            if method == "listtransactions":
+                # Return transaction for address at very high index
+                return [{"address": high_index_address, "category": "receive", "amount": 0.001}]
+            if method == "getdescriptorinfo":
+                desc = params[0] if params else ""
+                return {"descriptor": f"{desc}#mockchecksum"}
+            if method == "importdescriptors":
+                upgrade_called = True
+                # Extract the new range from the import request
+                if params and params[0]:
+                    for req in params[0]:
+                        if "range" in req:
+                            new_range_after_upgrade = req["range"][1] + 1
+                            break
+                return [{"success": True} for _ in (params[0] if params else [])]
+            if method == "getblockchaininfo":
+                return {"blocks": 800000}
+            raise ValueError(f"Unexpected RPC: {method}")
+
+        backend._rpc_call = mock_rpc_call  # type: ignore[method-assign]
+
+        # Run sync and measure time
+        start_time = time.time()
+        await wallet.sync_with_descriptor_wallet()
+        elapsed = time.time() - start_time
+
+        # The high index address should be found and tracked
+        # (after range upgrade)
+        assert high_index_address in wallet.addresses_with_history
+
+        # Range should have been upgraded to accommodate the high index
+        assert upgrade_called, "Descriptor range should have been upgraded"
+        # new range should be at least very_high_index + gap_limit + 1
+        assert new_range_after_upgrade >= very_high_index + 100 + 1
+
+        # Performance: should complete in reasonable time
+        # This test does two cache populations (initial 1000 + upgrade to 2101)
+        # plus extended search, so allow up to 60 seconds
+        # In the bug scenario (before fix), this would hang indefinitely
+        assert elapsed < 60.0, f"Sync took too long: {elapsed:.2f}s (potential hang)"
