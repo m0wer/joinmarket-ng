@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Address Reuse Bug for Used-but-Empty Addresses**: Fixed a critical privacy bug where addresses that had been used (received and spent funds) would incorrectly show as "new" instead of "used-empty". This could lead to address reuse, a serious privacy concern for CoinJoin wallets. The root cause was that `listsinceblock` and `listtransactions` RPCs don't reliably return transaction details for addresses in descriptor wallets, especially after wallet import. The fix uses `listaddressgroupings` RPC as the primary source for detecting used addresses, which reliably returns all addresses that have been involved in any transaction (as inputs or outputs). This is combined with `listsinceblock` as a secondary source for completeness.
+
 ## [0.11.3] - 2026-01-22
 
 ### Fixed

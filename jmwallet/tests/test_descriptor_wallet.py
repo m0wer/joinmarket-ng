@@ -852,8 +852,6 @@ class TestBackgroundRescan:
             client: Any = None,
             use_wallet: bool = True,
         ) -> Any:
-            if method == "rescanblockchain":
-                return {"start_height": 0, "stop_height": 100000}
             return {}
 
         backend._rpc_call = mock_rpc  # type: ignore[method-assign]
@@ -1159,6 +1157,12 @@ class TestAddressHistory:
         backend = DescriptorWalletBackend(wallet_name="test_addr_history")
         backend._wallet_loaded = True
 
+        # listaddressgroupings returns addresses grouped by common ownership
+        mock_groupings = [
+            [["bc1qtest1", 0.0], ["bc1qtest2", 0.01]],  # Group 1
+            [["bc1qtest3", 0.0]],  # Group 2
+        ]
+
         mock_transactions = [
             {
                 "address": "bc1qtest1",
@@ -1192,15 +1196,17 @@ class TestAddressHistory:
             client: Any = None,
             use_wallet: bool = True,
         ) -> Any:
-            if method == "listtransactions":
-                return mock_transactions
+            if method == "listaddressgroupings":
+                return mock_groupings
+            if method == "listsinceblock":
+                return {"transactions": mock_transactions, "lastblock": "0" * 64}
             return {}
 
         backend._rpc_call = mock_rpc  # type: ignore[method-assign]
 
         addresses = await backend.get_addresses_with_history()
 
-        # Should have 3 unique addresses
+        # Should have 3 unique addresses from both sources
         assert len(addresses) == 3
         assert "bc1qtest1" in addresses
         assert "bc1qtest2" in addresses
@@ -1218,8 +1224,10 @@ class TestAddressHistory:
             client: Any = None,
             use_wallet: bool = True,
         ) -> Any:
-            if method == "listtransactions":
+            if method == "listaddressgroupings":
                 return []
+            if method == "listsinceblock":
+                return {"transactions": [], "lastblock": "0" * 64}
             return {}
 
         backend._rpc_call = mock_rpc  # type: ignore[method-assign]
@@ -1230,13 +1238,20 @@ class TestAddressHistory:
 
     @pytest.mark.asyncio
     async def test_get_addresses_with_history_filters_categories(self) -> None:
-        """Test that get_addresses_with_history only includes receive/generate.
+        """Test that get_addresses_with_history only includes receive/generate from listsinceblock.
 
         "send" addresses are counterparty addresses (where we sent to) and should
-        not be included, since they don't belong to this wallet.
+        not be included from listsinceblock, since they don't belong to this wallet.
+        However, listaddressgroupings returns all addresses involved in transactions.
         """
         backend = DescriptorWalletBackend(wallet_name="test_filter_history")
         backend._wallet_loaded = True
+
+        # listaddressgroupings only returns our own addresses
+        mock_groupings = [
+            [["bc1qreceive", 0.0]],
+            [["bc1qgenerate", 50.0]],
+        ]
 
         mock_transactions = [
             {
@@ -1276,8 +1291,10 @@ class TestAddressHistory:
             client: Any = None,
             use_wallet: bool = True,
         ) -> Any:
-            if method == "listtransactions":
-                return mock_transactions
+            if method == "listaddressgroupings":
+                return mock_groupings
+            if method == "listsinceblock":
+                return {"transactions": mock_transactions, "lastblock": "0" * 64}
             return {}
 
         backend._rpc_call = mock_rpc  # type: ignore[method-assign]
@@ -1291,6 +1308,49 @@ class TestAddressHistory:
         assert "bc1qsend" not in addresses  # Counterparty addresses excluded
         assert "bc1qgenerate" in addresses
         assert "bc1qimmature" not in addresses
+
+    @pytest.mark.asyncio
+    async def test_get_addresses_with_history_groupings_only(self) -> None:
+        """Test that addresses found only in listaddressgroupings are included.
+
+        This is the critical fix for the bug where addresses that were used
+        but don't appear in listsinceblock (e.g., after wallet import without
+        proper rescan) are still detected via listaddressgroupings.
+        """
+        backend = DescriptorWalletBackend(wallet_name="test_groupings_only")
+        backend._wallet_loaded = True
+
+        # This address appears in listaddressgroupings but NOT in listsinceblock
+        # This happens when the wallet was imported and the transaction details
+        # weren't properly recorded, but Bitcoin Core still knows about the grouping
+        mock_groupings = [
+            [["bc1qusedbutnotintxlist", 0.0]],  # Used address with 0 balance
+            [["bc1qalsoused", 0.0]],
+        ]
+
+        # Empty transaction list - simulating missing tx history
+        mock_transactions: list[dict[str, Any]] = []
+
+        async def mock_rpc(
+            method: str,
+            params: list[Any] | None = None,
+            client: Any = None,
+            use_wallet: bool = True,
+        ) -> Any:
+            if method == "listaddressgroupings":
+                return mock_groupings
+            if method == "listsinceblock":
+                return {"transactions": mock_transactions, "lastblock": "0" * 64}
+            return {}
+
+        backend._rpc_call = mock_rpc  # type: ignore[method-assign]
+
+        addresses = await backend.get_addresses_with_history()
+
+        # Should find addresses from listaddressgroupings even when listsinceblock is empty
+        assert len(addresses) == 2
+        assert "bc1qusedbutnotintxlist" in addresses
+        assert "bc1qalsoused" in addresses
 
     @pytest.mark.asyncio
     async def test_sync_populates_addresses_with_history(self) -> None:
@@ -1685,16 +1745,22 @@ class TestDescriptorRangeUpgrade:
                         {"desc": "wpkh(xpub.../0/*)#abc", "range": [0, 999]},
                     ]
                 }
-            if method == "listtransactions":
-                # Return the spent address as having history
-                return [
-                    {
-                        "address": spent_address,
-                        "category": "receive",
-                        "amount": 0.001,
-                        "confirmations": 100,
-                    }
-                ]
+            if method == "listaddressgroupings":
+                # Return the spent address in groupings
+                return [[[spent_address, 0.0]]]
+            if method == "listsinceblock":
+                # Return the spent address as having history (listsinceblock format)
+                return {
+                    "transactions": [
+                        {
+                            "address": spent_address,
+                            "category": "receive",
+                            "amount": 0.001,
+                            "confirmations": 100,
+                        }
+                    ],
+                    "lastblock": "0" * 64,
+                }
             raise ValueError(f"Unexpected RPC: {method}")
 
         backend._rpc_call = mock_rpc_call  # type: ignore[method-assign]
@@ -1807,12 +1873,18 @@ class TestDescriptorRangeUpgrade:
                         {"desc": "wpkh(xpub.../1/*)#def", "range": [0, current_range - 1]},
                     ]
                 }
-            if method == "listtransactions":
+            if method == "listaddressgroupings":
+                # Return addresses at various indices in groupings
+                return [[[addr, 0.0] for addr in high_index_addresses]]
+            if method == "listsinceblock":
                 # Return transactions for multiple addresses at various indices
-                return [
-                    {"address": addr, "category": "receive", "amount": 0.001}
-                    for addr in high_index_addresses
-                ]
+                return {
+                    "transactions": [
+                        {"address": addr, "category": "receive", "amount": 0.001}
+                        for addr in high_index_addresses
+                    ],
+                    "lastblock": "0" * 64,
+                }
             if method == "getdescriptorinfo":
                 desc = params[0] if params else ""
                 return {"descriptor": f"{desc}#mockchecksum"}
@@ -1917,9 +1989,17 @@ class TestDescriptorRangeUpgrade:
                         {"desc": "wpkh(xpub.../1/*)#def", "range": [0, range_end]},
                     ]
                 }
-            if method == "listtransactions":
+            if method == "listaddressgroupings":
+                # Return address at very high index in groupings
+                return [[[high_index_address, 0.0]]]
+            if method == "listsinceblock":
                 # Return transaction for address at very high index
-                return [{"address": high_index_address, "category": "receive", "amount": 0.001}]
+                return {
+                    "transactions": [
+                        {"address": high_index_address, "category": "receive", "amount": 0.001}
+                    ],
+                    "lastblock": "0" * 64,
+                }
             if method == "getdescriptorinfo":
                 desc = params[0] if params else ""
                 return {"descriptor": f"{desc}#mockchecksum"}

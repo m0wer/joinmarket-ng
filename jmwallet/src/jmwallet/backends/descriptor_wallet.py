@@ -1014,35 +1014,58 @@ class DescriptorWalletBackend(BlockchainBackend):
 
     async def get_addresses_with_history(self) -> set[str]:
         """
-        Get all addresses that have ever received transactions.
+        Get all addresses that have ever been involved in transactions.
 
-        Uses listtransactions to find all addresses that have had any activity,
-        including addresses that have been fully spent and now have zero balance.
-        This is important for tracking address usage to prevent reuse.
+        Uses listaddressgroupings as the primary source, which returns addresses
+        that have been used as inputs or outputs in any transaction. This is more
+        reliable than listsinceblock for descriptor wallets because it captures
+        address usage even when transaction details aren't fully recorded.
+
+        Falls back to listsinceblock as a secondary source to catch any addresses
+        that might only appear in transaction history.
+
+        This is critical for tracking address usage to prevent reuse - a key
+        privacy concern for CoinJoin wallets.
 
         Returns:
-            Set of addresses that have ever received funds
+            Set of addresses that have ever been used in transactions
         """
         addresses: set[str] = set()
-        try:
-            # listtransactions params: label, count, skip, include_watchonly
-            # Get a large number of transactions (up to 10000)
-            txs = await self._rpc_call("listtransactions", ["*", 10000, 0, True])
 
-            for tx in txs:
-                # Each transaction entry has an 'address' field
-                # Only include "receive" and "generate" categories - these are addresses where
-                # this wallet received funds (our own addresses).
-                # "send" category includes addresses we sent TO (counterparty addresses in CoinJoin)
-                # which don't belong to this wallet and should not be searched.
+        # Primary source: listaddressgroupings
+        # This returns addresses grouped by common ownership (used together in txs)
+        # It reliably shows addresses that have been used, even if the transaction
+        # details aren't available in listsinceblock (e.g., after wallet import)
+        try:
+            groupings = await self._rpc_call("listaddressgroupings", [])
+            for group in groupings:
+                for entry in group:
+                    # Each entry is [address, balance, label?]
+                    if entry and len(entry) >= 1:
+                        addresses.add(entry[0])
+            logger.debug(f"Found {len(addresses)} addresses from listaddressgroupings")
+        except Exception as e:
+            logger.warning(f"Failed to get addresses from listaddressgroupings: {e}")
+
+        # Secondary source: listsinceblock
+        # This catches addresses that might only appear in transaction history
+        # but weren't grouped (e.g., single-use receive addresses)
+        try:
+            # listsinceblock params: blockhash (empty = all), target_confirmations,
+            #                        include_watchonly, include_removed
+            result = await self._rpc_call("listsinceblock", ["", 1, True, False])
+
+            for tx in result.get("transactions", []):
+                # Only include "receive" and "generate" categories - these are addresses
+                # where this wallet received funds (our own addresses).
+                # "send" category includes counterparty addresses we sent TO.
                 if "address" in tx and tx.get("category") in ("receive", "generate"):
                     addresses.add(tx["address"])
-
-            logger.debug(f"Found {len(addresses)} addresses with transaction history")
-            return addresses
         except Exception as e:
-            logger.warning(f"Failed to get addresses with history: {e}")
-            return addresses
+            logger.warning(f"Failed to get addresses from listsinceblock: {e}")
+
+        logger.debug(f"Total addresses with history: {len(addresses)}")
+        return addresses
 
     async def get_descriptor_ranges(self) -> dict[str, tuple[int, int]]:
         """
