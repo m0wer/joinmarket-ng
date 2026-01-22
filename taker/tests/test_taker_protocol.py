@@ -1470,3 +1470,240 @@ class TestUpdatePendingTransactionNow:
         assert len(history) == 1
         assert history[0].success is True
         assert history[0].confirmations == 1
+
+
+class TestDuplicateUTXODetection:
+    """Tests for self-CoinJoin protection via duplicate UTXO detection."""
+
+    @pytest.mark.asyncio
+    async def test_no_duplicates(self, mock_wallet, mock_backend, mock_config):
+        """Test that no makers are flagged when all UTXOs are unique."""
+        taker = Taker(mock_wallet, mock_backend, mock_config)
+
+        # Set up taker's UTXOs
+        taker.preselected_utxos = [
+            UTXOInfo(
+                txid="a" * 64,
+                vout=0,
+                value=25_000_000,
+                address="bcrt1qtaker1",
+                confirmations=10,
+                scriptpubkey="001400" * 10,
+                path="m/84'/1'/0'/0/0",
+                mixdepth=0,
+            )
+        ]
+
+        # Set up maker sessions with unique UTXOs
+        taker.maker_sessions = {
+            "J5Maker1": MakerSession(
+                nick="J5Maker1",
+                offer=Offer(
+                    ordertype=OfferType.SW0_RELATIVE,
+                    oid=0,
+                    minsize=10000,
+                    maxsize=100_000_000,
+                    txfee=500,
+                    cjfee=250,
+                    counterparty="J5Maker1",
+                ),
+                utxos=[{"txid": "b" * 64, "vout": 0, "value": 10_000_000}],
+            ),
+            "J5Maker2": MakerSession(
+                nick="J5Maker2",
+                offer=Offer(
+                    ordertype=OfferType.SW0_RELATIVE,
+                    oid=1,
+                    minsize=10000,
+                    maxsize=100_000_000,
+                    txfee=500,
+                    cjfee=300,
+                    counterparty="J5Maker2",
+                ),
+                utxos=[{"txid": "c" * 64, "vout": 0, "value": 10_000_000}],
+            ),
+        }
+
+        # Check for duplicates
+        makers_to_remove = taker._check_duplicate_maker_utxos()
+        assert makers_to_remove == []
+
+    @pytest.mark.asyncio
+    async def test_duplicate_between_makers(self, mock_wallet, mock_backend, mock_config):
+        """Test detection when two makers provide the same UTXO."""
+        taker = Taker(mock_wallet, mock_backend, mock_config)
+
+        # Set up taker's UTXOs
+        taker.preselected_utxos = [
+            UTXOInfo(
+                txid="a" * 64,
+                vout=0,
+                value=25_000_000,
+                address="bcrt1qtaker1",
+                confirmations=10,
+                scriptpubkey="001400" * 10,
+                path="m/84'/1'/0'/0/0",
+                mixdepth=0,
+            )
+        ]
+
+        # Two makers claiming the SAME UTXO (b*64:0)
+        duplicate_utxo = {"txid": "b" * 64, "vout": 0, "value": 10_000_000}
+
+        taker.maker_sessions = {
+            "J5Maker1": MakerSession(
+                nick="J5Maker1",
+                offer=Offer(
+                    ordertype=OfferType.SW0_RELATIVE,
+                    oid=0,
+                    minsize=10000,
+                    maxsize=100_000_000,
+                    txfee=500,
+                    cjfee=250,
+                    counterparty="J5Maker1",
+                ),
+                utxos=[duplicate_utxo],
+            ),
+            "J5Maker2": MakerSession(
+                nick="J5Maker2",
+                offer=Offer(
+                    ordertype=OfferType.SW0_RELATIVE,
+                    oid=1,
+                    minsize=10000,
+                    maxsize=100_000_000,
+                    txfee=500,
+                    cjfee=300,
+                    counterparty="J5Maker2",
+                ),
+                utxos=[duplicate_utxo],  # Same UTXO as Maker1
+            ),
+        }
+
+        # Check for duplicates - second maker should be flagged
+        makers_to_remove = taker._check_duplicate_maker_utxos()
+        assert len(makers_to_remove) == 1
+        # The second one processed gets flagged (dict order in Python 3.7+)
+        assert makers_to_remove[0] in ["J5Maker1", "J5Maker2"]
+
+    @pytest.mark.asyncio
+    async def test_duplicate_between_maker_and_taker(self, mock_wallet, mock_backend, mock_config):
+        """Test detection when maker provides same UTXO as taker (self-CoinJoin edge case)."""
+        taker = Taker(mock_wallet, mock_backend, mock_config)
+
+        # Taker's UTXO
+        shared_txid = "a" * 64
+        taker.preselected_utxos = [
+            UTXOInfo(
+                txid=shared_txid,
+                vout=0,
+                value=25_000_000,
+                address="bcrt1qtaker1",
+                confirmations=10,
+                scriptpubkey="001400" * 10,
+                path="m/84'/1'/0'/0/0",
+                mixdepth=0,
+            )
+        ]
+
+        # Maker claims the SAME UTXO as taker (would happen in self-CoinJoin bug)
+        taker.maker_sessions = {
+            "J5Maker1": MakerSession(
+                nick="J5Maker1",
+                offer=Offer(
+                    ordertype=OfferType.SW0_RELATIVE,
+                    oid=0,
+                    minsize=10000,
+                    maxsize=100_000_000,
+                    txfee=500,
+                    cjfee=250,
+                    counterparty="J5Maker1",
+                ),
+                utxos=[{"txid": shared_txid, "vout": 0, "value": 25_000_000}],
+            ),
+            "J5Maker2": MakerSession(
+                nick="J5Maker2",
+                offer=Offer(
+                    ordertype=OfferType.SW0_RELATIVE,
+                    oid=1,
+                    minsize=10000,
+                    maxsize=100_000_000,
+                    txfee=500,
+                    cjfee=300,
+                    counterparty="J5Maker2",
+                ),
+                utxos=[{"txid": "c" * 64, "vout": 0, "value": 10_000_000}],
+            ),
+        }
+
+        # Check for duplicates - Maker1 should be flagged (conflicts with taker)
+        makers_to_remove = taker._check_duplicate_maker_utxos()
+        assert makers_to_remove == ["J5Maker1"]
+
+    @pytest.mark.asyncio
+    async def test_multiple_duplicates(self, mock_wallet, mock_backend, mock_config):
+        """Test that multiple duplicate makers are all flagged."""
+        taker = Taker(mock_wallet, mock_backend, mock_config)
+
+        taker.preselected_utxos = [
+            UTXOInfo(
+                txid="a" * 64,
+                vout=0,
+                value=25_000_000,
+                address="bcrt1qtaker1",
+                confirmations=10,
+                scriptpubkey="001400" * 10,
+                path="m/84'/1'/0'/0/0",
+                mixdepth=0,
+            )
+        ]
+
+        # Maker1 and Maker2 share UTXO b*64:0
+        # Maker3 shares taker's UTXO a*64:0
+        taker.maker_sessions = {
+            "J5Maker1": MakerSession(
+                nick="J5Maker1",
+                offer=Offer(
+                    ordertype=OfferType.SW0_RELATIVE,
+                    oid=0,
+                    minsize=10000,
+                    maxsize=100_000_000,
+                    txfee=500,
+                    cjfee=250,
+                    counterparty="J5Maker1",
+                ),
+                utxos=[{"txid": "b" * 64, "vout": 0, "value": 10_000_000}],
+            ),
+            "J5Maker2": MakerSession(
+                nick="J5Maker2",
+                offer=Offer(
+                    ordertype=OfferType.SW0_RELATIVE,
+                    oid=1,
+                    minsize=10000,
+                    maxsize=100_000_000,
+                    txfee=500,
+                    cjfee=300,
+                    counterparty="J5Maker2",
+                ),
+                utxos=[{"txid": "b" * 64, "vout": 0, "value": 10_000_000}],  # Duplicate with Maker1
+            ),
+            "J5Maker3": MakerSession(
+                nick="J5Maker3",
+                offer=Offer(
+                    ordertype=OfferType.SW0_RELATIVE,
+                    oid=2,
+                    minsize=10000,
+                    maxsize=100_000_000,
+                    txfee=500,
+                    cjfee=350,
+                    counterparty="J5Maker3",
+                ),
+                utxos=[{"txid": "a" * 64, "vout": 0, "value": 25_000_000}],  # Duplicate with taker
+            ),
+        }
+
+        # Check for duplicates - both Maker2 and Maker3 should be flagged
+        makers_to_remove = taker._check_duplicate_maker_utxos()
+        assert len(makers_to_remove) == 2
+        assert "J5Maker3" in makers_to_remove  # Conflicts with taker
+        # Either Maker1 or Maker2 gets flagged (second one processed)
+        assert "J5Maker2" in makers_to_remove or "J5Maker1" in makers_to_remove

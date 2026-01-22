@@ -2701,7 +2701,64 @@ class Taker:
             logger.error(f"Not enough makers sent UTXOs: {len(self.maker_sessions)}")
             return PhaseResult(success=False, failed_makers=failed_makers)
 
+        # Check for duplicate UTXOs across makers (potential attack or misconfiguration)
+        duplicate_makers = self._check_duplicate_maker_utxos()
+        if duplicate_makers:
+            for nick in duplicate_makers:
+                logger.error(f"Removing maker {nick} due to duplicate UTXO")
+                failed_makers.append(nick)
+                if nick in self.maker_sessions:
+                    del self.maker_sessions[nick]
+
+            if len(self.maker_sessions) < self.config.minimum_makers:
+                logger.error(
+                    f"Not enough makers after duplicate UTXO removal: "
+                    f"{len(self.maker_sessions)} < {self.config.minimum_makers}"
+                )
+                return PhaseResult(success=False, failed_makers=failed_makers)
+
         return PhaseResult(success=True, failed_makers=failed_makers)
+
+    def _check_duplicate_maker_utxos(self) -> list[str]:
+        """
+        Check for duplicate UTXOs across makers.
+
+        This detects cases where:
+        - Two "different" makers provide the same UTXO (potential attack)
+        - A maker provides the same UTXO as the taker (misconfiguration)
+
+        Returns:
+            List of maker nicks that should be removed due to duplicate UTXOs
+        """
+        # Track all seen UTXOs: (txid, vout) -> nick that claimed it first
+        seen_utxos: dict[tuple[str, int], str] = {}
+
+        # First, add taker's UTXOs
+        for utxo in self.preselected_utxos:
+            utxo_key = (utxo.txid, utxo.vout)
+            seen_utxos[utxo_key] = "taker"
+
+        # Check each maker's UTXOs for duplicates
+        makers_to_remove: list[str] = []
+
+        for nick, session in self.maker_sessions.items():
+            for utxo in session.utxos:
+                utxo_key = (utxo["txid"], utxo["vout"])
+
+                if utxo_key in seen_utxos:
+                    original_owner = seen_utxos[utxo_key]
+                    logger.error(
+                        f"DUPLICATE UTXO DETECTED: {utxo_key[0]}:{utxo_key[1]} "
+                        f"claimed by both '{original_owner}' and '{nick}'. "
+                        f"This could indicate a malicious maker or wallet misconfiguration."
+                    )
+                    # Remove the second maker that claimed the duplicate
+                    if nick not in makers_to_remove:
+                        makers_to_remove.append(nick)
+                else:
+                    seen_utxos[utxo_key] = nick
+
+        return makers_to_remove
 
     def _parse_utxos(self, utxos_dict: dict[str, Any]) -> list[dict[str, Any]]:
         """Parse UTXO data from !ioauth response."""

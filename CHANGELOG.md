@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Single Instance Enforcement**: Each component (maker, taker, directory server, orderbook watcher) now enforces that only one instance can run at a time from the same data directory. The nick state file now stores `nick:pid` format, and startup checks if a previous instance is still running. If so, it exits with a clear error message showing the existing nick and PID. Stale lock files from crashed processes are automatically cleaned up.
+
+- **Duplicate UTXO Detection**: Added a sanity check during CoinJoin transaction building that detects if any maker provides the same UTXO as another maker or as the taker. This prevents edge case bugs that could occur from misconfiguration or malicious peers.
+
 ### Fixed
 
 - **Descriptor Wallet Sync Hanging with Deep History**: Fixed a critical bug where wallets with address history at indices beyond the current descriptor range would cause sync to hang or fail to find those addresses. This affected users migrating from other wallet software or with extensive transaction history. The fix includes:
@@ -30,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Nick Included in Startup Notifications**: Startup notifications now include the component's nick in the notification body, making it easier for operators to identify which bot sent the notification without needing to check logs.
 
-- **Self-CoinJoin Protection**: When running both maker and taker from the same wallet/data directory, the components now automatically detect and protect against self-CoinJoins:
+- **Self-CoinJoin Protection**: When running both maker and taker from the same wallet/data directory, the components now automatically detect and exclude each other from CoinJoin sessions. This prevents edge cases and potential bugs where the same wallet could attempt to use the same UTXO as both maker and taker input in the same transaction:
   - Taker reads the maker nick state file and automatically excludes it from peer selection
   - Maker reads the taker nick state file and rejects fill requests from its own taker nick
   - This protection is automatic and requires no configuration

@@ -511,3 +511,156 @@ class TestBuildCoinjoinTx:
         # Both changes are below 50000, so no change outputs
         change_outputs = [o for o in metadata["output_owners"] if o[1] == "change"]
         assert len(change_outputs) == 0
+
+
+class TestDuplicateUTXOEdgeCase:
+    """
+    Tests demonstrating the edge case when two makers provide the same UTXO.
+
+    This test class shows what would happen WITHOUT the duplicate UTXO detection
+    in taker.py. The transaction would be built with duplicate inputs, which:
+    1. Creates an invalid Bitcoin transaction (same input spent twice)
+    2. Would fail validation when broadcast to the network
+    3. Could indicate a malicious maker or wallet misconfiguration
+
+    To test the behavior BEFORE the fix was added, temporarily comment out
+    the `_check_duplicate_maker_utxos()` call in taker.py and run this test.
+    """
+
+    def test_duplicate_maker_utxos_creates_invalid_tx(self) -> None:
+        """
+        Demonstrate that duplicate UTXOs from makers create an invalid transaction.
+
+        This test shows what happens when the taker's duplicate UTXO detection
+        is bypassed - the transaction builder happily creates a tx with the
+        same input appearing twice, which Bitcoin consensus rules reject.
+        """
+        # Taker's UTXO
+        taker_utxos = [
+            {
+                "txid": "a" * 64,
+                "vout": 0,
+                "value": 1_050_000,
+            }
+        ]
+
+        # THE BUG: Two "different" makers providing the SAME UTXO
+        # This could happen if:
+        # 1. Same wallet running as two maker instances (misconfiguration)
+        # 2. Malicious maker trying to DoS the CoinJoin
+        # 3. Self-CoinJoin edge case with maker and taker from same wallet
+        duplicate_utxo = {
+            "txid": "b" * 64,
+            "vout": 0,
+            "value": 1_100_000,
+        }
+
+        maker_data = {
+            "J5Maker1": {
+                "utxos": [duplicate_utxo],  # Maker 1 provides UTXO b:0
+                "cj_addr": "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080",
+                "change_addr": "bcrt1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qzf4jry",
+                "cjfee": 1000,
+            },
+            "J5Maker2": {
+                "utxos": [duplicate_utxo],  # Maker 2 ALSO provides UTXO b:0 (DUPLICATE!)
+                "cj_addr": "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080",
+                "change_addr": "bcrt1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qzf4jry",
+                "cjfee": 1000,
+            },
+        }
+
+        # Build the transaction - it succeeds because tx_builder doesn't validate
+        tx_bytes, metadata = build_coinjoin_tx(
+            taker_utxos=taker_utxos,
+            taker_cj_address="bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080",
+            taker_change_address="bcrt1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qzf4jry",
+            taker_total_input=1_050_000,
+            maker_data=maker_data,
+            cj_amount=1_000_000,
+            tx_fee=1500,
+            network="regtest",
+        )
+
+        # The transaction was built, but it's INVALID because:
+        # - It has 3 inputs: taker's + maker1's + maker2's
+        # - But maker1 and maker2 provided the SAME input!
+        # - So the tx actually tries to spend the same UTXO twice
+        assert tx_bytes is not None
+
+        # Count inputs in metadata - shows 3 inputs were added
+        input_owners = metadata["input_owners"]
+        assert len(input_owners) == 3  # taker + 2 makers
+
+        # Count how many times each txid:vout appears
+        input_values = metadata["input_values"]
+        assert len(input_values) == 3
+
+        # The duplicate UTXO value (1_100_000) appears TWICE
+        duplicate_count = input_values.count(1_100_000)
+        assert duplicate_count == 2, (
+            f"Expected duplicate UTXO to appear twice, got {duplicate_count}. "
+            "This demonstrates the edge case: without duplicate detection, "
+            "the same UTXO would be included as input twice, creating an invalid tx."
+        )
+
+        # This transaction would FAIL when broadcast because Bitcoin doesn't allow
+        # spending the same UTXO twice in one transaction. The error would be:
+        # "bad-txns-inputs-duplicate" or similar from Bitcoin Core.
+        #
+        # The fix in taker.py's _check_duplicate_maker_utxos() catches this
+        # BEFORE building the transaction, removing the offending maker.
+
+    def test_maker_utxo_same_as_taker_creates_invalid_tx(self) -> None:
+        """
+        Demonstrate self-CoinJoin edge case: maker provides taker's UTXO.
+
+        This could happen when running maker and taker from the same wallet
+        without proper isolation, causing the same UTXO to be used as both
+        taker input AND maker input.
+        """
+        # The shared UTXO - same wallet uses this as taker AND maker input
+        shared_txid = "c" * 64
+        shared_utxo = {
+            "txid": shared_txid,
+            "vout": 0,
+            "value": 1_500_000,
+        }
+
+        # Taker uses the UTXO
+        taker_utxos = [shared_utxo]
+
+        # Maker ALSO uses the same UTXO (self-CoinJoin bug)
+        maker_data = {
+            "J5Maker1": {
+                "utxos": [shared_utxo],  # SAME UTXO as taker!
+                "cj_addr": "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080",
+                "change_addr": "bcrt1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qzf4jry",
+                "cjfee": 1000,
+            },
+        }
+
+        # Build the transaction
+        tx_bytes, metadata = build_coinjoin_tx(
+            taker_utxos=taker_utxos,
+            taker_cj_address="bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080",
+            taker_change_address="bcrt1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qzf4jry",
+            taker_total_input=1_500_000,
+            maker_data=maker_data,
+            cj_amount=1_000_000,
+            tx_fee=1000,
+            network="regtest",
+        )
+
+        # Transaction built with duplicate input
+        assert tx_bytes is not None
+
+        # The same UTXO appears twice (once as taker, once as maker)
+        input_values = metadata["input_values"]
+        assert len(input_values) == 2  # taker + maker, but same UTXO!
+
+        duplicate_count = input_values.count(1_500_000)
+        assert duplicate_count == 2, (
+            "Self-CoinJoin edge case: same UTXO used by both taker and maker. "
+            "Without duplicate detection, this creates an invalid transaction."
+        )

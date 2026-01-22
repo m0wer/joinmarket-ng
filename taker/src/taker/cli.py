@@ -18,7 +18,11 @@ import typer
 from jmcore.cli_common import resolve_mnemonic, setup_cli
 from jmcore.models import NetworkType
 from jmcore.notifications import get_notifier
-from jmcore.paths import remove_nick_state, write_nick_state
+from jmcore.paths import (
+    ComponentLockError,
+    acquire_component_lock,
+    release_component_lock,
+)
 from jmcore.settings import (
     DEFAULT_DIRECTORY_SERVERS,
     JoinMarketSettings,
@@ -566,11 +570,11 @@ async def _run_coinjoin(
     taker = Taker(wallet, backend, config, confirmation_callback=confirmation_callback)
 
     try:
-        # Write nick state file for external tracking and cross-component protection
+        # Acquire component lock (also writes nick state file)
         nick = taker.nick
         data_dir = config.data_dir
-        write_nick_state(data_dir, "taker", nick)
-        logger.info(f"Nick state written to {data_dir}/state/taker.nick")
+        acquire_component_lock(data_dir, "taker", nick)
+        logger.info(f"Component lock acquired: {data_dir}/state/taker.nick")
 
         # Send startup notification (including nick)
         notifier = get_notifier(settings, component_name="Taker")
@@ -596,9 +600,12 @@ async def _run_coinjoin(
             logger.error("CoinJoin failed")
             raise typer.Exit(1)
 
+    except ComponentLockError as e:
+        logger.error(str(e))
+        raise typer.Exit(1)
     finally:
-        # Clean up nick state file on shutdown
-        remove_nick_state(config.data_dir, "taker")
+        # Release component lock (removes nick state file)
+        release_component_lock(config.data_dir, "taker")
         await taker.stop()
 
 
@@ -814,11 +821,11 @@ async def _run_tumble(
     taker = Taker(wallet, backend, config)
 
     try:
-        # Write nick state file for external tracking and cross-component protection
+        # Acquire component lock (also writes nick state file)
         nick = taker.nick
         data_dir = config.data_dir
-        write_nick_state(data_dir, "taker", nick)
-        logger.info(f"Nick state written to {data_dir}/state/taker.nick")
+        acquire_component_lock(data_dir, "taker", nick)
+        logger.info(f"Component lock acquired: {data_dir}/state/taker.nick")
 
         # Send startup notification (including nick)
         notifier = get_notifier(settings, component_name="Taker")
@@ -838,9 +845,12 @@ async def _run_tumble(
             logger.error("Tumble failed")
             raise typer.Exit(1)
 
+    except ComponentLockError as e:
+        logger.error(str(e))
+        raise typer.Exit(1)
     finally:
-        # Clean up nick state file on shutdown
-        remove_nick_state(config.data_dir, "taker")
+        # Release component lock (removes nick state file)
+        release_component_lock(config.data_dir, "taker")
         await taker.stop()
 
 

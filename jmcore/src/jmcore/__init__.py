@@ -78,12 +78,16 @@ from jmcore.notifications import (
     reset_notifier,
 )
 from jmcore.paths import (
+    ComponentLockError,
+    acquire_component_lock,
+    check_component_running,
     get_all_nick_states,
     get_commitment_blacklist_path,
     get_default_data_dir,
     get_ignored_makers_path,
     get_nick_state_path,
     read_nick_state,
+    release_component_lock,
     remove_nick_state,
     write_nick_state,
 )
@@ -211,12 +215,16 @@ __all__ = [
     "load_notification_config",
     "reset_notifier",
     # Paths
+    "ComponentLockError",
+    "acquire_component_lock",
+    "check_component_running",
     "get_all_nick_states",
     "get_commitment_blacklist_path",
     "get_default_data_dir",
     "get_ignored_makers_path",
     "get_nick_state_path",
     "read_nick_state",
+    "release_component_lock",
     "remove_nick_state",
     "write_nick_state",
     # PoDLE

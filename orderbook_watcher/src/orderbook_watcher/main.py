@@ -10,7 +10,11 @@ import sys
 
 from jmcore.crypto import NickIdentity
 from jmcore.notifications import get_notifier
-from jmcore.paths import remove_nick_state, write_nick_state
+from jmcore.paths import (
+    ComponentLockError,
+    acquire_component_lock,
+    release_component_lock,
+)
 from jmcore.protocol import JM_VERSION
 from jmcore.settings import get_settings
 from loguru import logger
@@ -74,9 +78,13 @@ async def run_watcher(log_level: str | None = None) -> None:
         logger.info(f"  - {node[0]}:{node[1]}")
     logger.info("=" * 80)
 
-    # Write nick state file for external tracking
-    write_nick_state(data_dir, "orderbook", watcher_nick)
-    logger.info(f"Nick state written to {data_dir}/state/orderbook.nick")
+    # Acquire component lock (also writes nick state file)
+    try:
+        acquire_component_lock(data_dir, "orderbook", watcher_nick)
+        logger.info(f"Component lock acquired: {data_dir}/state/orderbook.nick")
+    except ComponentLockError as e:
+        logger.error(str(e))
+        sys.exit(1)
 
     aggregator = OrderbookAggregator(
         directory_nodes=directory_nodes,
@@ -117,8 +125,8 @@ async def run_watcher(log_level: str | None = None) -> None:
         logger.error(f"Watcher error: {e}")
         raise
     finally:
-        # Clean up nick state file on shutdown
-        remove_nick_state(data_dir, "orderbook")
+        # Release component lock (removes nick state file)
+        release_component_lock(data_dir, "orderbook")
         await server.stop()
 
 

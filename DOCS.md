@@ -229,14 +229,16 @@ JoinMarket NG uses a dedicated data directory for persistent files that need to 
 
 **Nick State Files** (`state/<component>.nick`):
 - Written at startup by each component (maker, taker, directory, orderbook)
-- Contains the component's current nick in JoinMarket format (e.g., `J5FA1Gj7Ln4vSGne`)
+- Contains the component's current nick and PID in format `nick:pid` (e.g., `J5FA1Gj7Ln4vSGne:12345`)
 - Automatically deleted on shutdown
 - **Use Cases**:
   - External monitoring: Scripts can read these files to track which nicks belong to your bots
   - Startup notifications: Nick is included in the notification body for easy identification
+  - **Single Instance Enforcement**: Only one instance of each component can run at a time from the same data directory. If a component detects another instance is already running (by checking the PID in the nick file), it will exit with an error message showing the existing nick and PID.
   - **Self-CoinJoin Protection**: When running both maker and taker from the same data directory:
     - Taker automatically reads `state/maker.nick` and excludes that nick from peer selection
     - Maker automatically reads `state/taker.nick` and rejects fill requests from own taker
+    - Duplicate UTXO detection prevents edge cases where the same UTXO could appear in both maker and taker inputs
     - This prevents accidentally doing a CoinJoin with yourself (wastes fees, no privacy benefit)
 
 ### Periodic Wallet Rescan

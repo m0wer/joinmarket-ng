@@ -8,7 +8,11 @@ import sys
 
 from jmcore.crypto import generate_jm_nick
 from jmcore.notifications import get_notifier
-from jmcore.paths import remove_nick_state, write_nick_state
+from jmcore.paths import (
+    ComponentLockError,
+    acquire_component_lock,
+    release_component_lock,
+)
 from jmcore.settings import get_settings
 from loguru import logger
 
@@ -47,9 +51,13 @@ async def run_server() -> None:
     logger.info(f"Max peers: {settings.directory_server.max_peers}")
     logger.info("=" * 80)
 
-    # Write nick state file for external tracking
-    write_nick_state(data_dir, "directory", server_nick)
-    logger.info(f"Nick state written to {data_dir}/state/directory.nick")
+    # Acquire component lock (also writes nick state file)
+    try:
+        acquire_component_lock(data_dir, "directory", server_nick)
+        logger.info(f"Component lock acquired: {data_dir}/state/directory.nick")
+    except ComponentLockError as e:
+        logger.error(str(e))
+        sys.exit(1)
 
     server = DirectoryServer(settings.directory_server, network, server_nick)
 
@@ -80,8 +88,8 @@ async def run_server() -> None:
         logger.error(f"Server error: {e}")
         raise
     finally:
-        # Clean up nick state file on shutdown
-        remove_nick_state(data_dir, "directory")
+        # Release component lock (removes nick state file)
+        release_component_lock(data_dir, "directory")
         await server.stop()
 
 

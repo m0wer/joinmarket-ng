@@ -19,7 +19,11 @@ from jmcore.cli_common import resolve_mnemonic, setup_cli
 from jmcore.config import TorControlConfig
 from jmcore.models import NetworkType, OfferType
 from jmcore.notifications import get_notifier
-from jmcore.paths import remove_nick_state, write_nick_state
+from jmcore.paths import (
+    ComponentLockError,
+    acquire_component_lock,
+    release_component_lock,
+)
 from jmcore.settings import (
     JoinMarketSettings,
     ensure_config_file,
@@ -662,11 +666,11 @@ def start(
 
     async def run_bot() -> None:
         try:
-            # Write nick state file for external tracking and cross-component protection
+            # Acquire component lock (also writes nick state file)
             nick = bot.nick
             data_dir = config.data_dir
-            write_nick_state(data_dir, "maker", nick)
-            logger.info(f"Nick state written to {data_dir}/state/maker.nick")
+            acquire_component_lock(data_dir, "maker", nick)
+            logger.info(f"Component lock acquired: {data_dir}/state/maker.nick")
 
             # Send startup notification immediately (including nick)
             notifier = get_notifier(settings, component_name="Maker")
@@ -681,12 +685,15 @@ def start(
         except asyncio.CancelledError:
             pass
         finally:
-            # Clean up nick state file on shutdown
-            remove_nick_state(config.data_dir, "maker")
+            # Release component lock (removes nick state file)
+            release_component_lock(config.data_dir, "maker")
             await bot.stop()
 
     try:
         run_async(run_bot())
+    except ComponentLockError as e:
+        logger.error(str(e))
+        raise typer.Exit(1)
     except KeyboardInterrupt:
         logger.info("Shutting down maker bot...")
         run_async(bot.stop())
