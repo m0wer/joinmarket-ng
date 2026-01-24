@@ -61,9 +61,29 @@ class UTXOInfo:
     label: str | None = None  # Human-readable label/note (e.g., "cj-out", "deposit", "change")
 
     @property
-    def is_timelocked(self) -> bool:
-        """Check if this is a timelocked (fidelity bond) UTXO."""
+    def is_fidelity_bond(self) -> bool:
+        """Check if this is a fidelity bond UTXO (has a locktime, regardless of expiry)."""
         return self.locktime is not None
+
+    @property
+    def is_timelocked(self) -> bool:
+        """Check if this is a timelocked (fidelity bond) UTXO.
+
+        Alias for is_fidelity_bond for backward compatibility.
+        """
+        return self.is_fidelity_bond
+
+    @property
+    def is_locked(self) -> bool:
+        """Check if this fidelity bond UTXO is currently locked (timelock not yet expired).
+
+        Returns False for non-fidelity-bond UTXOs.
+        """
+        if self.locktime is None:
+            return False
+        import time
+
+        return self.locktime > int(time.time())
 
     @property
     def is_p2wsh(self) -> bool:

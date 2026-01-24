@@ -1072,8 +1072,16 @@ async def _show_wallet_info(
 
         from jmcore.bitcoin import format_amount
 
-        total_balance = await wallet.get_total_balance()
-        print(f"\nTotal Balance: {format_amount(total_balance)}")
+        # Get total balance, separating FB balance
+        total_balance = await wallet.get_total_balance(include_fidelity_bonds=False)
+        fb_balance = await wallet.get_fidelity_bond_balance(0)  # FB only in mixdepth 0
+        if fb_balance > 0:
+            total_with_fb = total_balance + fb_balance
+            print(
+                f"\nTotal Balance: {format_amount(total_with_fb)} ({format_amount(fb_balance)} FB)"
+            )
+        else:
+            print(f"\nTotal Balance: {format_amount(total_balance)}")
 
         # Show pending transactions if any
         from jmwallet.history import cleanup_stale_pending_transactions, get_pending_transactions
@@ -1104,8 +1112,16 @@ async def _show_wallet_info(
             # Simple view - show balance and suggested address per mixdepth
             print("\nBalance by mixdepth:")
             for md in range(5):
-                balance = await wallet.get_balance(md)
-                print(f"  Mixdepth {md}: {balance:>15,} sats")
+                balance = await wallet.get_balance(md, include_fidelity_bonds=False)
+                # For mixdepth 0, also show FB balance if any
+                if md == 0:
+                    fb_balance = await wallet.get_fidelity_bond_balance(md)
+                    if fb_balance > 0:
+                        print(f"  Mixdepth {md}: {balance:>15,} sats (+{fb_balance:,} FB)")
+                    else:
+                        print(f"  Mixdepth {md}: {balance:>15,} sats")
+                else:
+                    print(f"  Mixdepth {md}: {balance:>15,} sats")
 
             print("\nDeposit addresses (next unused):")
             for md in range(5):
@@ -1207,6 +1223,7 @@ def _show_extended_wallet_info(
         print(f"Balance:\t{sats_to_btc(int_balance):.8f}")
 
         # Fidelity bond branch (only for mixdepth 0)
+        bond_addresses: list = []  # Initialize for type checker
         if md == 0:
             bond_addresses = wallet.get_fidelity_bond_addresses_info(gap_limit)
             if bond_addresses:
@@ -1258,7 +1275,18 @@ def _show_extended_wallet_info(
 
         # Total balance for mixdepth
         total_md_balance = ext_balance + int_balance
-        print(f"Balance for mixdepth {md}:\t{sats_to_btc(total_md_balance):.8f}")
+        # For mixdepth 0, show FB balance separately if there are bonds
+        if md == 0 and bond_addresses:
+            bond_balance = sum(addr_info.balance for addr_info in bond_addresses)
+            if bond_balance > 0:
+                print(
+                    f"Balance for mixdepth {md}:\t{sats_to_btc(total_md_balance):.8f} "
+                    f"(+{sats_to_btc(bond_balance):.8f} FB)"
+                )
+            else:
+                print(f"Balance for mixdepth {md}:\t{sats_to_btc(total_md_balance):.8f}")
+        else:
+            print(f"Balance for mixdepth {md}:\t{sats_to_btc(total_md_balance):.8f}")
 
 
 @app.command()

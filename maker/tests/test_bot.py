@@ -509,6 +509,7 @@ class TestWalletRescanAndOfferUpdate:
         wallet.sync_all = AsyncMock()
         wallet.get_total_balance = AsyncMock(return_value=1_000_000)
         wallet.get_balance = AsyncMock(return_value=500_000)
+        wallet.get_balance_for_offers = AsyncMock(return_value=500_000)
         return wallet
 
     @pytest.fixture
@@ -563,7 +564,7 @@ class TestWalletRescanAndOfferUpdate:
         old_balance = 400_000
         new_balance = 600_000
         balance_calls = [old_balance] * 5 + [new_balance] * 5
-        mock_wallet.get_balance = AsyncMock(side_effect=balance_calls)
+        mock_wallet.get_balance_for_offers = AsyncMock(side_effect=balance_calls)
 
         # Mock offer creation
         new_offer = Offer(
@@ -594,7 +595,7 @@ class TestWalletRescanAndOfferUpdate:
         from unittest.mock import AsyncMock
 
         # Same balance before and after sync
-        mock_wallet.get_balance = AsyncMock(return_value=400_000)
+        mock_wallet.get_balance_for_offers = AsyncMock(return_value=400_000)
 
         maker_bot.offer_manager.create_offers = AsyncMock()
         maker_bot._announce_offers = AsyncMock()

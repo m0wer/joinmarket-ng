@@ -83,7 +83,7 @@ class TestFormatUtxoLine:
         utxo = sample_utxos[3]  # The timelocked one
         line = format_utxo_line(utxo)
 
-        assert "[LOCKED]" in line
+        assert "[FB-LOCKED]" in line
 
     def test_format_with_max_width(self, sample_utxos: list[UTXOInfo]) -> None:
         """Test that lines are truncated to max width."""

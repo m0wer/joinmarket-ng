@@ -31,8 +31,13 @@ def format_utxo_line(utxo: UTXOInfo, max_width: int = 80) -> str:
     conf_str = f"{utxo.confirmations:>6} conf"
     md_str = f"m{utxo.mixdepth}"
 
-    # Timelocked indicator
-    lock_indicator = " [LOCKED]" if utxo.is_timelocked else ""
+    # Fidelity bond indicator (locked vs unlocked)
+    fb_indicator = ""
+    if utxo.is_fidelity_bond:
+        if utxo.is_locked:
+            fb_indicator = " [FB-LOCKED]"
+        else:
+            fb_indicator = " [FB]"
 
     # Truncate txid for display
     outpoint = f"{utxo.txid[:8]}...:{utxo.vout}"
@@ -40,7 +45,7 @@ def format_utxo_line(utxo: UTXOInfo, max_width: int = 80) -> str:
     # Label/note for UTXO type
     label_str = f" ({utxo.label})" if utxo.label else ""
 
-    line = f"{md_str:>3} | {amount_str:>18} | {conf_str} | {outpoint}{lock_indicator}{label_str}"
+    line = f"{md_str:>3} | {amount_str:>18} | {conf_str} | {outpoint}{fb_indicator}{label_str}"
 
     if len(line) > max_width:
         line = line[: max_width - 3] + "..."
@@ -71,7 +76,8 @@ def _run_selector(
     curses.init_pair(1, curses.COLOR_GREEN, -1)  # Selected items
     curses.init_pair(2, curses.COLOR_YELLOW, -1)  # Current cursor
     curses.init_pair(3, curses.COLOR_CYAN, -1)  # Header
-    curses.init_pair(4, curses.COLOR_RED, -1)  # Locked UTXOs
+    curses.init_pair(4, curses.COLOR_RED, -1)  # Locked fidelity bonds (cannot be spent)
+    curses.init_pair(5, curses.COLOR_MAGENTA, -1)  # Unlocked fidelity bonds (can be spent)
 
     selected: set[int] = set()
     cursor_pos = 0
@@ -123,8 +129,13 @@ def _run_selector(
                 attr = curses.color_pair(2) | curses.A_REVERSE
             elif is_selected:
                 attr = curses.color_pair(1) | curses.A_BOLD
-            elif utxo.is_timelocked:
-                attr = curses.color_pair(4)
+            elif utxo.is_fidelity_bond:
+                if utxo.is_locked:
+                    # Locked FB - red, dimmed (cannot be spent yet)
+                    attr = curses.color_pair(4) | curses.A_DIM
+                else:
+                    # Unlocked FB - magenta (can be spent but should be careful)
+                    attr = curses.color_pair(5)
             else:
                 attr = curses.A_NORMAL
 

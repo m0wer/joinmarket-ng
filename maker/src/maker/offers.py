@@ -33,7 +33,7 @@ class OfferManager:
         Create offers based on wallet balance and configuration.
 
         Logic:
-        1. Find mixdepth with maximum balance
+        1. Find mixdepth with maximum balance available for offers (excludes fidelity bonds)
         2. Calculate available amount (balance - dust - max_txfee)
         3. Create offer(s) with configured fee structure(s)
         4. Attach fidelity bond value if available
@@ -44,7 +44,8 @@ class OfferManager:
         try:
             balances = {}
             for mixdepth in range(self.wallet.mixdepth_count):
-                balance = await self.wallet.get_balance(mixdepth)
+                # Use balance for offers (excludes fidelity bonds)
+                balance = await self.wallet.get_balance_for_offers(mixdepth)
                 balances[mixdepth] = balance
 
             available_mixdepths = {md: bal for md, bal in balances.items() if bal > 0}

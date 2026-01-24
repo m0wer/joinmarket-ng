@@ -297,3 +297,194 @@ class TestFindUTXOByAddress:
         assert utxo.value == 100_000
         assert utxo.txid == "a" * 64
         assert utxo.mixdepth == 0
+
+
+@pytest.fixture
+def wallet_with_timelocked(test_mnemonic: str, mock_backend) -> WalletService:
+    """Create a WalletService with timelocked (fidelity bond) UTXOs."""
+    ws = WalletService(
+        mnemonic=test_mnemonic,
+        backend=mock_backend,
+        network="regtest",
+        mixdepth_count=5,
+        gap_limit=20,
+    )
+
+    # Pre-populate UTXO cache with a mix of regular and timelocked UTXOs
+    ws.utxo_cache = {
+        0: [
+            # Regular UTXO (P2WPKH)
+            UTXOInfo(
+                txid="a" * 64,
+                vout=0,
+                value=100_000,
+                address="bcrt1test1",
+                confirmations=10,
+                scriptpubkey="0014" + "aa" * 20,  # P2WPKH
+                path="m/84'/0'/0'/0/0",
+                mixdepth=0,
+            ),
+            # Timelocked fidelity bond UTXO (P2WSH with locktime)
+            UTXOInfo(
+                txid="b" * 64,
+                vout=0,
+                value=500_000,  # Large timelocked bond
+                address="bcrt1timelocked",
+                confirmations=100,
+                scriptpubkey="0020" + "bb" * 32,  # P2WSH
+                path="m/84'/0'/0'/2/0:1893456000",  # Branch 2 with locktime
+                mixdepth=0,
+                locktime=1893456000,  # Future locktime
+            ),
+            # Regular UTXO (P2WPKH)
+            UTXOInfo(
+                txid="c" * 64,
+                vout=0,
+                value=50_000,
+                address="bcrt1test3",
+                confirmations=5,
+                scriptpubkey="0014" + "cc" * 20,  # P2WPKH
+                path="m/84'/0'/0'/0/2",
+                mixdepth=0,
+            ),
+        ],
+        1: [
+            # Regular UTXO in mixdepth 1
+            UTXOInfo(
+                txid="d" * 64,
+                vout=0,
+                value=200_000,
+                address="bcrt1test4",
+                confirmations=10,
+                scriptpubkey="0014" + "dd" * 20,  # P2WPKH
+                path="m/84'/0'/1'/0/0",
+                mixdepth=1,
+            ),
+        ],
+    }
+
+    return ws
+
+
+class TestFidelityBondUTXOFiltering:
+    """Tests for fidelity bond UTXO filtering in balance and selection."""
+
+    @pytest.mark.asyncio
+    async def test_get_balance_includes_fidelity_bonds_by_default(
+        self, wallet_with_timelocked: WalletService
+    ):
+        """get_balance() includes fidelity bond UTXOs by default."""
+        balance = await wallet_with_timelocked.get_balance(0)
+        # Should include all: 100k + 500k + 50k = 650k
+        assert balance == 650_000
+
+    @pytest.mark.asyncio
+    async def test_get_balance_exclude_fidelity_bonds(self, wallet_with_timelocked: WalletService):
+        """get_balance(include_fidelity_bonds=False) excludes fidelity bond UTXOs."""
+        balance = await wallet_with_timelocked.get_balance(0, include_fidelity_bonds=False)
+        # Should exclude 500k fidelity bond: 100k + 50k = 150k
+        assert balance == 150_000
+
+    @pytest.mark.asyncio
+    async def test_get_balance_for_offers_excludes_fidelity_bonds(
+        self, wallet_with_timelocked: WalletService
+    ):
+        """get_balance_for_offers() excludes fidelity bond UTXOs."""
+        balance = await wallet_with_timelocked.get_balance_for_offers(0)
+        # Same as get_balance(include_fidelity_bonds=False)
+        assert balance == 150_000
+
+    @pytest.mark.asyncio
+    async def test_get_fidelity_bond_balance(self, wallet_with_timelocked: WalletService):
+        """get_fidelity_bond_balance() returns only fidelity bond UTXOs."""
+        balance = await wallet_with_timelocked.get_fidelity_bond_balance(0)
+        # Should only include the 500k fidelity bond UTXO
+        assert balance == 500_000
+
+    @pytest.mark.asyncio
+    async def test_get_fidelity_bond_balance_empty_mixdepth(
+        self, wallet_with_timelocked: WalletService
+    ):
+        """get_fidelity_bond_balance() returns 0 for mixdepth without fidelity bonds."""
+        balance = await wallet_with_timelocked.get_fidelity_bond_balance(1)
+        # Mixdepth 1 has no fidelity bond UTXOs
+        assert balance == 0
+
+    @pytest.mark.asyncio
+    async def test_get_total_balance_includes_fidelity_bonds_by_default(
+        self, wallet_with_timelocked: WalletService
+    ):
+        """get_total_balance() includes fidelity bonds by default."""
+        balance = await wallet_with_timelocked.get_total_balance()
+        # MD0: 650k, MD1: 200k = 850k
+        assert balance == 850_000
+
+    @pytest.mark.asyncio
+    async def test_get_total_balance_exclude_fidelity_bonds(
+        self, wallet_with_timelocked: WalletService
+    ):
+        """get_total_balance(include_fidelity_bonds=False) excludes fidelity bonds."""
+        balance = await wallet_with_timelocked.get_total_balance(include_fidelity_bonds=False)
+        # MD0: 150k, MD1: 200k = 350k
+        assert balance == 350_000
+
+    def test_select_utxos_excludes_fidelity_bonds_by_default(
+        self, wallet_with_timelocked: WalletService
+    ):
+        """select_utxos() excludes fidelity bond UTXOs by default."""
+        selected = wallet_with_timelocked.select_utxos(0, 100_000, min_confirmations=1)
+        # Should select 100k UTXO, not the 500k fidelity bond
+        assert len(selected) == 1
+        assert selected[0].value == 100_000
+        assert not selected[0].is_fidelity_bond
+
+    def test_select_utxos_cannot_reach_fidelity_bond_amount(
+        self, wallet_with_timelocked: WalletService
+    ):
+        """select_utxos() fails when needing fidelity bond funds to reach target."""
+        # Request 200k - more than non-FB 150k, but less than total 650k
+        with pytest.raises(ValueError, match="Insufficient funds"):
+            wallet_with_timelocked.select_utxos(0, 200_000, min_confirmations=1)
+
+    def test_get_all_utxos_excludes_fidelity_bonds_by_default(
+        self, wallet_with_timelocked: WalletService
+    ):
+        """get_all_utxos() excludes fidelity bond UTXOs by default."""
+        all_utxos = wallet_with_timelocked.get_all_utxos(0, min_confirmations=1)
+        # Should only include 2 regular UTXOs, not the fidelity bond
+        assert len(all_utxos) == 2
+        assert all(not u.is_fidelity_bond for u in all_utxos)
+
+    def test_get_all_utxos_include_fidelity_bonds(self, wallet_with_timelocked: WalletService):
+        """get_all_utxos(include_fidelity_bonds=True) includes fidelity bond UTXOs."""
+        all_utxos = wallet_with_timelocked.get_all_utxos(
+            0, min_confirmations=1, include_fidelity_bonds=True
+        )
+        # Should include all 3 UTXOs
+        assert len(all_utxos) == 3
+        assert any(u.is_fidelity_bond for u in all_utxos)
+
+    def test_select_utxos_with_merge_excludes_fidelity_bonds_by_default(
+        self, wallet_with_timelocked: WalletService
+    ):
+        """select_utxos_with_merge() excludes fidelity bond UTXOs by default."""
+        # Use greedy to get all eligible UTXOs
+        selected = wallet_with_timelocked.select_utxos_with_merge(
+            0, 50_000, min_confirmations=1, merge_algorithm="greedy"
+        )
+        # Should only include 2 regular UTXOs
+        assert len(selected) == 2
+        assert all(not u.is_fidelity_bond for u in selected)
+        assert sum(u.value for u in selected) == 150_000
+
+    def test_select_utxos_with_merge_include_fidelity_bonds(
+        self, wallet_with_timelocked: WalletService
+    ):
+        """select_utxos_with_merge(include_fidelity_bonds=True) includes fidelity bonds."""
+        selected = wallet_with_timelocked.select_utxos_with_merge(
+            0, 50_000, min_confirmations=1, merge_algorithm="greedy", include_fidelity_bonds=True
+        )
+        # Should include all 3 UTXOs
+        assert len(selected) == 3
+        assert any(u.is_fidelity_bond for u in selected)
+        assert sum(u.value for u in selected) == 650_000

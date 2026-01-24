@@ -529,7 +529,8 @@ class CoinJoinSession:
 
             balances = {}
             for md in range(self.wallet.mixdepth_count):
-                balance = await self.wallet.get_balance(md)
+                # Use balance for offers (excludes fidelity bonds)
+                balance = await self.wallet.get_balance_for_offers(md)
                 balances[md] = balance
 
             eligible_mixdepths = {md: bal for md, bal in balances.items() if bal >= required_amount}

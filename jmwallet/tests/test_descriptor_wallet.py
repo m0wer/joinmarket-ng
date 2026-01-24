@@ -1142,6 +1142,88 @@ class TestFidelityBondSync:
             f"Bond address {bond_address} not found in imported descriptors: {imported_descs_strs}"
         )
 
+    @pytest.mark.asyncio
+    async def test_sync_with_external_fidelity_bond(self) -> None:
+        """Test that sync correctly handles external fidelity bonds (index=-1).
+
+        External fidelity bonds are bonds created from cold storage wallets.
+        They have index=-1 and are stored in the bond registry. They must be
+        properly recognized during sync to avoid being counted as spendable funds.
+        """
+        from jmwallet.backends.base import UTXO
+        from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
+        from jmwallet.wallet.service import WalletService
+
+        # Create backend with mock
+        backend = DescriptorWalletBackend(wallet_name="test_external_fb")
+        backend._wallet_loaded = True
+        backend._descriptors_imported = True
+
+        # External fidelity bond address (from cold storage, not derived from this wallet)
+        external_bond_address = "bc1qxhxgfy77xl7fzdc3ayx27n03fh6dctkgd6tlgufpvzjzzcpmklgs4sdxyl"
+        external_bond_locktime = 1738368000  # 2026-02-01 00:00:00 UTC
+        external_bond_index = -1  # -1 indicates external/cold storage bond
+        external_bond_value = 29791
+
+        # Mock get_all_utxos to return the external bond UTXO
+        async def mock_get_all_utxos() -> list[UTXO]:
+            return [
+                # External fidelity bond UTXO (P2WSH)
+                UTXO(
+                    txid="external" * 7 + "ab",
+                    vout=0,
+                    value=external_bond_value,
+                    address=external_bond_address,
+                    confirmations=100,
+                    scriptpubkey="0020" + "b" * 64,  # P2WSH scriptPubKey
+                ),
+            ]
+
+        backend.get_all_utxos = mock_get_all_utxos  # type: ignore[method-assign]
+
+        # Create wallet service with test mnemonic
+        test_mnemonic = (
+            "abandon abandon abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon about"
+        )
+        wallet = WalletService(
+            mnemonic=test_mnemonic,
+            backend=backend,
+            network="mainnet",
+            mixdepth_count=5,
+        )
+
+        # Sync with external fidelity bond address (index=-1)
+        fidelity_bond_addresses = [
+            (external_bond_address, external_bond_locktime, external_bond_index)
+        ]
+        result = await wallet.sync_with_descriptor_wallet(fidelity_bond_addresses)
+
+        # Verify that the external bond UTXO was found in mixdepth 0
+        mixdepth_0_utxos = result.get(0, [])
+
+        # Find the bond UTXO in the results
+        bond_utxos = [u for u in mixdepth_0_utxos if u.address == external_bond_address]
+        assert len(bond_utxos) == 1, f"Expected 1 bond UTXO, found {len(bond_utxos)}"
+
+        bond_utxo = bond_utxos[0]
+        assert bond_utxo.value == external_bond_value
+        assert bond_utxo.locktime == external_bond_locktime
+        assert bond_utxo.is_fidelity_bond is True
+        assert bond_utxo.is_timelocked is True  # Alias should also work
+
+        # Verify that the bond is NOT counted in get_balance_for_offers
+        balance_for_offers = await wallet.get_balance_for_offers(0)
+        assert balance_for_offers == 0, (
+            f"External bond should NOT be included in offers balance, got {balance_for_offers}"
+        )
+
+        # Verify that get_fidelity_bond_balance correctly returns the bond value
+        fb_balance = await wallet.get_fidelity_bond_balance(0)
+        assert fb_balance == external_bond_value, (
+            f"Expected FB balance {external_bond_value}, got {fb_balance}"
+        )
+
 
 # =============================================================================
 # Address History Tests

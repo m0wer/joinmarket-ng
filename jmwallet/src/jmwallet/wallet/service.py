@@ -1010,17 +1010,24 @@ class WalletService:
         fidelity_bond_utxos: list[UTXOInfo] = []
 
         # Build fidelity bond address lookup
+        # Note: Normalize addresses to lowercase for consistent comparison
+        # (bech32 addresses are case-insensitive but Python string comparison is not)
         bond_address_to_info: dict[str, tuple[int, int]] = {}
         if fidelity_bond_addresses:
             if not hasattr(self, "fidelity_bond_locktime_cache"):
                 self.fidelity_bond_locktime_cache = {}
             for address, locktime, index in fidelity_bond_addresses:
-                bond_address_to_info[address] = (locktime, index)
-                self.address_cache[address] = (0, FIDELITY_BOND_BRANCH, index)
-                self.fidelity_bond_locktime_cache[address] = locktime
+                addr_lower = address.lower()
+                bond_address_to_info[addr_lower] = (locktime, index)
+                self.address_cache[addr_lower] = (0, FIDELITY_BOND_BRANCH, index)
+                self.fidelity_bond_locktime_cache[addr_lower] = locktime
+            logger.debug(f"Registered {len(bond_address_to_info)} fidelity bond addresses for sync")
 
         for utxo in all_utxos:
-            address = utxo.address
+            # Normalize address to lowercase for consistent comparison
+            # (bech32 addresses are case-insensitive but Python string comparison is not)
+            original_address = utxo.address
+            address = original_address.lower()
 
             # Check if this is a fidelity bond
             if address in bond_address_to_info:
@@ -1032,7 +1039,7 @@ class WalletService:
                     txid=utxo.txid,
                     vout=utxo.vout,
                     value=utxo.value,
-                    address=address,
+                    address=original_address,  # Preserve original case
                     confirmations=utxo.confirmations,
                     scriptpubkey=utxo.scriptpubkey,
                     path=path,
@@ -1041,6 +1048,10 @@ class WalletService:
                     locktime=locktime,
                 )
                 fidelity_bond_utxos.append(utxo_info)
+                logger.debug(
+                    f"Recognized fidelity bond UTXO: {address[:20]}... "
+                    f"value={utxo.value} locktime={locktime}"
+                )
                 continue
 
             # Try to find address in cache (should be pre-populated now)
@@ -1052,14 +1063,80 @@ class WalletService:
                 # Check if this is a P2WSH address (likely a fidelity bond we don't know about)
                 # P2WSH: OP_0 (0x00) + PUSH32 (0x20) + 32-byte hash = 68 hex chars
                 if len(utxo.scriptpubkey) == 68 and utxo.scriptpubkey.startswith("0020"):
-                    # Silently skip P2WSH addresses (fidelity bonds)
-                    # as they can't be used for sending
-                    logger.trace(f"Skipping P2WSH address {address} (likely fidelity bond)")
+                    # Check if this P2WSH address is a known fidelity bond from the registry
+                    # This handles external bonds that may have been imported but not matched above
+                    if hasattr(self, "fidelity_bond_locktime_cache"):
+                        locktime = self.fidelity_bond_locktime_cache.get(address)
+                        if locktime is not None:
+                            # This is a known fidelity bond from the registry
+                            # Get index from address_cache (should have been set during import)
+                            cached = self.address_cache.get(address)
+                            index = cached[2] if cached else -1
+                            path = f"{self.root_path}/0'/{FIDELITY_BOND_BRANCH}/{index}:{locktime}"
+                            self.addresses_with_history.add(address)
+                            utxo_info = UTXOInfo(
+                                txid=utxo.txid,
+                                vout=utxo.vout,
+                                value=utxo.value,
+                                address=original_address,  # Preserve original case
+                                confirmations=utxo.confirmations,
+                                scriptpubkey=utxo.scriptpubkey,
+                                path=path,
+                                mixdepth=0,
+                                height=utxo.height,
+                                locktime=locktime,
+                            )
+                            fidelity_bond_utxos.append(utxo_info)
+                            logger.debug(
+                                f"Recognized P2WSH as fidelity bond from registry: "
+                                f"{address[:20]}... locktime={locktime}"
+                            )
+                            continue
+                    # Unknown P2WSH - silently skip (fidelity bonds we don't know about)
+                    logger.trace(f"Skipping unknown P2WSH address {address}")
                     continue
                 logger.debug(f"Unknown address {address}, skipping")
                 continue
 
             mixdepth, change, index = path_info
+
+            # Check if this is a fidelity bond address (branch 2)
+            # This handles cases where the address was added to address_cache but
+            # the UTXO wasn't matched in bond_address_to_info (e.g., external bonds)
+            if change == FIDELITY_BOND_BRANCH:
+                # Get locktime from cache
+                locktime = None
+                if hasattr(self, "fidelity_bond_locktime_cache"):
+                    locktime = self.fidelity_bond_locktime_cache.get(address)
+
+                if locktime is not None:
+                    path = f"{self.root_path}/0'/{FIDELITY_BOND_BRANCH}/{index}:{locktime}"
+                    self.addresses_with_history.add(address)
+                    utxo_info = UTXOInfo(
+                        txid=utxo.txid,
+                        vout=utxo.vout,
+                        value=utxo.value,
+                        address=original_address,  # Preserve original case
+                        confirmations=utxo.confirmations,
+                        scriptpubkey=utxo.scriptpubkey,
+                        path=path,
+                        mixdepth=0,
+                        height=utxo.height,
+                        locktime=locktime,
+                    )
+                    fidelity_bond_utxos.append(utxo_info)
+                    logger.debug(
+                        f"Recognized fidelity bond from cache: "
+                        f"{address[:20]}... locktime={locktime} index={index}"
+                    )
+                    continue
+                else:
+                    # Fidelity bond address without locktime - skip with warning
+                    logger.warning(
+                        f"Fidelity bond address {address[:20]}... found without locktime, skipping"
+                    )
+                    continue
+
             path = f"{self.root_path}/{mixdepth}'/{change}/{index}"
 
             # Track that this address has had UTXOs
@@ -1069,7 +1146,7 @@ class WalletService:
                 txid=utxo.txid,
                 vout=utxo.vout,
                 value=utxo.value,
-                address=address,
+                address=original_address,  # Preserve original case
                 confirmations=utxo.confirmations,
                 scriptpubkey=utxo.scriptpubkey,
                 path=path,
@@ -1421,13 +1498,29 @@ class WalletService:
 
         return None
 
-    async def get_balance(self, mixdepth: int) -> int:
-        """Get balance for a mixdepth"""
+    async def get_balance(self, mixdepth: int, include_fidelity_bonds: bool = True) -> int:
+        """Get balance for a mixdepth.
+
+        Args:
+            mixdepth: Mixdepth to get balance for
+            include_fidelity_bonds: If True (default), include fidelity bond UTXOs.
+                                    If False, exclude fidelity bond UTXOs.
+        """
         if mixdepth not in self.utxo_cache:
             await self.sync_mixdepth(mixdepth)
 
         utxos = self.utxo_cache.get(mixdepth, [])
+        if not include_fidelity_bonds:
+            utxos = [u for u in utxos if not u.is_fidelity_bond]
         return sum(utxo.value for utxo in utxos)
+
+    async def get_balance_for_offers(self, mixdepth: int) -> int:
+        """Get balance available for maker offers (excludes fidelity bond UTXOs).
+
+        Fidelity bonds should never be automatically spent in CoinJoins,
+        so makers must exclude them when calculating available offer amounts.
+        """
+        return await self.get_balance(mixdepth, include_fidelity_bonds=False)
 
     async def get_utxos(self, mixdepth: int) -> list[UTXOInfo]:
         """Get UTXOs for a mixdepth, syncing if not cached."""
@@ -1455,13 +1548,28 @@ class WalletService:
                     return utxo
         return None
 
-    async def get_total_balance(self) -> int:
-        """Get total balance across all mixdepths"""
+    async def get_total_balance(self, include_fidelity_bonds: bool = True) -> int:
+        """Get total balance across all mixdepths.
+
+        Args:
+            include_fidelity_bonds: If True (default), include fidelity bond UTXOs.
+                                    If False, exclude fidelity bond UTXOs.
+        """
         total = 0
         for mixdepth in range(self.mixdepth_count):
-            balance = await self.get_balance(mixdepth)
+            balance = await self.get_balance(
+                mixdepth, include_fidelity_bonds=include_fidelity_bonds
+            )
             total += balance
         return total
+
+    async def get_fidelity_bond_balance(self, mixdepth: int) -> int:
+        """Get balance of fidelity bond UTXOs for a mixdepth."""
+        if mixdepth not in self.utxo_cache:
+            await self.sync_mixdepth(mixdepth)
+
+        utxos = self.utxo_cache.get(mixdepth, [])
+        return sum(utxo.value for utxo in utxos if utxo.is_fidelity_bond)
 
     def select_utxos(
         self,
@@ -1469,6 +1577,7 @@ class WalletService:
         target_amount: int,
         min_confirmations: int = 1,
         include_utxos: list[UTXOInfo] | None = None,
+        include_fidelity_bonds: bool = False,
     ) -> list[UTXOInfo]:
         """
         Select UTXOs for spending from a mixdepth.
@@ -1479,10 +1588,17 @@ class WalletService:
             target_amount: Target amount in satoshis
             min_confirmations: Minimum confirmations required
             include_utxos: List of UTXOs that MUST be included in selection
+            include_fidelity_bonds: If True, include fidelity bond UTXOs in automatic
+                                    selection. Defaults to False to prevent accidentally
+                                    spending bonds.
         """
         utxos = self.utxo_cache.get(mixdepth, [])
 
         eligible = [utxo for utxo in utxos if utxo.confirmations >= min_confirmations]
+
+        # Filter out fidelity bond UTXOs by default
+        if not include_fidelity_bonds:
+            eligible = [utxo for utxo in eligible if not utxo.is_fidelity_bond]
 
         # Filter out included UTXOs from eligible pool to avoid duplicates
         included_txid_vout = set()
@@ -1520,6 +1636,7 @@ class WalletService:
         self,
         mixdepth: int,
         min_confirmations: int = 1,
+        include_fidelity_bonds: bool = False,
     ) -> list[UTXOInfo]:
         """
         Get all UTXOs from a mixdepth for sweep operations.
@@ -1530,12 +1647,17 @@ class WalletService:
         Args:
             mixdepth: Mixdepth to get UTXOs from
             min_confirmations: Minimum confirmations required
+            include_fidelity_bonds: If True, include fidelity bond UTXOs.
+                                    Defaults to False to prevent accidentally
+                                    spending bonds in sweeps.
 
         Returns:
             List of all eligible UTXOs in the mixdepth
         """
         utxos = self.utxo_cache.get(mixdepth, [])
         eligible = [utxo for utxo in utxos if utxo.confirmations >= min_confirmations]
+        if not include_fidelity_bonds:
+            eligible = [utxo for utxo in eligible if not utxo.is_fidelity_bond]
         return eligible
 
     def select_utxos_with_merge(
@@ -1544,6 +1666,7 @@ class WalletService:
         target_amount: int,
         min_confirmations: int = 1,
         merge_algorithm: str = "default",
+        include_fidelity_bonds: bool = False,
     ) -> list[UTXOInfo]:
         """
         Select UTXOs with merge algorithm for maker UTXO consolidation.
@@ -1561,6 +1684,9 @@ class WalletService:
                 - "gradual": +1 additional UTXO beyond minimum
                 - "greedy": ALL eligible UTXOs from the mixdepth
                 - "random": +0 to +2 additional UTXOs randomly
+            include_fidelity_bonds: If True, include fidelity bond UTXOs.
+                                    Defaults to False since they should never be
+                                    automatically spent in CoinJoins.
 
         Returns:
             List of selected UTXOs
@@ -1572,6 +1698,10 @@ class WalletService:
 
         utxos = self.utxo_cache.get(mixdepth, [])
         eligible = [utxo for utxo in utxos if utxo.confirmations >= min_confirmations]
+
+        # Filter out fidelity bond UTXOs by default
+        if not include_fidelity_bonds:
+            eligible = [utxo for utxo in eligible if not utxo.is_fidelity_bond]
 
         # Sort by value descending for efficient selection
         eligible.sort(key=lambda u: u.value, reverse=True)

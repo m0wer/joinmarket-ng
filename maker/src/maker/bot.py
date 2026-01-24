@@ -911,10 +911,10 @@ class MakerBot:
         2. Re-syncs the wallet
         3. If max balance changed, recreates and re-announces offers
         """
-        # Get current max balance before resync
+        # Get current max balance available for offers before resync (excludes fidelity bonds)
         old_max_balance = 0
         for mixdepth in range(self.wallet.mixdepth_count):
-            balance = await self.wallet.get_balance(mixdepth)
+            balance = await self.wallet.get_balance_for_offers(mixdepth)
             old_max_balance = max(old_max_balance, balance)
 
         # Sync wallet (use descriptor wallet if available for fast sync)
@@ -932,10 +932,10 @@ class MakerBot:
         # Update pending history immediately after sync (in case of restart)
         await self._update_pending_history()
 
-        # Get new max balance after resync
+        # Get new max balance for offers after resync (excludes fidelity bonds)
         new_max_balance = 0
         for mixdepth in range(self.wallet.mixdepth_count):
-            balance = await self.wallet.get_balance(mixdepth)
+            balance = await self.wallet.get_balance_for_offers(mixdepth)
             new_max_balance = max(new_max_balance, balance)
 
         total_balance = await self.wallet.get_total_balance()

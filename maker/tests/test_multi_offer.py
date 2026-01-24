@@ -161,6 +161,7 @@ class TestOfferManagerMultiOffer:
         wallet.mixdepth_count = 5
         wallet.utxo_cache = {}
         wallet.get_balance = AsyncMock(return_value=1_000_000)
+        wallet.get_balance_for_offers = AsyncMock(return_value=1_000_000)
         return wallet
 
     @pytest.fixture
@@ -255,6 +256,7 @@ class TestOfferManagerMultiOffer:
         # Need to account for dust_threshold (27300) being subtracted
         # 120_000 - 27300 = 92700 (not enough for 100k, but enough for 50k)
         mock_wallet.get_balance = AsyncMock(return_value=120_000)
+        mock_wallet.get_balance_for_offers = AsyncMock(return_value=120_000)
 
         config = MakerConfig(
             mnemonic="test " * 12,

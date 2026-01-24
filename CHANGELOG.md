@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Maker Advertising Fidelity Bond Funds as Spendable**: Fixed a bug where makers would include fidelity bond (FB) UTXOs in their advertised max size, leading to failed CoinJoins when takers requested amounts that could only be satisfied by including the FB funds. The fix adds `get_balance_for_offers()` method that excludes all FB UTXOs, and updates the maker offer creation and mixdepth selection to use this balance. UTXO selection methods (`select_utxos`, `select_utxos_with_merge`, `get_all_utxos`) now exclude FB UTXOs by default via the `include_fidelity_bonds` parameter. The `jm-wallet info` command now shows FB balance separately.
+
+- **External Fidelity Bonds Not Recognized During Sync**: Fixed a bug where external fidelity bonds (cold storage bonds with `index=-1`) were not being properly recognized during wallet sync. These UTXOs were incorrectly treated as regular spendable funds instead of fidelity bonds, causing them to be included in offer balances and potentially leading to failed CoinJoins. The fix adds additional checks in `sync_with_descriptor_wallet()` to recognize fidelity bond addresses from the registry even when they don't match through the primary lookup path.
+
 ## [0.11.4] - 2026-01-23
 
 ### Fixed
