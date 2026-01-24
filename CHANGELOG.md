@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.5] - 2026-01-24
+
 ### Fixed
 
 - **Maker Advertising Fidelity Bond Funds as Spendable**: Fixed a bug where makers would include fidelity bond (FB) UTXOs in their advertised max size, leading to failed CoinJoins when takers requested amounts that could only be satisfied by including the FB funds. The fix adds `get_balance_for_offers()` method that excludes all FB UTXOs, and updates the maker offer creation and mixdepth selection to use this balance. UTXO selection methods (`select_utxos`, `select_utxos_with_merge`, `get_all_utxos`) now exclude FB UTXOs by default via the `include_fidelity_bonds` parameter. The `jm-wallet info` command now shows FB balance separately.
@@ -671,6 +673,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tor configuration instructions.
 
 [Unreleased]: https://github.com/m0wer/joinmarket-ng/compare/0.9.0...HEAD
+[0.11.5]: https://github.com/m0wer/joinmarket-ng/compare/0.11.4...0.11.5
 [0.11.4]: https://github.com/m0wer/joinmarket-ng/compare/0.11.3...0.11.4
 [0.11.3]: https://github.com/m0wer/joinmarket-ng/compare/0.11.2...0.11.3
 [0.11.2]: https://github.com/m0wer/joinmarket-ng/compare/0.11.1...0.11.2
