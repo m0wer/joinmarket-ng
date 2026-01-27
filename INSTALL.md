@@ -373,6 +373,53 @@ Require both SOCKS proxy and control port:
 
 Makers use the control port to create **ephemeral hidden services** dynamically at startup, allowing them to be reachable via .onion addresses without pre-configuring hidden services in torrc.
 
+### DoS Defense for Hidden Services (Makers)
+
+JoinMarket-NG supports Tor-level DoS protection for hidden services, but **the available protections depend on your Tor version and hidden service type**.
+
+#### Ephemeral Hidden Services (JoinMarket-NG default)
+
+When using ephemeral hidden services (created via ADD_ONION), DoS protection is limited:
+
+- **PoW Defense via ADD_ONION**: Requires **Tor 0.4.9.2+** (not yet in stable releases as of early 2026)
+- **Introduction Point Rate Limiting**: **NOT supported** for ephemeral services (Tor protocol limitation)
+
+Most current Tor installations (0.4.8.x) do **not** support PoW defense for ephemeral hidden services. JoinMarket-NG will log a warning and create the service without PoW protection in this case.
+
+#### Persistent Hidden Services (Recommended for DoS Protection)
+
+For **full DoS protection**, use persistent hidden services defined in torrc. This is recommended for makers running the **reference implementation** or anyone experiencing DoS attacks:
+
+```conf
+# Maker hidden service
+HiddenServiceDir /var/lib/tor/maker_hs
+HiddenServiceVersion 3
+HiddenServicePort 8765 127.0.0.1:8765
+
+## Introduction Point DoS Defense (Tor 0.4.2+)
+# Rate limit connection attempts at introduction points
+HiddenServiceEnableIntroDoSDefense 1
+HiddenServiceEnableIntroDoSRatePerSec 25
+HiddenServiceEnableIntroDoSBurstPerSec 200
+
+## Proof-of-Work Defense (Tor 0.4.8+ with --enable-gpl build)
+# Clients solve computational puzzles to connect; effort auto-scales under attack
+HiddenServicePoWDefensesEnabled 1
+HiddenServicePoWQueueRate 250
+HiddenServicePoWQueueBurst 2500
+```
+
+**Version Summary:**
+| Feature | Ephemeral HS (ADD_ONION) | Persistent HS (torrc) |
+|---------|-------------------------|----------------------|
+| Intro Point Rate Limiting | Not supported | Tor 0.4.2+ |
+| PoW Defense | Tor 0.4.9.2+ | Tor 0.4.8+ (with --enable-gpl) |
+
+**Notes:**
+- PoW defense requires Tor built with `--enable-gpl` flag; check with `tor --version`
+- Older Tor versions without PoW support will ignore those lines gracefully
+- Reference: https://community.torproject.org/onion-services/advanced/dos/
+
 ### Docker Environments
 
 The automated setup configures Tor for localhost access. For Docker deployments, see the test configurations in `tests/e2e/reference/tor/conf/torrc` for examples of network-accessible configurations (binding to 0.0.0.0).

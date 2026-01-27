@@ -9,6 +9,7 @@ from enum import Enum
 
 from jmcore.config import TorControlConfig, WalletConfig
 from jmcore.models import OfferType
+from jmcore.tor_control import HiddenServiceDoSConfig
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
@@ -160,6 +161,17 @@ class MakerConfig(WalletConfig):
     tor_control: TorControlConfig = Field(
         default_factory=TorControlConfig,
         description="Tor control port configuration",
+    )
+
+    # Tor hidden service DoS defense configuration
+    # These settings are applied at the Tor level for protection before traffic reaches the app
+    hidden_service_dos: HiddenServiceDoSConfig = Field(
+        default_factory=HiddenServiceDoSConfig,
+        description=(
+            "Tor-level DoS defense for the hidden service. "
+            "Includes intro point rate limiting and optional Proof-of-Work. "
+            "See https://community.torproject.org/onion-services/advanced/dos/"
+        ),
     )
 
     # Multi-offer configuration (takes precedence over single-offer fields when non-empty)

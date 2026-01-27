@@ -150,7 +150,9 @@ from jmcore.timenumber import (
 )
 from jmcore.tor_control import (
     EphemeralHiddenService,
+    HiddenServiceDoSConfig,
     TorAuthenticationError,
+    TorCapabilities,
     TorControlClient,
     TorControlError,
     TorHiddenServiceError,
@@ -246,7 +248,9 @@ __all__ = [
     "TokenBucket",
     # Tor
     "EphemeralHiddenService",
+    "HiddenServiceDoSConfig",
     "TorAuthenticationError",
+    "TorCapabilities",
     "TorControlClient",
     "TorControlError",
     "TorHiddenServiceError",

@@ -519,6 +519,7 @@ services:
       - TOR__SOCKS_PORT=9050
       - TOR__CONTROL_HOST=jm-tor
       - TOR__CONTROL_PORT=9051
+      - TOR__COOKIE_PATH=/var/lib/tor/control_auth_cookie
       - MAKER__ONION_SERVING_HOST=0.0.0.0
       - MAKER__ONION_SERVING_PORT=5000
     volumes:

@@ -87,6 +87,10 @@ class OrderbookRateLimiter:
     1. !orderbook responses include fidelity bond proofs which are expensive to compute
     2. Unlimited responses can flood log files
     3. A bad actor can exhaust maker resources by spamming requests
+
+    Note: This limiter tracks by peer_id which can be either a nick (for directory messages)
+    or a connection address (for direct connections). For direct connections, use the
+    peer address to prevent nick rotation attacks.
     """
 
     def __init__(
@@ -301,6 +305,220 @@ class OrderbookRateLimiter:
         }
 
 
+class DirectConnectionRateLimiter:
+    """
+    Rate limiter for direct hidden service connections.
+
+    Unlike the nick-based OrderbookRateLimiter, this tracks by connection address
+    to prevent nick rotation attacks where attackers use a different nick per request.
+
+    Since Tor creates a new circuit for each connection, the "peer address" from
+    the local perspective will be 127.0.0.1:random_port. However, we can still
+    track by this local port since each attacking circuit gets a unique port.
+
+    This provides:
+    1. Per-connection message rate limiting (general flood protection)
+    2. Per-connection orderbook request limiting (specific attack mitigation)
+    3. Connection banning after excessive violations
+    """
+
+    def __init__(
+        self,
+        # General message rate limiting
+        message_rate_per_sec: float = 5.0,
+        message_burst: int = 20,
+        # Orderbook-specific limiting (stricter)
+        orderbook_interval: float = 30.0,  # Longer interval for direct connections
+        orderbook_ban_threshold: int = 10,  # Faster banning for direct attackers
+        ban_duration: float = 3600.0,
+    ):
+        """
+        Initialize the direct connection rate limiter.
+
+        Args:
+            message_rate_per_sec: Max sustained message rate per connection
+            message_burst: Allowed burst of messages
+            orderbook_interval: Minimum interval between orderbook requests
+            orderbook_ban_threshold: Ban after this many orderbook violations
+            ban_duration: How long to ban connections (seconds)
+        """
+        self.message_rate_per_sec = message_rate_per_sec
+        self.message_burst = message_burst
+        self.orderbook_interval = orderbook_interval
+        self.orderbook_ban_threshold = orderbook_ban_threshold
+        self.ban_duration = ban_duration
+
+        # Track message tokens per connection (token bucket)
+        self._message_tokens: dict[str, float] = {}
+        self._message_last_update: dict[str, float] = {}
+
+        # Track orderbook requests per connection
+        self._orderbook_last: dict[str, float] = {}
+        self._orderbook_violations: dict[str, int] = {}
+
+        # Banned connections
+        self._banned: dict[str, float] = {}
+
+    def check_message(self, conn_id: str) -> bool:
+        """
+        Check if a message from this connection should be allowed.
+
+        Uses token bucket algorithm for general rate limiting.
+
+        Args:
+            conn_id: Connection identifier (e.g., "127.0.0.1:54321")
+
+        Returns:
+            True if allowed, False if rate limited
+        """
+        now = time.monotonic()
+
+        # Check if banned
+        if conn_id in self._banned:
+            if now - self._banned[conn_id] < self.ban_duration:
+                return False
+            # Ban expired
+            del self._banned[conn_id]
+            self._orderbook_violations.pop(conn_id, None)
+
+        # Token bucket: refill tokens based on time elapsed
+        last_update = self._message_last_update.get(conn_id, now)
+        current_tokens = self._message_tokens.get(conn_id, float(self.message_burst))
+
+        # Add tokens based on elapsed time
+        elapsed = now - last_update
+        new_tokens = min(self.message_burst, current_tokens + elapsed * self.message_rate_per_sec)
+
+        if new_tokens >= 1.0:
+            # Allow message, consume one token
+            self._message_tokens[conn_id] = new_tokens - 1.0
+            self._message_last_update[conn_id] = now
+            return True
+
+        # Rate limited
+        self._message_tokens[conn_id] = new_tokens
+        self._message_last_update[conn_id] = now
+        return False
+
+    def check_orderbook(self, conn_id: str) -> bool:
+        """
+        Check if an orderbook request from this connection should be allowed.
+
+        Uses stricter limiting than general messages since orderbook responses
+        are expensive (fidelity bond proofs).
+
+        Args:
+            conn_id: Connection identifier
+
+        Returns:
+            True if allowed, False if rate limited or banned
+        """
+        now = time.monotonic()
+
+        # Check if banned
+        if conn_id in self._banned:
+            if now - self._banned[conn_id] < self.ban_duration:
+                violations = self._orderbook_violations.get(conn_id, 0) + 1
+                self._orderbook_violations[conn_id] = violations
+                return False
+            # Ban expired
+            del self._banned[conn_id]
+            self._orderbook_violations.pop(conn_id, None)
+
+        # Check time since last orderbook request
+        last = self._orderbook_last.get(conn_id, 0.0)
+        if now - last >= self.orderbook_interval:
+            self._orderbook_last[conn_id] = now
+            return True
+
+        # Rate limited - record violation
+        violations = self._orderbook_violations.get(conn_id, 0) + 1
+        self._orderbook_violations[conn_id] = violations
+
+        # Check if should be banned
+        if violations >= self.orderbook_ban_threshold:
+            self._banned[conn_id] = now
+            logger.warning(
+                f"BANNED direct connection {conn_id} for {self.ban_duration}s "
+                f"after {violations} orderbook violations"
+            )
+
+        return False
+
+    def is_banned(self, conn_id: str) -> bool:
+        """Check if a connection is currently banned."""
+        if conn_id not in self._banned:
+            return False
+        now = time.monotonic()
+        if now - self._banned[conn_id] < self.ban_duration:
+            return True
+        # Ban expired
+        del self._banned[conn_id]
+        return False
+
+    def get_violation_count(self, conn_id: str) -> int:
+        """Get violation count for a connection."""
+        return self._orderbook_violations.get(conn_id, 0)
+
+    def cleanup_old_entries(self, max_age: float = 3600.0) -> None:
+        """Remove stale entries to prevent memory growth."""
+        now = time.monotonic()
+
+        # Clean up old message tracking
+        stale = [
+            conn_id for conn_id, last in self._message_last_update.items() if now - last > max_age
+        ]
+        for conn_id in stale:
+            self._message_tokens.pop(conn_id, None)
+            self._message_last_update.pop(conn_id, None)
+
+        # Clean up old orderbook tracking (but not violations for banned)
+        stale = [
+            conn_id
+            for conn_id, last in self._orderbook_last.items()
+            if now - last > max_age and conn_id not in self._banned
+        ]
+        for conn_id in stale:
+            self._orderbook_last.pop(conn_id, None)
+            self._orderbook_violations.pop(conn_id, None)
+
+        # Clean up expired bans
+        expired = [
+            conn_id
+            for conn_id, ban_time in self._banned.items()
+            if now - ban_time > self.ban_duration
+        ]
+        for conn_id in expired:
+            del self._banned[conn_id]
+            self._orderbook_violations.pop(conn_id, None)
+
+    def get_statistics(self) -> dict[str, Any]:
+        """Get rate limiter statistics for monitoring."""
+        now = time.monotonic()
+        banned = [
+            conn_id
+            for conn_id, ban_time in self._banned.items()
+            if now - ban_time < self.ban_duration
+        ]
+        total_violations = sum(self._orderbook_violations.values())
+        top_violators = sorted(
+            [
+                (conn_id, count)
+                for conn_id, count in self._orderbook_violations.items()
+                if count > 0
+            ],
+            key=lambda x: x[1],
+            reverse=True,
+        )[:10]
+
+        return {
+            "total_violations": total_violations,
+            "tracked_connections": len(self._message_last_update),
+            "banned_connections": banned,
+            "top_violators": top_violators,
+        }
+
+
 class MakerBot:
     """
     Main maker bot coordinating all components.
@@ -362,6 +580,17 @@ class MakerBot:
             ban_duration=config.orderbook_ban_duration,
         )
 
+        # Rate limiter specifically for direct hidden service connections
+        # This tracks by connection address (not nick) to prevent nick rotation attacks
+        # where attackers use a different nick per request
+        self._direct_connection_rate_limiter = DirectConnectionRateLimiter(
+            message_rate_per_sec=5.0,  # Stricter than directory (5 msg/s vs 10)
+            message_burst=20,  # Smaller burst
+            orderbook_interval=30.0,  # Longer interval (30s vs 10s)
+            orderbook_ban_threshold=10,  # Faster ban (10 violations vs 100)
+            ban_duration=config.orderbook_ban_duration,
+        )
+
         # Message deduplicator to handle receiving same message from multiple directories
         # This prevents processing duplicates and avoids false rate limit violations
         self._message_deduplicator = MessageDeduplicator(window_seconds=30.0)
@@ -385,6 +614,9 @@ class MakerBot:
     async def _setup_tor_hidden_service(self) -> str | None:
         """
         Create an ephemeral hidden service via Tor control port.
+
+        Also configures Tor-level DoS defenses (intro point rate limiting, PoW)
+        based on the hidden_service_dos configuration.
 
         Returns:
             The .onion address if successful, None otherwise
@@ -411,15 +643,18 @@ class MakerBot:
             await self._tor_control.connect()
             await self._tor_control.authenticate()
 
-            # Get Tor version for logging
+            # Get Tor version and capabilities for logging and DoS defense setup
             try:
                 tor_version = await self._tor_control.get_version()
                 logger.info(f"Connected to Tor {tor_version}")
+                caps = await self._tor_control.get_capabilities()
             except TorControlError:
                 logger.debug("Could not get Tor version (non-critical)")
+                caps = None
 
             # Create ephemeral hidden service
             # Maps external port (advertised) to our local serving port
+            dos_config = self.config.hidden_service_dos
             logger.info(
                 f"Creating ephemeral hidden service on port {self.config.onion_serving_port} -> "
                 f"{self.config.tor_target_host}:{self.config.onion_serving_port}..."
@@ -437,13 +672,34 @@ class MakerBot:
                     discard_pk=True,
                     # Don't detach - we want the service to be removed when we disconnect
                     detach=False,
+                    # Apply max_streams limit if configured (DoS protection)
+                    max_streams=dos_config.max_streams,
+                    # Apply Tor-level DoS defenses (intro point rate limiting, PoW)
+                    # These must be set at creation time for ephemeral hidden services
+                    dos_config=dos_config,
                 )
             )
 
             logger.info(
-                f"✓ Created ephemeral hidden service: "
-                f"{self._ephemeral_hidden_service.onion_address}"
+                f"Created ephemeral hidden service: {self._ephemeral_hidden_service.onion_address}"
             )
+
+            # Log summary of active defenses (only those actually applied to ephemeral HS)
+            defenses = []
+            # Note: intro_dos is NOT supported for ephemeral HS, don't list it as active
+            # Note: PoW via ADD_ONION requires Tor 0.4.9.2+
+            if dos_config.pow_enabled and caps and caps.has_add_onion_pow:
+                defenses.append("PoW=enabled")
+            if dos_config.max_streams:
+                defenses.append(f"max_streams={dos_config.max_streams}")
+            if defenses:
+                logger.info(f"Tor DoS defenses active: {', '.join(defenses)}")
+            else:
+                logger.info(
+                    "No Tor-level DoS defenses active for ephemeral HS "
+                    "(requires Tor 0.4.9.2+ for PoW, or use persistent HS in torrc)"
+                )
+
             return self._ephemeral_hidden_service.onion_address
 
         except TorControlError as e:
@@ -1077,6 +1333,29 @@ class MakerBot:
                             else ""
                         )
                     )
+
+                # Also log direct connection rate limiter stats if any activity
+                direct_stats = self._direct_connection_rate_limiter.get_statistics()
+                if direct_stats["total_violations"] > 0 or direct_stats["banned_connections"]:
+                    banned_count = len(direct_stats["banned_connections"])
+                    banned_list = ", ".join(direct_stats["banned_connections"][:5])
+                    if banned_count > 5:
+                        banned_list += f", ... and {banned_count - 5} more"
+
+                    top_violators_str = ", ".join(
+                        f"{conn}({count})" for conn, count in direct_stats["top_violators"][:5]
+                    )
+
+                    logger.info(
+                        f"Direct connection rate limit: {direct_stats['total_violations']} "
+                        f"violations, {banned_count} banned connection(s)"
+                        + (f" [{banned_list}]" if banned_count > 0 else "")
+                        + (f", top: {top_violators_str}" if direct_stats["top_violators"] else "")
+                    )
+
+                # Cleanup old entries to prevent memory growth
+                self._orderbook_rate_limiter.cleanup_old_entries()
+                self._direct_connection_rate_limiter.cleanup_old_entries()
 
                 # Log again in 1 hour
                 await asyncio.sleep(3600)
@@ -1796,6 +2075,58 @@ class MakerBot:
 
         except Exception as e:
             logger.error(f"Failed to send offers to taker {taker_nick}: {e}")
+
+    async def _send_offers_via_direct_connection(
+        self, taker_nick: str, connection: TCPConnection
+    ) -> None:
+        """Send offers to a taker via direct connection (not through directory).
+
+        This is called when we receive a !orderbook request directly from a taker
+        who connected to our onion hidden service. The response is sent back
+        through the same direct connection.
+
+        The message format follows the reference implementation:
+            {"type": 685, "line": "maker_nick!taker_nick!order_type data"}
+
+        Args:
+            taker_nick: The nick of the taker requesting the orderbook
+            connection: The direct TCP connection to send the response on
+        """
+        from jmcore.protocol import MessageType
+
+        try:
+            for offer in self.current_offers:
+                # Format offer data (parameters without the command)
+                order_type_str = offer.ordertype.value
+                data = f"{offer.oid} {offer.minsize} {offer.maxsize} {offer.txfee} {offer.cjfee}"
+
+                # Append fidelity bond proof if we have one
+                if self.fidelity_bond is not None:
+                    bond_proof = create_fidelity_bond_proof(
+                        bond=self.fidelity_bond,
+                        maker_nick=self.nick,
+                        taker_nick=taker_nick,
+                        current_block_height=self.current_block_height,
+                    )
+                    if bond_proof:
+                        data += f"!tbond {bond_proof}"
+                        logger.debug(
+                            f"Including fidelity bond proof in direct offer to {taker_nick}"
+                        )
+
+                # Format: maker_nick!taker_nick!order_type data
+                # Note: The reference implementation uses COMMAND_PREFIX (!) as separator
+                line = (
+                    f"{self.nick}{COMMAND_PREFIX}{taker_nick}{COMMAND_PREFIX}{order_type_str}{data}"
+                )
+
+                # Send as PRIVMSG (type 685)
+                msg = {"type": MessageType.PRIVMSG.value, "line": line}
+                await connection.send(json.dumps(msg).encode())
+                logger.debug(f"Sent {order_type_str} offer to {taker_nick} via direct connection")
+
+        except Exception as e:
+            logger.error(f"Failed to send offers to {taker_nick} via direct connection: {e}")
 
     async def _handle_privmsg(self, line: str, source: str = "unknown") -> None:
         """
@@ -2621,8 +2952,20 @@ class MakerBot:
 
         This bypasses the directory server for lower latency once the taker
         knows the maker's onion address (from the peerlist).
+
+        Rate Limiting Strategy:
+        - Direct connections are rate limited by connection address (peer_str), not by nick
+        - This prevents nick rotation attacks where attackers use different nicks per request
+        - Attackers connecting directly to the onion bypass directory-level protections
+        - Connection-based limiting is stricter: faster bans, longer intervals
         """
         logger.info(f"Handling direct connection from {peer_str}")
+
+        # Check if this connection is already banned
+        if self._direct_connection_rate_limiter.is_banned(peer_str):
+            logger.debug(f"Rejecting direct connection from banned address {peer_str}")
+            await connection.close()
+            return
 
         try:
             # Keep connection open and process messages
@@ -2633,6 +2976,12 @@ class MakerBot:
                     if not data:
                         logger.info(f"Direct connection from {peer_str} closed")
                         break
+
+                    # Apply connection-based message rate limiting FIRST
+                    # This catches general floods before any processing
+                    if not self._direct_connection_rate_limiter.check_message(peer_str):
+                        logger.debug(f"Rate limiting message from {peer_str} (message flood)")
+                        continue
 
                     # Check for handshake request first (health check / feature discovery)
                     handshake_handled = await self._try_handle_handshake(connection, data, peer_str)
@@ -2674,21 +3023,27 @@ class MakerBot:
                     if cmd.startswith("PUBLIC:"):
                         public_cmd = cmd[7:]  # Strip "PUBLIC:" prefix
                         if public_cmd == "orderbook":
-                            # Apply rate limiting (same as directory-based requests)
-                            if not self._orderbook_rate_limiter.check(sender_nick):
-                                violations = self._orderbook_rate_limiter.get_violation_count(
-                                    sender_nick
+                            # Apply CONNECTION-BASED rate limiting (not nick-based!)
+                            # This prevents nick rotation attacks
+                            if not self._direct_connection_rate_limiter.check_orderbook(peer_str):
+                                violations = (
+                                    self._direct_connection_rate_limiter.get_violation_count(
+                                        peer_str
+                                    )
                                 )
-                                is_banned = self._orderbook_rate_limiter.is_banned(sender_nick)
+                                is_banned = self._direct_connection_rate_limiter.is_banned(peer_str)
                                 if is_banned:
                                     logger.debug(
-                                        f"Ignoring orderbook request from banned peer "
-                                        f"{sender_nick} via direct connection"
+                                        f"Ignoring orderbook request from banned connection "
+                                        f"{peer_str} (nick: {sender_nick})"
                                     )
+                                    # Close connection to banned peer
+                                    await connection.close()
+                                    return
                                 else:
                                     logger.debug(
-                                        f"Rate limiting orderbook request from {sender_nick} "
-                                        f"via direct (violations: {violations})"
+                                        f"Rate limiting orderbook request from {peer_str} "
+                                        f"(nick: {sender_nick}, violations: {violations})"
                                     )
                                 continue
 
@@ -2696,7 +3051,7 @@ class MakerBot:
                                 f"Received !orderbook request from {sender_nick} via direct "
                                 f"connection, sending offers"
                             )
-                            await self._send_offers_to_taker(sender_nick)
+                            await self._send_offers_via_direct_connection(sender_nick, connection)
                         else:
                             logger.debug(
                                 f"Unknown PUBLIC command from {sender_nick} via direct: "

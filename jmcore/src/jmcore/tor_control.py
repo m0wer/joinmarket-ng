@@ -5,11 +5,19 @@ This module provides async interface to Tor's control protocol (spec v1)
 for dynamically creating hidden services with cookie authentication.
 
 Reference: https://spec.torproject.org/control-spec/index.html
+
+DoS Defense Options:
+    - Introduction Point Rate Limiting: HiddenServiceEnableIntroDoSDefense
+    - Proof of Work: HiddenServicePoWDefensesEnabled (Tor 0.4.8+)
+    - Max Streams: Limit concurrent streams per circuit
+
+Reference: https://community.torproject.org/onion-services/advanced/dos/
 """
 
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from loguru import logger
@@ -31,6 +39,126 @@ class TorHiddenServiceError(TorControlError):
     """Failed to create or manage hidden service."""
 
     pass
+
+
+@dataclass
+class HiddenServiceDoSConfig:
+    """
+    Configuration for Tor hidden service DoS defenses.
+
+    These settings control Tor-level DoS protection. Note that different features
+    are available depending on whether you use ephemeral or persistent hidden services:
+
+    - **Ephemeral HS** (ADD_ONION, used by JoinMarket makers for privacy):
+      - PoW defense: Requires Tor 0.4.9.2+ (auto-enabled when available)
+      - Intro point rate limiting: NOT supported (Tor protocol limitation)
+      - MaxStreams: Supported on all versions
+
+    - **Persistent HS** (torrc HiddenServiceDir):
+      - PoW defense: Requires Tor 0.4.8+ with --enable-gpl
+      - Intro point rate limiting: Supported since Tor 0.4.2+
+      - MaxStreams: Supported on all versions
+
+    Attributes:
+        intro_dos_enabled: Enable rate limiting at introduction points.
+            **Only works for persistent HS defined in torrc, not ephemeral HS.**
+            Disabled by default since JoinMarket uses ephemeral HS.
+        intro_dos_rate_per_sec: Allowed introduction rate per second at intro point.
+            Default 25 provides reasonable protection while allowing legitimate traffic.
+        intro_dos_burst_per_sec: Allowed introduction burst per second at intro point.
+            Should be >= intro_dos_rate_per_sec. Default 200.
+        pow_enabled: Enable Proof-of-Work defense.
+            Clients must solve a computational puzzle to connect, making flooding expensive.
+            The effort required auto-adjusts based on queue depth (starts at 0, scales up
+            under attack). Enabled by default. For ephemeral HS, requires Tor 0.4.9.2+.
+        pow_queue_rate: Rate to process rendezvous requests from PoW queue (per second).
+            Lower values provide more protection but may delay legitimate connections.
+        pow_queue_burst: Burst size for processing from PoW queue.
+        max_streams: Maximum concurrent streams per rendezvous circuit.
+            None for unlimited. Works on all Tor versions.
+        max_streams_close_circuit: If True, exceeding max_streams tears down the circuit.
+            If False, excess stream requests are silently ignored.
+    """
+
+    # Introduction Point rate limiting (Tor 0.4.2+, persistent HS only)
+    # Disabled by default since ephemeral HS (used by JoinMarket) don't support this
+    intro_dos_enabled: bool = False
+    intro_dos_rate_per_sec: int = 25
+    intro_dos_burst_per_sec: int = 200
+
+    # Proof of Work defense (Tor 0.4.8+, requires --enable-gpl build)
+    # Enabled by default - suggested effort starts at 0 (no puzzle required) and
+    # auto-scales under attack. Older Tor versions without PoW support will simply
+    # ignore this setting gracefully.
+    pow_enabled: bool = True
+    pow_queue_rate: int = 250  # Rendezvous requests processed per second
+    pow_queue_burst: int = 2500  # Burst size for PoW queue
+
+    # Stream limits per circuit
+    max_streams: int | None = None
+    max_streams_close_circuit: bool = True
+
+
+@dataclass
+class TorCapabilities:
+    """
+    Tor daemon capabilities detected at runtime.
+
+    Used to determine which DoS defense features are available.
+
+    Note on ADD_ONION vs SETCONF:
+        - PoW defense via SETCONF/torrc: Available since 0.4.8
+        - PoW defense via ADD_ONION: Available since 0.4.9.2-alpha
+        - Intro DoS defense: Only available via SETCONF/torrc for persistent HS
+    """
+
+    version: str = ""
+    has_pow_module: bool = False
+    has_intro_dos: bool = False
+    # ADD_ONION gained PoW support in 0.4.9.2-alpha
+    has_add_onion_pow: bool = False
+    # Version tuple for comparison (major, minor, patch)
+    version_tuple: tuple[int, int, int] = field(default_factory=lambda: (0, 0, 0))
+
+    @classmethod
+    def from_version(cls, version_str: str) -> TorCapabilities:
+        """Parse Tor version string and determine capabilities."""
+        caps = cls(version=version_str)
+        parts: list[str] = []
+
+        # Parse version like "0.4.8.10" or "0.4.8.1-alpha" or "0.4.9.2-alpha"
+        try:
+            # Remove any suffix like "-alpha", "-rc"
+            version_clean = version_str.split("-")[0]
+            parts = version_clean.split(".")
+            if len(parts) >= 3:
+                caps.version_tuple = (int(parts[0]), int(parts[1]), int(parts[2]))
+        except (ValueError, IndexError):
+            logger.warning(f"Could not parse Tor version: {version_str}")
+
+        # Intro DoS defense: available since 0.4.2 (but only for persistent HS via torrc)
+        caps.has_intro_dos = caps.version_tuple >= (0, 4, 2)
+
+        # PoW defense via SETCONF/torrc: available since 0.4.8 (requires --enable-gpl build)
+        # We'll detect actual pow module availability separately
+        caps.has_pow_module = caps.version_tuple >= (0, 4, 8)
+
+        # PoW defense via ADD_ONION: only available since 0.4.9.2
+        # See: https://spec.torproject.org/control-spec/commands.html
+        # "PoWDefensesEnabled, PoWQueueRate and PoWQueueBurst support added 0.4.9.2-alpha"
+        if len(parts) >= 4:
+            try:
+                patch = int(parts[3].split("-")[0])  # Handle "2-alpha"
+                caps.has_add_onion_pow = caps.version_tuple >= (0, 4, 9) and (
+                    caps.version_tuple > (0, 4, 9) or patch >= 2
+                )
+            except (ValueError, IndexError):
+                # If we can't parse the patch version, be conservative
+                caps.has_add_onion_pow = caps.version_tuple > (0, 4, 9)
+        else:
+            caps.has_add_onion_pow = caps.version_tuple > (0, 4, 9)
+
+        return caps
 
 
 class EphemeralHiddenService:
@@ -362,6 +490,7 @@ class TorControlClient:
         detach: bool = False,
         await_publication: bool = False,
         max_streams: int | None = None,
+        dos_config: HiddenServiceDoSConfig | None = None,
     ) -> EphemeralHiddenService:
         """
         Create an ephemeral hidden service using ADD_ONION.
@@ -379,6 +508,7 @@ class TorControlClient:
             detach: If True, service persists after control connection closes
             await_publication: If True, wait for HS descriptor to be published
             max_streams: Maximum concurrent streams (None for unlimited)
+            dos_config: DoS defense configuration (intro rate limiting, PoW, etc.)
 
         Returns:
             EphemeralHiddenService with the created service details
@@ -415,6 +545,47 @@ class TorControlClient:
 
         if max_streams is not None:
             cmd_parts.append(f"MaxStreams={max_streams}")
+
+        # Add DoS defense options if configured
+        # NOTE: ADD_ONION PoW support was added in Tor 0.4.9.2-alpha
+        # Intro DoS defense (HiddenServiceEnableIntroDoSDefense) only works for persistent
+        # hidden services defined in torrc or via SETCONF with HiddenServiceDir.
+        if dos_config is not None:
+            caps = await self.get_capabilities()
+
+            # Introduction point rate limiting is NOT supported for ephemeral hidden services
+            # This is expected - ephemeral HS are the normal/preferred mode for privacy.
+            # Only log at debug level since this isn't actionable for most users.
+            if dos_config.intro_dos_enabled:
+                logger.debug(
+                    "Note: Intro point rate limiting (HiddenServiceEnableIntroDoSDefense) is "
+                    "not available for ephemeral hidden services. This is a Tor protocol "
+                    "limitation and doesn't affect PoW defense which IS supported."
+                )
+
+            # Proof of Work defense via ADD_ONION (Tor 0.4.9.2+)
+            # ADD_ONION uses different parameter names: PoWDefensesEnabled, PoWQueueRate, etc.
+            # Note: PoW config options exist in 0.4.8 but ADD_ONION support was only added in 0.4.9.2
+            if dos_config.pow_enabled and caps.has_add_onion_pow:
+                cmd_parts.append("PoWDefensesEnabled=1")
+                cmd_parts.append(f"PoWQueueRate={dos_config.pow_queue_rate}")
+                cmd_parts.append(f"PoWQueueBurst={dos_config.pow_queue_burst}")
+                logger.info(
+                    f"Enabling PoW defense: queue_rate={dos_config.pow_queue_rate}/s, "
+                    f"queue_burst={dos_config.pow_queue_burst}"
+                )
+            elif dos_config.pow_enabled and caps.has_pow_module and not caps.has_add_onion_pow:
+                logger.warning(
+                    f"PoW defense requested but Tor {caps.version} doesn't support it via "
+                    f"ADD_ONION (requires 0.4.9.2+). PoW for ephemeral hidden services is not "
+                    f"available in this Tor version. Configure a persistent hidden service in "
+                    f"torrc if you need PoW protection."
+                )
+            elif dos_config.pow_enabled and not caps.has_pow_module:
+                logger.warning(
+                    f"PoW defense requested but Tor {caps.version} doesn't support it "
+                    f"(requires 0.4.8+ with --enable-gpl for config, 0.4.9.2+ for ADD_ONION)"
+                )
 
         command = " ".join(cmd_parts)
 
@@ -477,6 +648,149 @@ class TorControlClient:
     async def get_version(self) -> str:
         """Get Tor version string."""
         return await self.get_info("version")
+
+    async def get_capabilities(self) -> TorCapabilities:
+        """
+        Detect Tor daemon capabilities.
+
+        Returns:
+            TorCapabilities with detected features
+        """
+        version = await self.get_version()
+        caps = TorCapabilities.from_version(version)
+
+        # Try to detect actual PoW module availability
+        if caps.version_tuple >= (0, 4, 8):
+            try:
+                # Check if pow module is compiled in by trying to get its status
+                # This will fail gracefully if not available
+                modules_info = await self.get_info("config/names")
+                caps.has_pow_module = "HiddenServicePoW" in modules_info
+            except TorControlError:
+                # Can't detect, assume available if version supports it
+                pass
+
+        logger.debug(
+            f"Tor capabilities: version={caps.version}, "
+            f"intro_dos_torrc={caps.has_intro_dos}, pow_torrc={caps.has_pow_module}, "
+            f"pow_add_onion={caps.has_add_onion_pow}"
+        )
+        return caps
+
+    async def set_config(self, settings: dict[str, str | int | bool]) -> None:
+        """
+        Set Tor configuration options using SETCONF.
+
+        Args:
+            settings: Dictionary of config option -> value pairs
+
+        Raises:
+            TorControlError: If setting configuration fails
+        """
+        if not self._authenticated:
+            raise TorControlError("Not authenticated")
+
+        if not settings:
+            return
+
+        # Build SETCONF command with proper quoting
+        parts = []
+        for key, value in settings.items():
+            if isinstance(value, bool):
+                parts.append(f"{key}={1 if value else 0}")
+            elif isinstance(value, int):
+                parts.append(f"{key}={value}")
+            else:
+                # Quote string values
+                escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+                parts.append(f'{key}="{escaped}"')
+
+        command = "SETCONF " + " ".join(parts)
+
+        try:
+            responses = await self._command(command)
+            self._check_success(responses)
+            logger.debug(f"Set Tor config: {list(settings.keys())}")
+        except TorControlError as e:
+            raise TorControlError(f"Failed to set config: {e}") from e
+
+    async def configure_hidden_service_dos_defense(
+        self,
+        service_id: str,
+        config: HiddenServiceDoSConfig,
+    ) -> None:
+        """
+        Configure DoS defenses for a PERSISTENT hidden service defined in torrc.
+
+        This applies introduction point rate limiting and optionally PoW defense
+        using SETCONF commands. These settings take effect immediately.
+
+        IMPORTANT: This method does NOT work for ephemeral hidden services created
+        via ADD_ONION. For ephemeral services, pass the dos_config parameter to
+        create_ephemeral_hidden_service() instead.
+
+        Args:
+            service_id: The hidden service ID (without .onion suffix)
+            config: DoS defense configuration
+
+        Raises:
+            TorControlError: If configuration fails (e.g., for ephemeral services)
+            TorHiddenServiceError: If the service doesn't exist
+        """
+        if not self._authenticated:
+            raise TorControlError("Not authenticated")
+
+        # Strip .onion if included
+        if service_id.endswith(".onion"):
+            service_id = service_id[:-6]
+
+        # Get capabilities to check what's supported
+        caps = await self.get_capabilities()
+
+        settings: dict[str, str | int | bool] = {}
+
+        # Introduction point rate limiting (available since Tor 0.4.2)
+        if caps.has_intro_dos and config.intro_dos_enabled:
+            settings["HiddenServiceEnableIntroDoSDefense"] = True
+            settings["HiddenServiceEnableIntroDoSRatePerSec"] = config.intro_dos_rate_per_sec
+            settings["HiddenServiceEnableIntroDoSBurstPerSec"] = config.intro_dos_burst_per_sec
+            logger.info(
+                f"Enabling intro point DoS defense: rate={config.intro_dos_rate_per_sec}/s, "
+                f"burst={config.intro_dos_burst_per_sec}/s"
+            )
+        elif config.intro_dos_enabled and not caps.has_intro_dos:
+            logger.warning(
+                f"Intro point DoS defense requested but Tor {caps.version} doesn't support it "
+                f"(requires 0.4.2+)"
+            )
+
+        # Proof of Work defense (available since Tor 0.4.8 with pow module)
+        if caps.has_pow_module and config.pow_enabled:
+            settings["HiddenServicePoWDefensesEnabled"] = True
+            settings["HiddenServicePoWQueueRate"] = config.pow_queue_rate
+            settings["HiddenServicePoWQueueBurst"] = config.pow_queue_burst
+            logger.info(
+                f"Enabling PoW defense: queue_rate={config.pow_queue_rate}/s, "
+                f"queue_burst={config.pow_queue_burst}"
+            )
+        elif config.pow_enabled and not caps.has_pow_module:
+            logger.warning(
+                f"PoW defense requested but Tor {caps.version} doesn't support it "
+                f"(requires 0.4.8+ with --enable-gpl)"
+            )
+
+        # Stream limits (applied at service creation, log for reference)
+        if config.max_streams is not None:
+            logger.debug(
+                f"Max streams per circuit: {config.max_streams} "
+                f"(close_circuit={config.max_streams_close_circuit})"
+            )
+
+        if settings:
+            await self.set_config(settings)
+            logger.info(f"DoS defenses configured for hidden service {service_id[:8]}...")
+        else:
+            logger.debug("No DoS defense settings to apply")
 
     @property
     def is_connected(self) -> bool:
