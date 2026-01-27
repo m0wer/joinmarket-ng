@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Tor-Level DoS Defense for Hidden Services**: Makers can now configure Tor-level DoS protection for their hidden services via the `hidden_service_dos` config option. This includes:
+  - **Proof-of-Work Defense** (`PoWDefensesEnabled`): Computational puzzle that clients must solve to connect. Makes flooding attacks expensive. Enabled by default with suggested effort starting at 0 (no puzzle required for normal operation) and auto-scaling under attack.
+    - For ephemeral HS (ADD_ONION): Requires **Tor 0.4.9.2+** (not yet in stable releases)
+    - For persistent HS (torrc): Requires Tor 0.4.8+ with `--enable-gpl` build
+  - **Max Streams per Circuit** (`max_streams`): Limit concurrent streams per rendezvous circuit.
+  - Automatic capability detection for Tor version and PoW module availability.
+  - **Note**: Introduction point rate limiting (`HiddenServiceEnableIntroDoSDefense`) is NOT supported for ephemeral hidden services due to Tor control protocol limitations. Users who need this protection should configure persistent hidden services in torrc. See INSTALL.md for configuration examples.
+  - Reference: https://community.torproject.org/onion-services/advanced/dos/
+
+- **Connection-Based Rate Limiting for Direct Connections**: Added `DirectConnectionRateLimiter` that tracks by connection address (peer_str) instead of nick. This prevents nick rotation attacks where attackers use a random nick per request to bypass the existing nick-based rate limiting. Direct connections now have stricter limits: 30s orderbook interval (vs 10s), 10 violations to ban (vs 100), and general message rate limiting (5 msg/s with 20 burst).
+
+### Changed
+
+- **Direct Connection Handler**: The `_on_direct_connection` method now applies connection-based rate limiting before processing any messages. Banned connections are immediately closed. This provides better protection against the current DoS attack pattern of flooding makers directly through their onion addresses.
+
+- **HiddenServiceDoSConfig Defaults**: Changed `intro_dos_enabled` default from `True` to `False`. Introduction point rate limiting is not supported for ephemeral hidden services (which makers use for privacy), so enabling it by default was misleading. The warning log has been changed to debug level since it's not actionable for normal maker operation.
+
+### Fixed
+
+- **PoW Queue Settings**: Restored production values for Tor PoW defense (`pow_queue_rate=250`, `pow_queue_burst=2500`). These had been lowered for testing.
+
 ## [0.11.5] - 2026-01-24
 
 ### Fixed

@@ -11,11 +11,130 @@ import pytest
 
 from jmcore.tor_control import (
     EphemeralHiddenService,
+    HiddenServiceDoSConfig,
     TorAuthenticationError,
+    TorCapabilities,
     TorControlClient,
     TorControlError,
     TorHiddenServiceError,
 )
+
+
+class TestHiddenServiceDoSConfig:
+    """Tests for HiddenServiceDoSConfig dataclass."""
+
+    def test_defaults(self) -> None:
+        """Test default values."""
+        config = HiddenServiceDoSConfig()
+
+        # Intro DoS defense disabled by default (not supported for ephemeral HS)
+        assert config.intro_dos_enabled is False
+        assert config.intro_dos_rate_per_sec == 25
+        assert config.intro_dos_burst_per_sec == 200
+
+        # PoW enabled by default (starts at effort 0, scales under attack)
+        assert config.pow_enabled is True
+        assert config.pow_queue_rate == 250
+        assert config.pow_queue_burst == 2500
+
+        # No stream limit by default
+        assert config.max_streams is None
+        assert config.max_streams_close_circuit is True
+
+    def test_custom_values(self) -> None:
+        """Test custom configuration."""
+        config = HiddenServiceDoSConfig(
+            intro_dos_enabled=True,
+            intro_dos_rate_per_sec=10,
+            intro_dos_burst_per_sec=50,
+            pow_enabled=True,
+            pow_queue_rate=100,
+            pow_queue_burst=500,
+            max_streams=5,
+            max_streams_close_circuit=False,
+        )
+
+        assert config.intro_dos_rate_per_sec == 10
+        assert config.intro_dos_burst_per_sec == 50
+        assert config.pow_enabled is True
+        assert config.pow_queue_rate == 100
+        assert config.pow_queue_burst == 500
+        assert config.max_streams == 5
+        assert config.max_streams_close_circuit is False
+
+
+class TestTorCapabilities:
+    """Tests for TorCapabilities detection."""
+
+    def test_from_version_0_4_2(self) -> None:
+        """Test capabilities for Tor 0.4.2 (intro DoS support)."""
+        caps = TorCapabilities.from_version("0.4.2.7")
+
+        assert caps.version == "0.4.2.7"
+        assert caps.version_tuple == (0, 4, 2)
+        assert caps.has_intro_dos is True
+        assert caps.has_pow_module is False
+        assert caps.has_add_onion_pow is False
+
+    def test_from_version_0_4_8(self) -> None:
+        """Test capabilities for Tor 0.4.8 (PoW config support, but not ADD_ONION PoW)."""
+        caps = TorCapabilities.from_version("0.4.8.10")
+
+        assert caps.version == "0.4.8.10"
+        assert caps.version_tuple == (0, 4, 8)
+        assert caps.has_intro_dos is True
+        assert caps.has_pow_module is True
+        # ADD_ONION PoW only added in 0.4.9.2
+        assert caps.has_add_onion_pow is False
+
+    def test_from_version_0_4_9_2(self) -> None:
+        """Test capabilities for Tor 0.4.9.2 (ADD_ONION PoW support)."""
+        caps = TorCapabilities.from_version("0.4.9.2-alpha")
+
+        assert caps.version == "0.4.9.2-alpha"
+        assert caps.version_tuple == (0, 4, 9)
+        assert caps.has_intro_dos is True
+        assert caps.has_pow_module is True
+        assert caps.has_add_onion_pow is True
+
+    def test_from_version_0_4_9_1(self) -> None:
+        """Test capabilities for Tor 0.4.9.1 (just before ADD_ONION PoW)."""
+        caps = TorCapabilities.from_version("0.4.9.1")
+
+        assert caps.version == "0.4.9.1"
+        assert caps.version_tuple == (0, 4, 9)
+        assert caps.has_intro_dos is True
+        assert caps.has_pow_module is True
+        # ADD_ONION PoW only added in 0.4.9.2
+        assert caps.has_add_onion_pow is False
+
+    def test_from_version_with_suffix(self) -> None:
+        """Test version parsing with alpha/rc suffix."""
+        caps = TorCapabilities.from_version("0.4.8.1-alpha")
+
+        assert caps.version == "0.4.8.1-alpha"
+        assert caps.version_tuple == (0, 4, 8)
+        assert caps.has_pow_module is True
+        assert caps.has_add_onion_pow is False
+
+    def test_from_version_old(self) -> None:
+        """Test capabilities for old Tor version."""
+        caps = TorCapabilities.from_version("0.4.1.5")
+
+        assert caps.version_tuple == (0, 4, 1)
+        assert caps.has_intro_dos is False
+        assert caps.has_pow_module is False
+        assert caps.has_add_onion_pow is False
+
+    def test_from_version_invalid(self) -> None:
+        """Test handling of invalid version string."""
+        caps = TorCapabilities.from_version("invalid")
+
+        assert caps.version == "invalid"
+        assert caps.version_tuple == (0, 0, 0)
+        assert caps.has_intro_dos is False
+        assert caps.has_pow_module is False
+        assert caps.has_add_onion_pow is False
 
 
 class TestEphemeralHiddenService:
@@ -262,6 +381,147 @@ class TestTorControlClient:
             await client.close()
 
     @pytest.mark.asyncio
+    async def test_create_hidden_service_with_dos_config(self, tmp_path: Path) -> None:
+        """Test ephemeral hidden service creation with DoS defense config (Tor 0.4.9.2+)."""
+        cookie_path = tmp_path / "control_auth_cookie"
+        cookie_path.write_bytes(b"validcookie" * 4)
+
+        with patch("asyncio.open_connection") as mock_open:
+            mock_reader = AsyncMock()
+            mock_writer = MagicMock()
+            mock_writer.close = MagicMock()
+            mock_writer.wait_closed = AsyncMock()
+            mock_writer.write = MagicMock()
+            mock_writer.drain = AsyncMock()
+
+            # Response sequence: auth OK, version (for capabilities), config/names, ADD_ONION
+            # Use 0.4.9.2 which supports ADD_ONION PoW
+            service_id = "abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuv"
+            responses = [
+                b"250 OK\r\n",  # AUTHENTICATE
+                b"250-version=0.4.9.2\r\n",  # GETINFO version (for capabilities)
+                b"250 OK\r\n",
+                b"250-config/names=HiddenServicePoWDefensesEnabled\r\n",  # GETINFO config/names
+                b"250 OK\r\n",
+                b"250-ServiceID=" + service_id.encode() + b"\r\n",  # ADD_ONION
+                b"250 OK\r\n",
+            ]
+            mock_reader.readline = AsyncMock(side_effect=responses)
+            mock_open.return_value = (mock_reader, mock_writer)
+
+            client = TorControlClient(
+                control_host="127.0.0.1",
+                control_port=9051,
+                cookie_path=cookie_path,
+            )
+
+            await client.connect()
+            await client.authenticate()
+
+            dos_config = HiddenServiceDoSConfig(
+                intro_dos_enabled=True,
+                intro_dos_rate_per_sec=10,
+                intro_dos_burst_per_sec=50,
+                pow_enabled=True,
+                pow_queue_rate=100,
+                pow_queue_burst=500,
+            )
+
+            hs = await client.create_ephemeral_hidden_service(
+                ports=[(27183, "127.0.0.1:27183")],
+                dos_config=dos_config,
+            )
+
+            assert hs.service_id == service_id
+
+            # Verify ADD_ONION command includes DoS defense options
+            calls = mock_writer.write.call_args_list
+            add_onion_call = None
+            for call in calls:
+                if b"ADD_ONION" in call[0][0]:
+                    add_onion_call = call[0][0].decode()
+                    break
+
+            assert add_onion_call is not None
+            # Note: ADD_ONION uses PoW* parameters (only in 0.4.9.2+)
+            # Intro DoS defense is not supported for ephemeral hidden services
+            assert "PoWDefensesEnabled=1" in add_onion_call
+            assert "PoWQueueRate=100" in add_onion_call
+            assert "PoWQueueBurst=500" in add_onion_call
+            # These should NOT be in the command (not supported for ephemeral HS)
+            assert "HiddenServiceEnableIntroDoSDefense" not in add_onion_call
+            assert "HiddenServicePoWDefensesEnabled" not in add_onion_call
+
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_create_hidden_service_with_dos_config_old_tor(self, tmp_path: Path) -> None:
+        """Test DoS config warning when Tor doesn't support ADD_ONION PoW (0.4.8.x)."""
+        cookie_path = tmp_path / "control_auth_cookie"
+        cookie_path.write_bytes(b"validcookie" * 4)
+
+        with patch("asyncio.open_connection") as mock_open:
+            mock_reader = AsyncMock()
+            mock_writer = MagicMock()
+            mock_writer.close = MagicMock()
+            mock_writer.wait_closed = AsyncMock()
+            mock_writer.write = MagicMock()
+            mock_writer.drain = AsyncMock()
+
+            # Use 0.4.8.10 which does NOT support ADD_ONION PoW
+            service_id = "abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuv"
+            responses = [
+                b"250 OK\r\n",  # AUTHENTICATE
+                b"250-version=0.4.8.10\r\n",  # GETINFO version (for capabilities)
+                b"250 OK\r\n",
+                b"250-config/names=HiddenServicePoWDefensesEnabled\r\n",  # GETINFO config/names
+                b"250 OK\r\n",
+                b"250-ServiceID=" + service_id.encode() + b"\r\n",  # ADD_ONION
+                b"250 OK\r\n",
+            ]
+            mock_reader.readline = AsyncMock(side_effect=responses)
+            mock_open.return_value = (mock_reader, mock_writer)
+
+            client = TorControlClient(
+                control_host="127.0.0.1",
+                control_port=9051,
+                cookie_path=cookie_path,
+            )
+
+            await client.connect()
+            await client.authenticate()
+
+            dos_config = HiddenServiceDoSConfig(
+                intro_dos_enabled=True,
+                pow_enabled=True,
+                pow_queue_rate=100,
+                pow_queue_burst=500,
+            )
+
+            hs = await client.create_ephemeral_hidden_service(
+                ports=[(27183, "127.0.0.1:27183")],
+                dos_config=dos_config,
+            )
+
+            assert hs.service_id == service_id
+
+            # Verify ADD_ONION command does NOT include PoW params (not supported in 0.4.8)
+            calls = mock_writer.write.call_args_list
+            add_onion_call = None
+            for call in calls:
+                if b"ADD_ONION" in call[0][0]:
+                    add_onion_call = call[0][0].decode()
+                    break
+
+            assert add_onion_call is not None
+            # PoW should NOT be in the command for 0.4.8.x
+            assert "PoWDefensesEnabled" not in add_onion_call
+            assert "PoWQueueRate" not in add_onion_call
+            assert "PoWQueueBurst" not in add_onion_call
+
+            await client.close()
+
+    @pytest.mark.asyncio
     async def test_create_hidden_service_failure(self, tmp_path: Path) -> None:
         """Test hidden service creation failure."""
         cookie_path = tmp_path / "control_auth_cookie"
@@ -421,5 +681,150 @@ class TestTorControlClient:
 
             with pytest.raises(TorControlError, match="Not authenticated"):
                 await client.create_ephemeral_hidden_service(ports=[(80, "localhost:80")])
+
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_set_config(self, tmp_path: Path) -> None:
+        """Test SETCONF command."""
+        cookie_path = tmp_path / "control_auth_cookie"
+        cookie_path.write_bytes(b"validcookie" * 4)
+
+        with patch("asyncio.open_connection") as mock_open:
+            mock_reader = AsyncMock()
+            mock_writer = MagicMock()
+            mock_writer.close = MagicMock()
+            mock_writer.wait_closed = AsyncMock()
+            mock_writer.write = MagicMock()
+            mock_writer.drain = AsyncMock()
+
+            responses = [
+                b"250 OK\r\n",  # AUTHENTICATE
+                b"250 OK\r\n",  # SETCONF
+            ]
+            mock_reader.readline = AsyncMock(side_effect=responses)
+            mock_open.return_value = (mock_reader, mock_writer)
+
+            client = TorControlClient(
+                control_host="127.0.0.1",
+                control_port=9051,
+                cookie_path=cookie_path,
+            )
+
+            await client.connect()
+            await client.authenticate()
+
+            # Test setting config with various types
+            await client.set_config(
+                {
+                    "HiddenServiceEnableIntroDoSDefense": True,
+                    "HiddenServiceEnableIntroDoSRatePerSec": 25,
+                    "SomeStringOption": "value with spaces",
+                }
+            )
+
+            # Verify SETCONF was sent
+            calls = mock_writer.write.call_args_list
+            assert any(b"SETCONF" in call[0][0] for call in calls)
+
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_get_capabilities(self, tmp_path: Path) -> None:
+        """Test capability detection."""
+        cookie_path = tmp_path / "control_auth_cookie"
+        cookie_path.write_bytes(b"validcookie" * 4)
+
+        with patch("asyncio.open_connection") as mock_open:
+            mock_reader = AsyncMock()
+            mock_writer = MagicMock()
+            mock_writer.close = MagicMock()
+            mock_writer.wait_closed = AsyncMock()
+            mock_writer.write = MagicMock()
+            mock_writer.drain = AsyncMock()
+
+            responses = [
+                b"250 OK\r\n",  # AUTHENTICATE
+                b"250-version=0.4.8.10\r\n",  # GETINFO version
+                b"250 OK\r\n",
+                b"250-config/names=HiddenServicePoWDefensesEnabled\r\n",  # GETINFO config/names
+                b"250 OK\r\n",
+            ]
+            mock_reader.readline = AsyncMock(side_effect=responses)
+            mock_open.return_value = (mock_reader, mock_writer)
+
+            client = TorControlClient(
+                control_host="127.0.0.1",
+                control_port=9051,
+                cookie_path=cookie_path,
+            )
+
+            await client.connect()
+            await client.authenticate()
+
+            caps = await client.get_capabilities()
+
+            assert caps.version == "0.4.8.10"
+            assert caps.has_intro_dos is True
+            assert caps.has_pow_module is True
+
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_configure_dos_defense(self, tmp_path: Path) -> None:
+        """Test configuring DoS defenses for hidden service."""
+        cookie_path = tmp_path / "control_auth_cookie"
+        cookie_path.write_bytes(b"validcookie" * 4)
+
+        with patch("asyncio.open_connection") as mock_open:
+            mock_reader = AsyncMock()
+            mock_writer = MagicMock()
+            mock_writer.close = MagicMock()
+            mock_writer.wait_closed = AsyncMock()
+            mock_writer.write = MagicMock()
+            mock_writer.drain = AsyncMock()
+
+            service_id = "abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuv"
+            responses = [
+                b"250 OK\r\n",  # AUTHENTICATE
+                b"250-version=0.4.8.10\r\n",  # GETINFO version
+                b"250 OK\r\n",
+                b"250-config/names=HiddenServicePoWDefensesEnabled\r\n",  # GETINFO config/names
+                b"250 OK\r\n",
+                b"250 OK\r\n",  # SETCONF
+            ]
+            mock_reader.readline = AsyncMock(side_effect=responses)
+            mock_open.return_value = (mock_reader, mock_writer)
+
+            client = TorControlClient(
+                control_host="127.0.0.1",
+                control_port=9051,
+                cookie_path=cookie_path,
+            )
+
+            await client.connect()
+            await client.authenticate()
+
+            # Configure DoS defense with PoW enabled
+            dos_config = HiddenServiceDoSConfig(
+                intro_dos_enabled=True,
+                intro_dos_rate_per_sec=10,
+                pow_enabled=True,
+            )
+
+            await client.configure_hidden_service_dos_defense(
+                service_id=service_id,
+                config=dos_config,
+            )
+
+            # Verify SETCONF was called with DoS settings
+            calls = mock_writer.write.call_args_list
+            setconf_calls = [c for c in calls if b"SETCONF" in c[0][0]]
+            assert len(setconf_calls) > 0
+
+            # Check that intro DoS and PoW settings were included
+            setconf_data = setconf_calls[-1][0][0]
+            assert b"HiddenServiceEnableIntroDoSDefense" in setconf_data
+            assert b"HiddenServicePoWDefensesEnabled" in setconf_data
 
             await client.close()

@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 from jmcore.models import NetworkType
 
-from maker.bot import MakerBot, OrderbookRateLimiter
+from maker.bot import DirectConnectionRateLimiter, MakerBot, OrderbookRateLimiter
 from maker.config import MakerConfig
 
 
@@ -478,6 +478,255 @@ class TestRateLimiterLogThrottling:
 
         assert should_log_1 is False
         assert should_log_2 is True
+
+
+class TestDirectConnectionRateLimiter:
+    """Tests for DirectConnectionRateLimiter class.
+
+    This rate limiter tracks by connection address (not nick) to prevent
+    nick rotation attacks on direct hidden service connections.
+    """
+
+    def test_first_message_allowed(self):
+        """Test that the first message from a connection is allowed."""
+        limiter = DirectConnectionRateLimiter()
+        assert limiter.check_message("127.0.0.1:54321") is True
+
+    def test_message_rate_limiting(self):
+        """Test that messages are rate limited after burst is exhausted."""
+        limiter = DirectConnectionRateLimiter(
+            message_rate_per_sec=2.0,
+            message_burst=5,
+        )
+        conn_id = "127.0.0.1:54321"
+
+        # First 5 messages should be allowed (burst)
+        for i in range(5):
+            assert limiter.check_message(conn_id) is True, f"Message {i + 1} should be allowed"
+
+        # 6th message should be blocked (burst exhausted)
+        assert limiter.check_message(conn_id) is False
+
+    def test_message_tokens_refill(self):
+        """Test that message tokens refill over time."""
+        limiter = DirectConnectionRateLimiter(
+            message_rate_per_sec=10.0,  # 10 per second = 1 per 100ms
+            message_burst=2,
+        )
+        conn_id = "127.0.0.1:54321"
+
+        # Exhaust burst
+        assert limiter.check_message(conn_id) is True
+        assert limiter.check_message(conn_id) is True
+        assert limiter.check_message(conn_id) is False
+
+        # Wait for tokens to refill
+        time.sleep(0.15)  # Should get at least 1 token
+
+        # Should be allowed again
+        assert limiter.check_message(conn_id) is True
+
+    def test_first_orderbook_request_allowed(self):
+        """Test that the first orderbook request is allowed."""
+        limiter = DirectConnectionRateLimiter()
+        assert limiter.check_orderbook("127.0.0.1:54321") is True
+
+    def test_orderbook_rate_limiting(self):
+        """Test that orderbook requests are rate limited."""
+        limiter = DirectConnectionRateLimiter(orderbook_interval=10.0)
+        conn_id = "127.0.0.1:54321"
+
+        # First request - allowed
+        assert limiter.check_orderbook(conn_id) is True
+
+        # Immediate second request - blocked
+        assert limiter.check_orderbook(conn_id) is False
+
+    def test_orderbook_request_after_interval(self):
+        """Test that orderbook requests are allowed after interval."""
+        limiter = DirectConnectionRateLimiter(orderbook_interval=0.1)
+        conn_id = "127.0.0.1:54321"
+
+        # First request
+        assert limiter.check_orderbook(conn_id) is True
+
+        # Wait for interval
+        time.sleep(0.15)
+
+        # Should be allowed again
+        assert limiter.check_orderbook(conn_id) is True
+
+    def test_orderbook_ban_after_violations(self):
+        """Test that connections are banned after orderbook violations."""
+        limiter = DirectConnectionRateLimiter(
+            orderbook_interval=10.0,
+            orderbook_ban_threshold=5,
+            ban_duration=3600.0,
+        )
+        conn_id = "127.0.0.1:54321"
+
+        # First request - allowed
+        assert limiter.check_orderbook(conn_id) is True
+        assert not limiter.is_banned(conn_id)
+
+        # Generate violations up to threshold (5 violations = ban)
+        # Each failed check increments violation count
+        for i in range(4):
+            assert limiter.check_orderbook(conn_id) is False
+            assert not limiter.is_banned(conn_id), f"Iteration {i}: should not be banned yet"
+
+        # 5th violation triggers ban
+        assert limiter.check_orderbook(conn_id) is False
+        assert limiter.is_banned(conn_id)
+
+    def test_ban_blocks_messages(self):
+        """Test that banned connections can't send messages."""
+        limiter = DirectConnectionRateLimiter(
+            orderbook_interval=10.0,
+            orderbook_ban_threshold=3,
+        )
+        conn_id = "127.0.0.1:54321"
+
+        # Get banned via orderbook spam
+        limiter.check_orderbook(conn_id)
+        for _ in range(4):
+            limiter.check_orderbook(conn_id)
+
+        assert limiter.is_banned(conn_id)
+
+        # Messages should also be blocked
+        assert limiter.check_message(conn_id) is False
+
+    def test_ban_expiration(self):
+        """Test that bans expire after duration."""
+        limiter = DirectConnectionRateLimiter(
+            orderbook_interval=10.0,
+            orderbook_ban_threshold=3,
+            ban_duration=0.1,  # 100ms ban
+        )
+        conn_id = "127.0.0.1:54321"
+
+        # Get banned
+        limiter.check_orderbook(conn_id)
+        for _ in range(4):
+            limiter.check_orderbook(conn_id)
+
+        assert limiter.is_banned(conn_id)
+
+        # Wait for ban to expire
+        time.sleep(0.15)
+
+        # Should no longer be banned
+        assert not limiter.is_banned(conn_id)
+
+        # Should be able to send messages again
+        assert limiter.check_message(conn_id) is True
+
+    def test_independent_connection_tracking(self):
+        """Test that different connections are tracked independently."""
+        limiter = DirectConnectionRateLimiter(
+            orderbook_interval=10.0,
+            orderbook_ban_threshold=3,
+        )
+
+        # Ban connection 1
+        limiter.check_orderbook("127.0.0.1:11111")
+        for _ in range(4):
+            limiter.check_orderbook("127.0.0.1:11111")
+
+        assert limiter.is_banned("127.0.0.1:11111")
+
+        # Connection 2 should work fine
+        assert limiter.check_orderbook("127.0.0.1:22222") is True
+        assert not limiter.is_banned("127.0.0.1:22222")
+
+    def test_statistics(self):
+        """Test that statistics are correctly gathered."""
+        limiter = DirectConnectionRateLimiter(
+            orderbook_interval=10.0,
+            orderbook_ban_threshold=10,
+        )
+
+        # Generate activity
+        limiter.check_orderbook("127.0.0.1:11111")
+        limiter.check_orderbook("127.0.0.1:11111")  # 1 violation
+
+        limiter.check_orderbook("127.0.0.1:22222")
+        for _ in range(15):
+            limiter.check_orderbook("127.0.0.1:22222")  # Gets banned
+
+        stats = limiter.get_statistics()
+
+        assert stats["total_violations"] > 0
+        assert "127.0.0.1:22222" in stats["banned_connections"]
+        assert "127.0.0.1:11111" not in stats["banned_connections"]
+        assert len(stats["top_violators"]) >= 2
+
+    def test_cleanup_removes_stale_entries(self):
+        """Test that cleanup removes stale tracking entries."""
+        limiter = DirectConnectionRateLimiter()
+
+        # Add some connections
+        limiter.check_message("127.0.0.1:11111")
+        limiter.check_message("127.0.0.1:22222")
+
+        # Entries should exist
+        assert "127.0.0.1:11111" in limiter._message_last_update
+        assert "127.0.0.1:22222" in limiter._message_last_update
+
+        # Cleanup with max_age=0 removes everything
+        limiter.cleanup_old_entries(max_age=0)
+
+        assert "127.0.0.1:11111" not in limiter._message_last_update
+        assert "127.0.0.1:22222" not in limiter._message_last_update
+
+
+class TestMakerBotDirectConnectionRateLimiting:
+    """Tests for direct connection rate limiting integration in MakerBot."""
+
+    @pytest.fixture
+    def mock_wallet(self):
+        """Create a mock wallet service."""
+        wallet = MagicMock()
+        wallet.mixdepth_count = 5
+        wallet.utxo_cache = {}
+        return wallet
+
+    @pytest.fixture
+    def mock_backend(self):
+        """Create a mock blockchain backend."""
+        return MagicMock()
+
+    @pytest.fixture
+    def config(self):
+        """Create a test maker config."""
+        return MakerConfig(
+            mnemonic="test " * 12,
+            directory_servers=["localhost:5222"],
+            network=NetworkType.REGTEST,
+        )
+
+    @pytest.fixture
+    def maker_bot(self, mock_wallet, mock_backend, config):
+        """Create a MakerBot instance for testing."""
+        return MakerBot(
+            wallet=mock_wallet,
+            backend=mock_backend,
+            config=config,
+        )
+
+    def test_bot_has_direct_connection_rate_limiter(self, maker_bot):
+        """Test that MakerBot initializes with a direct connection rate limiter."""
+        assert hasattr(maker_bot, "_direct_connection_rate_limiter")
+        assert isinstance(maker_bot._direct_connection_rate_limiter, DirectConnectionRateLimiter)
+
+    def test_direct_limiter_is_stricter(self, maker_bot):
+        """Test that direct connection limiter has stricter settings."""
+        direct_limiter = maker_bot._direct_connection_rate_limiter
+
+        # Direct connections should have stricter settings than directory
+        assert direct_limiter.orderbook_interval == 30.0  # Longer than 10s
+        assert direct_limiter.orderbook_ban_threshold == 10  # Faster than 100
 
 
 if __name__ == "__main__":
