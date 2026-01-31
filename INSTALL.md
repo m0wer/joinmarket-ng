@@ -407,7 +407,7 @@ Edit `~/.joinmarket-ng/config.toml` to configure your Bitcoin backend (see [Conf
 
 ```bash
 mkdir -p ~/.joinmarket-ng/wallets
-jm-wallet generate --save --prompt-password --output ~/.joinmarket-ng/wallets/wallet.mnemonic
+jm-wallet generate --save --prompt-password --output ~/.joinmarket-ng/wallets/default.mnemonic
 ```
 
 **IMPORTANT**: Write down the displayed mnemonic - it's your only backup!
@@ -417,7 +417,7 @@ jm-wallet generate --save --prompt-password --output ~/.joinmarket-ng/wallets/wa
 **For Makers** (earn fees by providing liquidity):
 
 ```bash
-jm-maker start -f ~/.joinmarket-ng/wallets/wallet.mnemonic
+jm-maker start -f ~/.joinmarket-ng/wallets/default.mnemonic
 ```
 
 See [maker/README.md](./maker/README.md) for detailed maker configuration.
@@ -425,7 +425,7 @@ See [maker/README.md](./maker/README.md) for detailed maker configuration.
 **For Takers** (mix your coins for privacy):
 
 ```bash
-jm-taker coinjoin -f ~/.joinmarket-ng/wallets/wallet.mnemonic --amount 1000000
+jm-taker coinjoin -f ~/.joinmarket-ng/wallets/default.mnemonic --amount 1000000
 ```
 
 See [taker/README.md](./taker/README.md) for detailed taker options.

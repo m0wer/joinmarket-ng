@@ -29,7 +29,7 @@ pip install -e ../jmcore .
 # Generate with defaults (saves to ~/.joinmarket-ng/wallets/default.mnemonic with password)
 jm-wallet generate
 
-# Or specify a custom location
+# Or specify a custom name and/or location
 jm-wallet generate --output ~/.joinmarket-ng/wallets/my-wallet.mnemonic
 
 # Generate without saving (display only)
@@ -41,11 +41,11 @@ jm-wallet generate --no-save --no-prompt-password
 **Option B: Import an existing mnemonic** (e.g., migrating from reference implementation):
 
 ```bash
-# Interactive word-by-word input with Tab completion
+# Interactive word-by-word input with Tab completion (saves to ~/.joinmarket-ng/wallets/default.mnemonic with password)
 jm-wallet import
 
 # Or pass mnemonic directly
-jm-wallet import --mnemonic "your twelve word mnemonic phrase ..."
+jm-wallet import --mnemonic "your twelve or twenty-four word mnemonic phrase ..."
 
 # Import a 12-word mnemonic
 jm-wallet import --words 12
@@ -170,7 +170,7 @@ Balance by mixdepth:
 # Generate and save encrypted wallet to default location (recommended)
 jm-wallet generate
 
-# Generate and save to custom location
+# Generate and save to custom name and/or location
 jm-wallet generate --output ~/my-wallet.mnemonic
 
 # Just display (not saved - for testing only)
@@ -181,7 +181,7 @@ jm-wallet generate --words 12
 ```
 
 **Note**:
-- Default location: `~/.joinmarket-ng/wallets/default.mnemonic`
+- Default name and location: `~/.joinmarket-ng/wallets/default.mnemonic`
 - By default, the wallet is saved and password-protected
 - Use `--no-save` to skip saving, `--no-prompt-password` to skip encryption (not recommended)
 
@@ -354,10 +354,11 @@ For detailed help on any command, see the auto-generated help sections below.
  it directly via --mnemonic.
  By default, saves to ~/.joinmarket-ng/wallets/default.mnemonic with password
  protection.
- Examples:     jm-wallet import                          # Interactive input,
- 24 words     jm-wallet import --words 12               # Interactive input, 12
- words     jm-wallet import --mnemonic "word1 word2 ..."  # Direct input
- jm-wallet import -o my-wallet.mnemonic    # Custom output file
+ Examples:
+  jm-wallet import                               # Interactive input, 24 words
+  jm-wallet import --words 12                    # Interactive input, 12 words
+  jm-wallet import --mnemonic "word1 word2 ..."  # Direct input
+  jm-wallet import -o my-wallet.mnemonic         # Custom output file
 
 ╭─ Options ────────────────────────────────────────────────────────────────────╮
 │ --words            -w                          INTEGER  Number of words (12, │
