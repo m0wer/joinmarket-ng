@@ -30,7 +30,7 @@ The maker bot tries to auto-detect Tor configuration. For manual setup, see [Env
 Generate a new encrypted wallet file:
 
 ```bash
-jm-wallet generate --output ~/.joinmarket-ng/wallets/maker.mnemonic
+jm-wallet generate --output ~/.joinmarket-ng/wallets/default.mnemonic
 ```
 
 **IMPORTANT**: Write down the displayed mnemonic - it's your only backup!
@@ -38,7 +38,7 @@ jm-wallet generate --output ~/.joinmarket-ng/wallets/maker.mnemonic
 Or import an existing mnemonic (e.g., migrating from reference implementation):
 
 ```bash
-jm-wallet import --output ~/.joinmarket-ng/wallets/maker.mnemonic
+jm-wallet import --output ~/.joinmarket-ng/wallets/default.mnemonic
 ```
 
 See [jmwallet README](../jmwallet/README.md) for wallet management details.
@@ -47,10 +47,10 @@ See [jmwallet README](../jmwallet/README.md) for wallet management details.
 
 ```bash
 # View balance and addresses
-jm-wallet info --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic --backend neutrino
+jm-wallet info --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic --backend neutrino
 
 # Or use jm-maker to get a specific address
-jm-maker generate-address --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic
+jm-maker generate-address --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic
 ```
 
 ### 3. Fund Your Wallet
@@ -80,7 +80,7 @@ rpc_password = "your_rpc_password"
 Start maker bot:
 
 ```bash
-jm-maker start --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic
+jm-maker start --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic
 ```
 
 #### Option B: Neutrino Backend
@@ -112,7 +112,7 @@ neutrino_url = "http://127.0.0.1:8334"
 Start maker bot:
 
 ```bash
-jm-maker start --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic
+jm-maker start --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic
 ```
 
 The bot will:
@@ -171,14 +171,14 @@ Charge a fixed satoshi amount regardless of CoinJoin size:
 ```bash
 # Relative fee (0.2%) - auto-selects sw0reloffer
 jm-maker start \
-  --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic \
   --backend-type neutrino \
   --cj-fee-relative 0.002 \
   --min-size 200000
 
 # Absolute fee (1000 sats) - auto-selects sw0absoffer
 jm-maker start \
-  --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic \
   --backend-type neutrino \
   --cj-fee-absolute 1000 \
   --min-size 200000
@@ -191,21 +191,21 @@ Increase offer visibility by locking bitcoin for a period. See wallet CLI:
 ```bash
 # Generate bond address (saves to registry for auto-discovery)
 jm-wallet generate-bond-address \
-  --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic \
   --locktime 1735689600
 
 # List existing bonds (also updates registry with UTXO info)
-jm-wallet list-bonds --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic
+jm-wallet list-bonds --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic
 
 # Discover bonds by scanning specific locktimes (updates registry)
-jm-wallet list-bonds --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
+jm-wallet list-bonds --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic \
   --locktime 1735689600
 
 # View registry entries
 jm-wallet registry-list
 
 # Sync registry with blockchain (check funding status)
-jm-wallet registry-sync --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic
+jm-wallet registry-sync --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic
 ```
 
 **Auto-discovery**: Bonds created with `generate-bond-address` are saved to the bond registry (`~/.joinmarket-ng/fidelity_bonds.json`). The maker bot **automatically discovers** these bonds at startup - no need to specify locktimes manually.
@@ -214,7 +214,7 @@ If you need to manually specify locktimes (e.g., for bonds created outside this 
 
 ```bash
 jm-maker start \
-  --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic \
   --fidelity-bond-locktimes 1735689600
 ```
 
@@ -227,7 +227,7 @@ If you have an existing maker on the reference implementation (JoinMarket-Org/jo
 1. **Import your mnemonic** with the interactive import command:
 
 ```bash
-jm-wallet import --output ~/.joinmarket-ng/wallets/maker.mnemonic
+jm-wallet import --output ~/.joinmarket-ng/wallets/default.mnemonic
 ```
 
 This provides word-by-word entry with Tab completion and auto-complete when only one BIP39 word matches your prefix. The mnemonic is validated and optionally encrypted.
@@ -236,14 +236,14 @@ Alternatively, pass the mnemonic directly:
 
 ```bash
 jm-wallet import \
-  --mnemonic "your twelve word mnemonic phrase here ..." \
-  --output ~/.joinmarket-ng/wallets/maker.mnemonic
+  --mnemonic "your twelve or twenty-four word mnemonic phrase here ..." \
+  --output ~/.joinmarket-ng/wallets/default.mnemonic
 ```
 
 2. **Start the maker** - fidelity bonds are auto-discovered:
 
 ```bash
-jm-maker start --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic
+jm-maker start --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic
 ```
 
 That's it! The maker will:
@@ -258,13 +258,13 @@ JoinMarket-NG can scan all 960 possible fidelity bond timelocks (Jan 2020 - Dec 
 **Full bond recovery** (scans all timelocks, may take time on mainnet):
 
 ```bash
-jm-wallet recover-bonds --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic
+jm-wallet recover-bonds --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic
 ```
 
 **Quick discovery** (if you know the locktime):
 
 ```bash
-jm-wallet list-bonds --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
+jm-wallet list-bonds --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic \
   --locktime 1735689600
 ```
 
@@ -274,12 +274,12 @@ Both commands update the bond registry (`fidelity_bonds.json`) with discovered b
 
 ```bash
 # Via CLI argument
-jm-wallet recover-bonds --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
+jm-wallet recover-bonds --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic \
   --bip39-passphrase "your passphrase"
 
 # Via environment variable
 BIP39_PASSPHRASE="your passphrase" jm-wallet recover-bonds \
-  --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic
+  --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic
 ```
 
 Note: The BIP39 passphrase is intentionally NOT read from config.toml for security reasons.
@@ -322,7 +322,7 @@ Log notice stdout
 
 ```bash
 mkdir -p ~/.joinmarket-ng/wallets
-# Create or copy your mnemonic file to ~/.joinmarket-ng/wallets/maker.mnemonic
+# Create or copy your mnemonic file to ~/.joinmarket-ng/wallets/default.mnemonic
 ```
 
 4. **Update RPC credentials** in `docker-compose.yml` (change `rpcuser`/`rpcpassword`).
@@ -486,7 +486,7 @@ Thresholds are configurable via environment variables if needed (see config.py).
 ## Troubleshooting
 
 **"No offers created"**
-- Check balance: `jm-wallet info --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic`
+- Check balance: `jm-wallet info --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic`
 - Need at least 100,000 sats per mixdepth by default
 
 **"Failed to connect to directory server"**
