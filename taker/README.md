@@ -23,7 +23,7 @@ Generate an encrypted wallet file:
 
 ```bash
 mkdir -p ~/.joinmarket-ng/wallets
-jm-wallet generate --save --prompt-password --output ~/.joinmarket-ng/wallets/taker.mnemonic
+jm-wallet generate --save --prompt-password --output ~/.joinmarket-ng/wallets/default.mnemonic
 ```
 
 **IMPORTANT**: Write down the displayed mnemonic - it's your only backup!
@@ -34,7 +34,7 @@ See [jmwallet README](../jmwallet/README.md) for wallet management details.
 
 ```bash
 # View balance and addresses
-jm-wallet info --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic --backend neutrino
+jm-wallet info --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic --backend neutrino
 ```
 
 ### 3. Fund Your Wallet
@@ -63,7 +63,7 @@ Execute CoinJoin:
 
 ```bash
 jm-taker coinjoin \
-  --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic \
   --amount 1000000
 ```
 
@@ -97,7 +97,7 @@ Mix to next mixdepth (recommended for privacy):
 
 ```bash
 jm-taker coinjoin \
-  --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic \
   --amount 1000000
 ```
 
@@ -110,7 +110,7 @@ This mixes 1,000,000 sats (0.01 BTC) to the next mixdepth in your wallet.
 Default behavior - sends to next mixdepth (INTERNAL):
 
 ```bash
-jm-taker coinjoin --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic --amount 500000
+jm-taker coinjoin --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic --amount 500000
 ```
 
 ### Send to External Address
@@ -119,7 +119,7 @@ Mix and send to a specific address:
 
 ```bash
 jm-taker coinjoin \
-  --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic \
   --amount 500000 \
   --destination bc1qexampleaddress...
 ```
@@ -130,7 +130,7 @@ Use `--amount 0` to sweep all funds from a mixdepth:
 
 ```bash
 jm-taker coinjoin \
-  --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic \
   --amount 0 \
   --mixdepth 2
 ```
@@ -141,7 +141,7 @@ More counterparties = better privacy:
 
 ```bash
 jm-taker coinjoin \
-  --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic \
   --amount 1000000 \
   --counterparties 6
 ```
@@ -183,7 +183,7 @@ Save as `schedule.json`:
 ### Run Tumbler
 
 ```bash
-jm-taker tumble schedule.json --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic
+jm-taker tumble schedule.json --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic
 ```
 
 ## Configuration
@@ -213,7 +213,7 @@ Lower fees (may find fewer makers):
 
 ```bash
 jm-taker coinjoin \
-  --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic \
   --amount 1000000 \
   --max-abs-fee 200 \
   --max-rel-fee 0.0005
@@ -228,13 +228,13 @@ To reduce the economic incentive for sybil attacks by bondless makers, the `--bo
 ```bash
 # Disable zero-fee requirement for bondless spots (not recommended)
 jm-taker coinjoin \
-  --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic \
   --amount 1000000 \
   --no-bondless-zero-fee
 
 # Adjust bondless maker allowance
 jm-taker coinjoin \
-  --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic \
   --amount 1000000 \
   --bondless-allowance 0.2
 ```
@@ -269,7 +269,7 @@ Log notice stdout
 
 ```bash
 mkdir -p ~/.joinmarket-ng/wallets
-# Create or copy your mnemonic file to ~/.joinmarket-ng/wallets/taker.mnemonic
+# Create or copy your mnemonic file to ~/.joinmarket-ng/wallets/default.mnemonic
 ```
 
 4. **Update RPC credentials** in `docker-compose.yml` (change `rpcuser`/`rpcpassword`).
@@ -418,7 +418,7 @@ Use env vars for RPC credentials (see jmwallet README).
 - UTXO must be ≥20% of CoinJoin amount
 
 **"Insufficient balance"**
-- Check: `jm-wallet info --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic`
+- Check: `jm-wallet info --mnemonic-file ~/.joinmarket-ng/wallets/default.mnemonic`
 - Reserve some balance for fees
 
 **"CoinJoin timeout"**
