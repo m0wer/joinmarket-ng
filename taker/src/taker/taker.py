@@ -1488,10 +1488,20 @@ class Taker:
                         self.state = TakerState.CANCELLED
                         return None
 
+                    total_selected = sum(u.value for u in manually_selected_utxos)
                     logger.info(
                         f"Manually selected {len(manually_selected_utxos)} UTXOs "
-                        f"(total: {sum(u.value for u in manually_selected_utxos):,} sats)"
+                        f"(total: {total_selected:,} sats)"
                     )
+
+                    # Validate selected UTXOs have sufficient funds (for non-sweep)
+                    if amount > 0 and total_selected < amount:
+                        logger.error(
+                            f"Insufficient funds in selected UTXOs: "
+                            f"have {total_selected:,} sats, need at least {amount:,} sats"
+                        )
+                        self.state = TakerState.FAILED
+                        return None
                 except RuntimeError as e:
                     logger.error(f"Interactive UTXO selection failed: {e}")
                     self.state = TakerState.FAILED

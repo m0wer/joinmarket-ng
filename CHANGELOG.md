@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **CoinJoin Starts with Insufficient Funds When Using UTXO Selector** ([#106](https://github.com/joinmarket-ng/joinmarket-ng/issues/106)): Fixed a bug where `jm-taker coinjoin --select-utxos` would proceed with the coinjoin even when the selected UTXOs had insufficient funds. The error ("Failed to generate PoDLE commitment") would only appear after confirming the transaction. Now, fund validation occurs immediately after UTXO selection, failing early with a clear error message before connecting to the orderbook. This matches the existing behavior of `jm-wallet send --select-utxos`. Related: [#102](https://github.com/joinmarket-ng/joinmarket-ng/issues/102).
+
 ### Changed
 
 - **Improved CoinJoin Confirmation Display** (#110): Redesigned the `jm-taker coinjoin` confirmation screen for better readability:
