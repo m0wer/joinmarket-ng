@@ -9,15 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **NUMS Point Generation Algorithm** ([#101](https://github.com/joinmarket-ng/joinmarket-ng/issues/101)): Added explicit documentation and implementation of the NUMS (Nothing Up My Sleeve) point generation algorithm for PoDLE commitments. The `generate_nums_point()` function now transparently generates deterministic NUMS points using SHA256 hashing of secp256k1's generator G. NUMS points are cached for efficiency and validated against test vectors from the original JoinMarket implementation. Support for NUMS indices expanded from 10 to the full range of 256 (0-255), providing generous headroom for multiple commitment reuses per UTXO.
+- **NUMS Point Generation Algorithm** ([#101](../../issues/101)): Added explicit documentation and implementation of the NUMS (Nothing Up My Sleeve) point generation algorithm for PoDLE commitments. The `generate_nums_point()` function now transparently generates deterministic NUMS points using SHA256 hashing of secp256k1's generator G. NUMS points are cached for efficiency and validated against test vectors from the original JoinMarket implementation. Support for NUMS indices expanded from 10 to the full range of 256 (0-255), providing generous headroom for multiple commitment reuses per UTXO.
 
 ### Fixed
 
-- **CoinJoin Starts with Insufficient Funds When Using UTXO Selector** ([#106](https://github.com/joinmarket-ng/joinmarket-ng/issues/106)): Fixed a bug where `jm-taker coinjoin --select-utxos` would proceed with the coinjoin even when the selected UTXOs had insufficient funds. The error ("Failed to generate PoDLE commitment") would only appear after confirming the transaction. Now, fund validation occurs immediately after UTXO selection, failing early with a clear error message before connecting to the orderbook. This matches the existing behavior of `jm-wallet send --select-utxos`. Related: [#102](https://github.com/joinmarket-ng/joinmarket-ng/issues/102).
+- **CoinJoin Starts with Insufficient Funds When Using UTXO Selector** ([#106](../../issues/106)): Fixed a bug where `jm-taker coinjoin --select-utxos` would proceed with the coinjoin even when the selected UTXOs had insufficient funds. The error ("Failed to generate PoDLE commitment") would only appear after confirming the transaction. Now, fund validation occurs immediately after UTXO selection, failing early with a clear error message before connecting to the orderbook. This matches the existing behavior of `jm-wallet send --select-utxos`. Related: [#102](../../issues/102).
 
 ### Changed
 
-- **Improved CoinJoin Confirmation Display** (#110): Redesigned the `jm-taker coinjoin` confirmation screen for better readability:
+- **Improved CoinJoin Confirmation Display** ([#110](../../issues/110)): Redesigned the `jm-taker coinjoin` confirmation screen for better readability:
   - Title changed from "EXPECTED CJ TX" (all caps) to "Expected COINJOIN Transaction" (mixed case)
   - Information displayed in column form with consistent label widths
   - Reordered fields to match workflow: Source Mixdepth → Destination → CoinJoin Amount → Makers → Fees
@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **CoinJoin Confirmation Total Fee Display** (#109): Fixed a bug where the "Total Fees (makers+network)" in the CoinJoin confirmation prompt only showed maker fees, not the actual total. The display now correctly shows the sum of maker fees and mining fees.
+- **CoinJoin Confirmation Total Fee Display** ([#109](../../issues/109)): Fixed a bug where the "Total Fees (makers+network)" in the CoinJoin confirmation prompt only showed maker fees, not the actual total. The display now correctly shows the sum of maker fees and mining fees.
 
 - **Address Reuse After Counterparty Disappears (Maker & Taker)**: Fixed a critical privacy bug affecting both makers and takers where addresses revealed during the CoinJoin protocol could be reused if the counterparty disappeared before the transaction completed.
   - **Maker fix**: Addresses revealed during `!ioauth` are now recorded to history before sending the response, ensuring they are blacklisted even if the taker disappears before sending `!tx`.
@@ -138,7 +138,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added startup logging that clearly shows the configured offer type and fee (e.g., "Offer config: type=sw0reloffer, relative fee=0.001 (0.1000%)")
   - Added detailed startup logging when using `--dual-offers` showing both offer configurations
   - Added summary log after offer creation showing all offers to be announced with their sizes and fees
-  - Addresses issue #86 where users expected commenting out `cj_fee_relative` would switch to absolute fees
+  - Addresses issue [#86](../../issues/86) where users expected commenting out `cj_fee_relative` would switch to absolute fees
 
 - **Real-Time Autocomplete for Mnemonic Input**: The `jm-wallet import` interactive mnemonic input now features real-time autocomplete suggestions as you type. When there are 10 or fewer matching BIP39 words, they are displayed inline in gray. When only one match remains (after typing 3+ characters), the word auto-completes automatically. Tab completion is also available for partial matches. The feature gracefully falls back to readline-based completion on terminals that don't support raw input mode. Additionally, you can now paste all words at once (or a subset), with validation and clear error messages for invalid words.
 
@@ -703,20 +703,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-built image support for directory server compose.
 - Tor configuration instructions.
 
-[Unreleased]: https://github.com/m0wer/joinmarket-ng/compare/0.9.0...HEAD
-[0.11.6]: https://github.com/m0wer/joinmarket-ng/compare/0.11.5...0.11.6
-[0.11.5]: https://github.com/m0wer/joinmarket-ng/compare/0.11.4...0.11.5
-[0.11.4]: https://github.com/m0wer/joinmarket-ng/compare/0.11.3...0.11.4
-[0.11.3]: https://github.com/m0wer/joinmarket-ng/compare/0.11.2...0.11.3
-[0.11.2]: https://github.com/m0wer/joinmarket-ng/compare/0.11.1...0.11.2
-[0.11.0]: https://github.com/m0wer/joinmarket-ng/compare/0.10.0...0.11.0
-[0.10.0]: https://github.com/m0wer/joinmarket-ng/compare/0.9.0...0.10.0
-[0.9.0]: https://github.com/m0wer/joinmarket-ng/compare/0.8.0...0.9.0
-[0.8.0]: https://github.com/m0wer/joinmarket-ng/compare/0.7.0...0.8.0
-[0.7.0]: https://github.com/m0wer/joinmarket-ng/compare/0.6.0...0.7.0
-[0.6.0]: https://github.com/m0wer/joinmarket-ng/compare/0.5.0...0.6.0
-[0.5.0]: https://github.com/m0wer/joinmarket-ng/compare/0.4.0...0.5.0
-[0.4.0]: https://github.com/m0wer/joinmarket-ng/compare/0.3.0...0.4.0
-[0.3.0]: https://github.com/m0wer/joinmarket-ng/compare/0.2.0...0.3.0
-[0.2.0]: https://github.com/m0wer/joinmarket-ng/compare/0.1.0...0.2.0
-[0.1.0]: https://github.com/m0wer/joinmarket-ng/releases/tag/0.1.0
+[Unreleased]: ../../compare/0.9.0...HEAD
+[0.11.6]: ../../compare/0.11.5...0.11.6
+[0.11.5]: ../../compare/0.11.4...0.11.5
+[0.11.4]: ../../compare/0.11.3...0.11.4
+[0.11.3]: ../../compare/0.11.2...0.11.3
+[0.11.2]: ../../compare/0.11.1...0.11.2
+[0.11.0]: ../../compare/0.10.0...0.11.0
+[0.10.0]: ../../compare/0.9.0...0.10.0
+[0.9.0]: ../../compare/0.8.0...0.9.0
+[0.8.0]: ../../compare/0.7.0...0.8.0
+[0.7.0]: ../../compare/0.6.0...0.7.0
+[0.6.0]: ../../compare/0.5.0...0.6.0
+[0.5.0]: ../../compare/0.4.0...0.5.0
+[0.4.0]: ../../compare/0.3.0...0.4.0
+[0.3.0]: ../../compare/0.2.0...0.3.0
+[0.2.0]: ../../compare/0.1.0...0.2.0
+[0.1.0]: ../../releases/tag/0.1.0
