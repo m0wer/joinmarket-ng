@@ -26,6 +26,7 @@ from jmwallet.history import (
     read_history,
     update_awaiting_transaction_signed,
     update_pending_transaction_txid,
+    update_taker_awaiting_transaction_broadcast,
     update_transaction_confirmation,
     update_transaction_confirmation_with_detection,
     update_transaction_peer_count,
@@ -247,6 +248,7 @@ class TestHelperFunctions:
             total_maker_fees=900,
             mining_fee=300,
             destination="bc1qdest...",
+            change_address="bc1qchange...",
             source_mixdepth=0,
             selected_utxos=[("utxo1", 0), ("utxo2", 1)],
             txid="txid" * 16,
@@ -262,6 +264,7 @@ class TestHelperFunctions:
         assert entry.peer_count == 3
         assert "J5maker1" in entry.counterparty_nicks
         assert entry.destination_address == "bc1qdest..."
+        assert entry.change_address == "bc1qchange..."
         assert entry.source_mixdepth == 0
         assert entry.broadcast_method == "self"
 
@@ -273,6 +276,7 @@ class TestHelperFunctions:
             total_maker_fees=0,
             mining_fee=0,
             destination="bc1qdest...",
+            change_address="bc1qchange...",
             source_mixdepth=0,
             selected_utxos=[],
             txid="",
@@ -316,14 +320,15 @@ class TestPendingTransactions:
             total_maker_fees=500,
             mining_fee=100,
             destination="bc1qdest...",
+            change_address="bc1qchange...",
             source_mixdepth=0,
             selected_utxos=[("utxo1", 0)],
             txid="test_txid_456",
         )
 
-        # Should be pending by default
+        # Should be pending by default (Awaiting transaction)
         assert entry.success is False
-        assert entry.failure_reason == "Pending confirmation"
+        assert entry.failure_reason == "Awaiting transaction"
         assert entry.confirmations == 0
         assert entry.confirmed_at == ""
         assert entry.completed_at == ""
@@ -462,6 +467,7 @@ class TestUsedAddressTracking:
             total_maker_fees=500,
             mining_fee=100,
             destination="bc1qtest2address222222",
+            change_address="bc1qtakerchange...",
             source_mixdepth=0,
             selected_utxos=[("utxo1", 0)],
             txid="txid2" * 16,
@@ -471,9 +477,10 @@ class TestUsedAddressTracking:
         # Get used addresses
         used = get_used_addresses(temp_data_dir)
 
-        assert len(used) == 3  # 2 CJ addresses (maker+taker) + 1 change address (maker only)
+        assert len(used) == 4  # 2 CJ addresses (maker+taker) + 2 change addresses
         assert "bc1qtest1address111111" in used
         assert "bc1qtest2address222222" in used
+        assert "bc1qtakerchange..." in used
 
     def test_get_used_addresses_deduplication(self, temp_data_dir: Path) -> None:
         """Test that get_used_addresses deduplicates addresses."""
@@ -791,6 +798,206 @@ class TestUpdateAwaitingTransactionSigned:
         assert entries[0].txid == "existing_txid_123"
 
 
+class TestUpdateTakerAwaitingTransactionBroadcast:
+    """Tests for update_taker_awaiting_transaction_broadcast function."""
+
+    def test_update_taker_awaiting_transaction_broadcast_basic(self, temp_data_dir: Path) -> None:
+        """Test basic update of taker 'Awaiting transaction' entry after broadcast."""
+        # Create a taker entry with "Awaiting transaction" status
+        entry = create_taker_history_entry(
+            maker_nicks=["J5maker1", "J5maker2"],
+            cj_amount=1_000_000,
+            total_maker_fees=500,
+            mining_fee=0,  # Will be updated
+            destination="bc1qtakerdest12345678",
+            change_address="bc1qtakerchange123",
+            source_mixdepth=0,
+            selected_utxos=[("utxo1", 0)],
+            txid="",  # Empty before broadcast
+            failure_reason="Awaiting transaction",
+        )
+        append_history_entry(entry, temp_data_dir)
+
+        # Update after broadcast
+        result = update_taker_awaiting_transaction_broadcast(
+            destination_address="bc1qtakerdest12345678",
+            change_address="bc1qtakerchange123",
+            txid="broadcast_txid_abcdef123456",
+            mining_fee=250,
+            data_dir=temp_data_dir,
+        )
+        assert result is True
+
+        # Verify entry was updated
+        entries = read_history(temp_data_dir)
+        assert len(entries) == 1
+        assert entries[0].txid == "broadcast_txid_abcdef123456"
+        assert entries[0].mining_fee_paid == 250
+        assert entries[0].net_fee == -(500 + 250)  # -(maker_fees + mining_fee)
+        assert entries[0].failure_reason == "Pending confirmation"
+
+    def test_update_taker_awaiting_transaction_broadcast_nonexistent(
+        self, temp_data_dir: Path
+    ) -> None:
+        """Test that update fails when no matching entry exists."""
+        result = update_taker_awaiting_transaction_broadcast(
+            destination_address="bc1qnonexistent1234",
+            change_address="bc1qnonexistentchange",
+            txid="some_txid",
+            mining_fee=100,
+            data_dir=temp_data_dir,
+        )
+        assert result is False
+
+    def test_update_taker_awaiting_transaction_broadcast_only_matches_awaiting(
+        self, temp_data_dir: Path
+    ) -> None:
+        """Test that update only matches 'Awaiting transaction' entries."""
+        # Create an entry with different failure_reason
+        entry = create_taker_history_entry(
+            maker_nicks=["J5maker1"],
+            cj_amount=1_000_000,
+            total_maker_fees=500,
+            mining_fee=100,
+            destination="bc1qtakerpending123",
+            change_address="bc1qtakerchange456",
+            source_mixdepth=0,
+            selected_utxos=[("utxo1", 0)],
+            txid="",
+            failure_reason="Pending confirmation",  # Different status
+        )
+        append_history_entry(entry, temp_data_dir)
+
+        # Should NOT update because failure_reason is not "Awaiting transaction"
+        result = update_taker_awaiting_transaction_broadcast(
+            destination_address="bc1qtakerpending123",
+            change_address="bc1qtakerchange456",
+            txid="new_txid",
+            mining_fee=200,
+            data_dir=temp_data_dir,
+        )
+        assert result is False
+
+        # Original values should be unchanged
+        entries = read_history(temp_data_dir)
+        assert len(entries) == 1
+        assert entries[0].mining_fee_paid == 100  # Unchanged
+
+    def test_update_taker_awaiting_transaction_broadcast_requires_both_addresses(
+        self, temp_data_dir: Path
+    ) -> None:
+        """Test that update requires both destination and change address to match."""
+        entry = create_taker_history_entry(
+            maker_nicks=["J5maker1"],
+            cj_amount=1_000_000,
+            total_maker_fees=500,
+            mining_fee=0,
+            destination="bc1qtakerdest789",
+            change_address="bc1qtakerchange789",
+            source_mixdepth=0,
+            selected_utxos=[("utxo1", 0)],
+            txid="",
+            failure_reason="Awaiting transaction",
+        )
+        append_history_entry(entry, temp_data_dir)
+
+        # Should NOT match - wrong change address
+        result = update_taker_awaiting_transaction_broadcast(
+            destination_address="bc1qtakerdest789",
+            change_address="bc1qwrongchange",  # Wrong change address
+            txid="new_txid",
+            mining_fee=200,
+            data_dir=temp_data_dir,
+        )
+        assert result is False
+
+        # Should NOT match - wrong destination
+        result = update_taker_awaiting_transaction_broadcast(
+            destination_address="bc1qwrongdest",  # Wrong destination
+            change_address="bc1qtakerchange789",
+            txid="new_txid",
+            mining_fee=200,
+            data_dir=temp_data_dir,
+        )
+        assert result is False
+
+    def test_update_taker_awaiting_transaction_broadcast_preserves_other_fields(
+        self, temp_data_dir: Path
+    ) -> None:
+        """Test that updating preserves other fields like cj_amount, maker nicks, etc."""
+        entry = create_taker_history_entry(
+            maker_nicks=["J5maker1", "J5maker2", "J5maker3"],
+            cj_amount=5_000_000,
+            total_maker_fees=1500,
+            mining_fee=0,
+            destination="bc1qtakerpreserve123",
+            change_address="bc1qtakerchangepreserve",
+            source_mixdepth=2,
+            selected_utxos=[("utxo1", 0), ("utxo2", 1)],
+            txid="",
+            broadcast_method="random-maker",
+            network="signet",
+            failure_reason="Awaiting transaction",
+        )
+        append_history_entry(entry, temp_data_dir)
+
+        # Update with tx details
+        result = update_taker_awaiting_transaction_broadcast(
+            destination_address="bc1qtakerpreserve123",
+            change_address="bc1qtakerchangepreserve",
+            txid="preserved_taker_txid_123",
+            mining_fee=300,
+            data_dir=temp_data_dir,
+        )
+        assert result is True
+
+        # Verify other fields are preserved
+        entries = read_history(temp_data_dir)
+        assert len(entries) == 1
+        assert entries[0].counterparty_nicks == "J5maker1,J5maker2,J5maker3"
+        assert entries[0].peer_count == 3
+        assert entries[0].cj_amount == 5_000_000
+        assert entries[0].total_maker_fees_paid == 1500
+        assert entries[0].source_mixdepth == 2
+        assert entries[0].broadcast_method == "random-maker"
+        assert entries[0].network == "signet"
+        assert "utxo1:0" in entries[0].utxos_used
+        assert "utxo2:1" in entries[0].utxos_used
+
+    def test_update_taker_awaiting_transaction_broadcast_wont_match_with_existing_txid(
+        self, temp_data_dir: Path
+    ) -> None:
+        """Test that entries with existing txid are not matched."""
+        entry = create_taker_history_entry(
+            maker_nicks=["J5maker1"],
+            cj_amount=1_000_000,
+            total_maker_fees=500,
+            mining_fee=100,
+            destination="bc1qtakerwithtxid123",
+            change_address="bc1qtakerchangetxid",
+            source_mixdepth=0,
+            selected_utxos=[("utxo1", 0)],
+            txid="existing_taker_txid",  # Already has txid
+            failure_reason="Awaiting transaction",
+        )
+        append_history_entry(entry, temp_data_dir)
+
+        # Should NOT match because txid already exists
+        result = update_taker_awaiting_transaction_broadcast(
+            destination_address="bc1qtakerwithtxid123",
+            change_address="bc1qtakerchangetxid",
+            txid="new_txid_456",
+            mining_fee=200,
+            data_dir=temp_data_dir,
+        )
+        assert result is False
+
+        # Original txid should be unchanged
+        entries = read_history(temp_data_dir)
+        assert len(entries) == 1
+        assert entries[0].txid == "existing_taker_txid"
+
+
 class TestPeerCountDetection:
     """Tests for automatic peer count detection from transaction outputs."""
 
@@ -945,6 +1152,7 @@ class TestPeerCountDetection:
             total_maker_fees=500,
             mining_fee=100,
             destination="bc1qdest...",
+            change_address="bc1qchange...",
             source_mixdepth=0,
             selected_utxos=[("utxo1", 0)],
             txid="taker_tx_123",

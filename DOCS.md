@@ -218,12 +218,15 @@ JoinMarket NG uses a dedicated data directory for persistent files that need to 
     1. Checking if their CoinJoin destination address received funds
     2. Matching the UTXO's txid to the pending history entry
     3. Updating the history with the discovered txid and checking confirmations
-  - **Address Privacy Protection**: Addresses are recorded to history **before** being revealed to peers (during `!ioauth`), ensuring they are blacklisted even if:
-    - The taker disappears after receiving addresses
-    - The program crashes after sending `!ioauth`
+  - **Address Privacy Protection**: Addresses are recorded to history **before** being revealed to peers, ensuring they are blacklisted even if:
+    - The taker disappears after receiving maker addresses (via `!ioauth`)
+    - All makers disappear after receiving taker addresses (via `!tx`)
+    - The program crashes after sharing addresses
     - The transaction was never confirmed
     - The maker doesn't know the txid
     - The CoinJoin failed for any reason
+  - **Maker flow**: History entry created before sending `!ioauth`, updated with txid/fee after signing
+  - **Taker flow**: History entry created before sending `!tx`, updated with txid/fee after broadcast
   - Both CoinJoin destination and change addresses are permanently blacklisted from reuse
   - Wallet automatically skips address indices that would generate blacklisted addresses during CoinJoin
   - **UTXO Reuse**: Makers can immediately reuse their input UTXOs in new CoinJoins without waiting for confirmation (history tracking is independent of UTXO availability)

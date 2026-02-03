@@ -37,6 +37,7 @@ from jmwallet.history import (
     append_history_entry,
     create_taker_history_entry,
     get_pending_transactions,
+    update_taker_awaiting_transaction_broadcast,
     update_transaction_confirmation,
 )
 from jmwallet.wallet.models import UTXOInfo
@@ -2167,42 +2168,34 @@ class Taker:
             self.state = TakerState.COMPLETE
             logger.info(f"CoinJoin COMPLETE! txid: {self.txid}")
 
-            # Record transaction in history
+            # Update the "Awaiting transaction" history entry with txid and mining fee
+            # The entry was created before sending !tx to preserve address privacy
             try:
-                # Calculate total maker fees paid
-                total_maker_fees = sum(
-                    calculate_cj_fee(session.offer, self.cj_amount)
-                    for session in self.maker_sessions.values()
-                )
                 mining_fee = self.tx_metadata.get("fee", 0)
-                maker_nicks = list(self.maker_sessions.keys())
 
-                # Determine broadcast method
-                broadcast_method = self.config.tx_broadcast.value
-
-                history_entry = create_taker_history_entry(
-                    maker_nicks=maker_nicks,
-                    cj_amount=self.cj_amount,
-                    total_maker_fees=total_maker_fees,
-                    mining_fee=mining_fee,
-                    destination=self.cj_destination,
-                    source_mixdepth=self.tx_metadata.get("source_mixdepth", 0),
-                    selected_utxos=[(utxo.txid, utxo.vout) for utxo in self.selected_utxos],
+                updated = update_taker_awaiting_transaction_broadcast(
+                    destination_address=self.cj_destination,
+                    change_address=self.taker_change_address,
                     txid=self.txid,
-                    broadcast_method=broadcast_method,
-                    network=self.config.network.value,
+                    mining_fee=mining_fee,
+                    data_dir=self.config.data_dir,
                 )
-                append_history_entry(history_entry, data_dir=self.config.data_dir)
-                logger.debug(
-                    f"Recorded CoinJoin in history: {len(maker_nicks)} makers, "
-                    f"fees={total_maker_fees + mining_fee} sats"
-                )
+                if updated:
+                    logger.debug(
+                        f"Updated history entry for CJ txid {self.txid[:16]}..., "
+                        f"mining_fee={mining_fee} sats"
+                    )
+                else:
+                    logger.warning(
+                        f"No matching 'Awaiting transaction' entry found for "
+                        f"{self.cj_destination[:20]}... - history may be inconsistent"
+                    )
 
                 # Immediately check if tx is confirmed/in mempool and update history
                 # This is important for one-shot coinjoin CLI calls that exit immediately
                 await self._update_pending_transaction_now(self.txid, self.cj_destination)
             except Exception as e:
-                logger.warning(f"Failed to record CoinJoin history: {e}")
+                logger.warning(f"Failed to update CoinJoin history: {e}")
 
             # Fire-and-forget notification for successful CoinJoin
             total_fees = total_maker_fees + actual_mining_fee
@@ -3127,6 +3120,38 @@ class Taker:
         import base64
 
         tx_b64 = base64.b64encode(self.unsigned_tx).decode("ascii")
+
+        # Record history BEFORE sending !tx to makers.
+        # This ensures addresses are persisted before they're revealed in the transaction.
+        # If we crash after sending !tx but before broadcast, the addresses won't be reused.
+        try:
+            total_maker_fees = sum(
+                calculate_cj_fee(session.offer, self.cj_amount)
+                for session in self.maker_sessions.values()
+            )
+            maker_nicks = list(self.maker_sessions.keys())
+
+            history_entry = create_taker_history_entry(
+                maker_nicks=maker_nicks,
+                cj_amount=self.cj_amount,
+                total_maker_fees=total_maker_fees,
+                mining_fee=0,  # Will be updated after signing
+                destination=self.cj_destination,
+                change_address=self.taker_change_address,
+                source_mixdepth=self.tx_metadata.get("source_mixdepth", 0),
+                selected_utxos=[(utxo.txid, utxo.vout) for utxo in self.selected_utxos],
+                txid="",  # Will be updated after broadcast
+                broadcast_method=self.config.tx_broadcast.value,
+                network=self.config.network.value,
+                failure_reason="Awaiting transaction",
+            )
+            append_history_entry(history_entry, data_dir=self.config.data_dir)
+            logger.debug(
+                f"Recorded pre-broadcast history entry for CJ to {self.cj_destination[:20]}..."
+            )
+        except Exception as e:
+            logger.warning(f"Failed to record pre-broadcast history: {e}")
+            # Continue anyway - the CoinJoin can still proceed
 
         # Send ENCRYPTED !tx to each maker
         for nick, session in self.maker_sessions.items():

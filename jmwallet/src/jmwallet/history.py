@@ -589,6 +589,74 @@ def update_awaiting_transaction_signed(
         return False
 
 
+def update_taker_awaiting_transaction_broadcast(
+    destination_address: str,
+    change_address: str,
+    txid: str,
+    mining_fee: int,
+    data_dir: Path | None = None,
+) -> bool:
+    """
+    Update a pending "Awaiting transaction" entry when the taker broadcasts the tx.
+
+    This is called after the taker successfully broadcasts a transaction. The entry
+    was created earlier (before sending !tx) with failure_reason="Awaiting transaction"
+    to ensure the addresses were recorded before revealing them.
+
+    Args:
+        destination_address: The CoinJoin destination address to match
+        change_address: The change address to match (for extra precision)
+        txid: The transaction ID
+        mining_fee: Actual mining fee paid (may differ from estimate)
+        data_dir: Optional data directory
+
+    Returns:
+        True if a matching entry was found and updated, False otherwise
+    """
+    history_path = _get_history_path(data_dir)
+    if not history_path.exists():
+        return False
+
+    entries = read_history(data_dir)
+    updated = False
+
+    for entry in entries:
+        # Match by destination + change address and "Awaiting transaction" status
+        if (
+            entry.destination_address == destination_address
+            and entry.change_address == change_address
+            and entry.failure_reason == "Awaiting transaction"
+            and not entry.txid  # Should not have txid yet
+        ):
+            entry.txid = txid
+            entry.mining_fee_paid = mining_fee
+            entry.net_fee = -(entry.total_maker_fees_paid + mining_fee)
+            entry.failure_reason = "Pending confirmation"  # Now awaiting confirmation
+            logger.info(
+                f"Updated awaiting transaction for {destination_address[:20]}... "
+                f"with txid {txid[:16]}..., mining_fee={mining_fee} sats"
+            )
+            updated = True
+            break
+
+    if not updated:
+        return False
+
+    # Rewrite the entire history file
+    try:
+        fieldnames = _get_fieldnames()
+        with open(history_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for entry in entries:
+                row = {f.name: getattr(entry, f.name) for f in fields(entry)}
+                writer.writerow(row)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to update history: {e}")
+        return False
+
+
 def mark_pending_transaction_failed(
     destination_address: str,
     failure_reason: str,
@@ -733,16 +801,21 @@ def create_taker_history_entry(
     total_maker_fees: int,
     mining_fee: int,
     destination: str,
+    change_address: str,
     source_mixdepth: int,
     selected_utxos: list[tuple[str, int]],
-    txid: str,
+    txid: str = "",
     broadcast_method: str = "self",
     network: str = "mainnet",
     success: bool = False,  # Default to pending
-    failure_reason: str = "Pending confirmation",
+    failure_reason: str = "Awaiting transaction",
 ) -> TransactionHistoryEntry:
     """
-    Create a history entry for a taker CoinJoin (initially marked as pending).
+    Create a history entry for a taker CoinJoin.
+
+    This should be called BEFORE sending !tx to makers, to ensure addresses
+    are recorded before they're revealed. Initially created with
+    failure_reason="Awaiting transaction", then updated after broadcast.
 
     The transaction is created with success=False and confirmations=0 by default
     to indicate it's pending confirmation. A background task should later update
@@ -752,15 +825,16 @@ def create_taker_history_entry(
         maker_nicks: List of maker nicks
         cj_amount: CoinJoin amount in sats
         total_maker_fees: Total maker fees paid
-        mining_fee: Mining fee paid
-        destination: Destination address
+        mining_fee: Mining fee paid (may be 0 initially, updated after signing)
+        destination: Destination address (CoinJoin output)
+        change_address: Change output address (must be recorded for privacy!)
         source_mixdepth: Source mixdepth
         selected_utxos: List of (txid, vout) tuples for our inputs
-        txid: Transaction ID
-        broadcast_method: How the tx was broadcast
+        txid: Transaction ID (empty string if not yet known)
+        broadcast_method: How the tx was/will be broadcast
         network: Network name
         success: Whether the CoinJoin succeeded (default False for pending)
-        failure_reason: Reason for failure if any (default "Pending confirmation")
+        failure_reason: Reason for failure if any (default "Awaiting transaction")
 
     Returns:
         TransactionHistoryEntry ready to be appended
@@ -785,6 +859,7 @@ def create_taker_history_entry(
         net_fee=net_fee,
         source_mixdepth=source_mixdepth,
         destination_address=destination,
+        change_address=change_address,
         utxos_used=",".join(f"{txid}:{vout}" for txid, vout in selected_utxos),
         broadcast_method=broadcast_method,
         network=network,

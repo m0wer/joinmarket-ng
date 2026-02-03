@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Address Reuse After Taker Disappears**: Fixed a critical privacy bug where maker addresses revealed during `!ioauth` could be reused if the taker disappeared before sending `!tx` or if the CoinJoin failed after address revelation. Previously, addresses were only recorded to history after the transaction was signed. Now, addresses are recorded to history **before** being revealed to the taker, ensuring they are permanently blacklisted from reuse even if the CoinJoin fails at any subsequent step. This matches the original design principle: "we persisted the address index immediately on requesting it, always, so even in a crash scenario the agent wouldn't accidentally reuse addresses."
+- **Address Reuse After Counterparty Disappears (Maker & Taker)**: Fixed a critical privacy bug affecting both makers and takers where addresses revealed during the CoinJoin protocol could be reused if the counterparty disappeared before the transaction completed.
+  - **Maker fix**: Addresses revealed during `!ioauth` are now recorded to history before sending the response, ensuring they are blacklisted even if the taker disappears before sending `!tx`.
+  - **Taker fix**: Addresses included in the `!tx` message (destination and change addresses) are now recorded to history before sending to makers, ensuring they are blacklisted even if makers don't respond with signatures or the broadcast fails.
+  - Previously, both roles only recorded addresses to history after successful transaction signing/broadcast. Now, addresses are recorded **before** being revealed, with the history entry updated later with txid and fee information.
+  - The `create_taker_history_entry()` function now requires a `change_address` parameter to ensure taker change addresses are also tracked and blacklisted.
+  - Addresses are persisted before being revealed to prevent reuse even in failure scenarios.
 
 ## [0.11.5] - 2026-01-24
 
