@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **CoinJoin Starts with Insufficient Funds When Using UTXO Selector** ([#106](../../issues/106)): Fixed a bug where `jm-taker coinjoin --select-utxos` would proceed with the coinjoin even when the selected UTXOs had insufficient funds. The error ("Failed to generate PoDLE commitment") would only appear after confirming the transaction. Now, fund validation occurs immediately after UTXO selection, failing early with a clear error message before connecting to the orderbook. This matches the existing behavior of `jm-wallet send --select-utxos`. Related: [#102](../../issues/102).
+- **Early Fund Validation for CoinJoin** ([#102](../../issues/102), [#106](../../issues/106)): Added early fund validation for `jm-taker coinjoin` to check if sufficient funds are available before connecting to directory servers. This avoids unnecessary waiting time when the wallet has insufficient funds. The `Taker` class now exposes `sync_wallet()` and `connect()` methods separately, allowing the CLI to validate funds after wallet sync but before directory connection. Additionally, when using `--select-utxos`, funds are now validated immediately after UTXO selection (fixing the bug where coinjoins would start with insufficient funds and only fail later with "Failed to generate PoDLE commitment").
 
 ### Changed
 

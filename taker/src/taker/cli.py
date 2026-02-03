@@ -579,7 +579,26 @@ async def _run_coinjoin(
             network=config.network.value,
             nick=nick,
         )
-        await taker.start()
+
+        # Sync wallet first (before connecting to directory servers)
+        await taker.sync_wallet()
+
+        # Early fund validation: check if mixdepth has sufficient funds
+        # This avoids connecting to directory servers when funds are insufficient
+        mixdepth_balance = await wallet.get_balance(mixdepth)
+        if mixdepth_balance == 0:
+            logger.error(f"No funds in mixdepth {mixdepth}")
+            raise typer.Exit(1)
+
+        if amount > 0 and mixdepth_balance < amount:
+            logger.error(
+                f"Insufficient funds in mixdepth {mixdepth}: "
+                f"have {mixdepth_balance:,} sats, need at least {amount:,} sats"
+            )
+            raise typer.Exit(1)
+
+        # Now connect to directory servers (funds are sufficient)
+        await taker.connect()
 
         amount_display = "ALL (sweep)" if amount == 0 else f"{amount:,} sats"
         logger.info(f"Starting CoinJoin: {amount_display} -> {destination}")

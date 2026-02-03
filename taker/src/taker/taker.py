@@ -927,8 +927,17 @@ class Taker:
         self.running = False
         self._background_tasks: list[asyncio.Task[None]] = []
 
-    async def start(self) -> None:
-        """Start the taker and connect to directory servers."""
+    async def sync_wallet(self) -> int:
+        """
+        Sync the wallet and return total balance.
+
+        This method is separated from start() to allow callers to check
+        funds before connecting to directory servers (avoiding unnecessary
+        network connections when funds are insufficient).
+
+        Returns:
+            Total wallet balance in satoshis.
+        """
         logger.info(f"Starting taker (nick: {self.nick})")
 
         # Log wallet name if using descriptor wallet backend
@@ -959,6 +968,14 @@ class Taker:
         total_balance = await self.wallet.get_total_balance()
         logger.info(f"Wallet synced. Total balance: {total_balance:,} sats")
 
+        return total_balance
+
+    async def connect(self) -> None:
+        """
+        Connect to directory servers and start background tasks.
+
+        This should be called after sync_wallet() and any fund validation.
+        """
         # Connect to directory servers
         logger.info("Connecting to directory servers...")
         connected = await self.directory_client.connect_all()
@@ -982,6 +999,16 @@ class Taker:
         # Start periodic directory connection status logging task
         conn_status_task = asyncio.create_task(self._periodic_directory_connection_status())
         self._background_tasks.append(conn_status_task)
+
+    async def start(self) -> None:
+        """
+        Start the taker: sync wallet and connect to directory servers.
+
+        This is a convenience method that calls sync_wallet() followed by connect().
+        For early fund validation, call sync_wallet() first, validate, then call connect().
+        """
+        await self.sync_wallet()
+        await self.connect()
 
     async def stop(self) -> None:
         """Stop the taker and close connections."""
