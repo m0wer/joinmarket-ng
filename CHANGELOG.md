@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CoinJoin Confirmation Total Fee Display** (#109): Fixed a bug where the "Total Fees (makers+network)" in the CoinJoin confirmation prompt only showed maker fees, not the actual total. The display now correctly shows the sum of maker fees and mining fees.
+
 - **Address Reuse After Counterparty Disappears (Maker & Taker)**: Fixed a critical privacy bug affecting both makers and takers where addresses revealed during the CoinJoin protocol could be reused if the counterparty disappeared before the transaction completed.
   - **Maker fix**: Addresses revealed during `!ioauth` are now recorded to history before sending the response, ensuring they are blacklisted even if the taker disappears before sending `!tx`.
   - **Taker fix**: Addresses included in the `!tx` message (destination and change addresses) are now recorded to history before sending to makers, ensuring they are blacklisted even if makers don't respond with signatures or the broadcast fails.

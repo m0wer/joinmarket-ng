@@ -1699,7 +1699,7 @@ class Taker:
                     confirmed = self.confirmation_callback(
                         maker_details=maker_details,
                         cj_amount=self.cj_amount,
-                        total_fee=total_fee,
+                        total_fee=total_fee + estimated_tx_fee,
                         destination=destination,
                         mining_fee=estimated_tx_fee,
                     )
