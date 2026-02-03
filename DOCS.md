@@ -965,11 +965,13 @@ Gy = 0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8
 ```
 
 **Compressed form** (33 bytes): `02` prefix + $G_x$ (since $G_y$ is even)
+
 ```
 G_compressed = 0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798
 ```
 
 **Uncompressed form** (65 bytes): `04` prefix + $G_x$ + $G_y$
+
 ```
 G_uncompressed = 0479BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798
                    483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8
@@ -985,7 +987,9 @@ This allows independent verification that `G_compressed` and `G_uncompressed` re
 
 **Curve order** (the number of points on the curve):
 
-$$n = \texttt{0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141}$$
+```
+n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+```
 
 ### NUMS Points for PoDLE
 
@@ -1005,14 +1009,19 @@ The NUMS points are generated deterministically from $G$ using a transparent alg
 
 To generate NUMS point $J_i$ for index $i$:
 
-1. For $G \in \{G_{\text{compressed}}, G_{\text{uncompressed}}\}$:
-2. $\quad \text{seed} = G \mathbin\| i_{\text{byte}}$
-3. $\quad$ For $\text{counter} \in \{0, 1, \ldots, 255\}$:
-4. $\quad\quad \text{seed}_c = \text{seed} \mathbin\| \text{counter}_{\text{byte}}$
-5. $\quad\quad x = \text{SHA256}(\text{seed}_c)$
-6. $\quad\quad \text{claimed\_point} = \texttt{0x02} \mathbin\| x$ (try even $y$)
-7. $\quad\quad$ If $\text{claimed\_point}$ is valid on curve: **return** it
-8. **Fail** (should never happen)
+```
+for G in [G_compressed, G_uncompressed]:
+    seed = G || i (as single byte)
+    for counter in [0, 1, ..., 255]:
+        seed_c = seed || counter (as single byte)
+        x = SHA256(seed_c)
+        point = 0x02 || x  (compressed point with even y)
+        if point is valid on curve:
+            return point
+fail  (should never happen)
+```
+
+Python implementation:
 
 ```python
 def generate_nums_point(index: int) -> Point:
@@ -1045,16 +1054,16 @@ def generate_nums_point(index: int) -> Point:
 
 The PoDLE proves that two public keys $P = k \cdot G$ and $P_2 = k \cdot J$ share the same private key $k$:
 
-1. **Commitment**: Taker computes $C = \text{SHA256}(P_2)$ and sends to maker
+1. **Commitment**: Taker computes $C = \textrm{SHA256}(P_2)$ and sends to maker
 
 2. **Revelation**: After maker commits, taker reveals $(P, P_2, s, e)$ where:
    - $K_G = r \cdot G$, $K_J = r \cdot J$ (commitments using random nonce $r$)
-   - $e = \text{SHA256}(K_G \mathbin\| K_J \mathbin\| P \mathbin\| P_2)$ (challenge)
+   - $e = \textrm{SHA256}(K_G \| K_J \| P \| P_2)$ (challenge hash)
    - $s = r + e \cdot k \pmod{n}$ (Schnorr-like response)
 
 3. **Verification**: Maker checks:
-   - $\text{SHA256}(P_2) \stackrel{?}{=} C$ (commitment opens correctly)
-   - $e \stackrel{?}{=} \text{SHA256}(s \cdot G - e \cdot P \mathbin\| s \cdot J - e \cdot P_2 \mathbin\| P \mathbin\| P_2)$ (proof verifies)
+   - $\textrm{SHA256}(P_2) \stackrel{?}{=} C$ (commitment opens correctly)
+   - $e \stackrel{?}{=} \textrm{SHA256}((s \cdot G - e \cdot P) \| (s \cdot J - e \cdot P_2) \| P \| P_2)$
 
 This ensures the taker controls a real UTXO without revealing which one until makers have committed, preventing costless Sybil attacks on the orderbook.
 

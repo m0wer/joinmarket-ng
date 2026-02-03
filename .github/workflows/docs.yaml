@@ -51,7 +51,7 @@ jobs:
           pip install -e orderbook_watcher
 
           # Install documentation tools
-          pip install pdoc3 markdown
+          pip install pdoc3 markdown latex2mathml
 
       - name: Build documentation
         run: |

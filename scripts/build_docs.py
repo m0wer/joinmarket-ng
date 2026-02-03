@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -24,6 +25,59 @@ MODULES = [
     "directory_server/src/directory_server",
     "orderbook_watcher/src/orderbook_watcher",
 ]
+
+
+def convert_latex_to_mathml(text: str) -> str:
+    """Convert LaTeX math expressions to MathML.
+
+    Handles both display math ($$...$$) and inline math ($...$).
+    Uses latex2mathml for conversion, falling back to original text on error.
+    """
+    try:
+        import latex2mathml.converter  # type: ignore[import-untyped]
+    except ImportError:
+        print("Warning: latex2mathml not installed, math will not be rendered")
+        return text
+
+    def convert_display_math(match: re.Match[str]) -> str:
+        """Convert display math ($$...$$) to MathML."""
+        latex = match.group(1).strip()
+        try:
+            mathml = latex2mathml.converter.convert(latex)
+            # Wrap in a div for block display
+            return f'<div class="math-display">{mathml}</div>'
+        except Exception:
+            # Return original on conversion error
+            return match.group(0)
+
+    def convert_inline_math(match: re.Match[str]) -> str:
+        """Convert inline math ($...$) to MathML."""
+        latex = match.group(1).strip()
+        # Skip if it looks like an environment variable (all caps with underscores)
+        if re.match(r"^[A-Z_]+(/|$)", latex):
+            return match.group(0)
+        try:
+            mathml = latex2mathml.converter.convert(latex)
+            # Wrap in a span for inline display
+            return f'<span class="math-inline">{mathml}</span>'
+        except Exception:
+            # Return original on conversion error
+            return match.group(0)
+
+    # First convert display math ($$...$$) - must be done before inline
+    # Use DOTALL to match across lines
+    text = re.sub(r"\$\$(.+?)\$\$", convert_display_math, text, flags=re.DOTALL)
+
+    # Then convert inline math ($...$)
+    # Avoid matching:
+    # - Already converted display math
+    # - Content inside backticks (code)
+    # - Shell variables like $HOME, $PATH, $JOINMARKET_DATA_DIR
+    # The negative lookbehind (?<!`) avoids matching after backticks
+    # The pattern requires math-like content (letters, numbers, operators, braces)
+    text = re.sub(r"(?<![\$`])\$([^$\n`]+?)\$(?![\$`])", convert_inline_math, text)
+
+    return text
 
 
 def build_api_docs() -> None:
@@ -110,6 +164,9 @@ def convert_docs_md() -> None:
     with open(docs_md) as f:
         md_content = f.read()
 
+    # Convert LaTeX math to MathML before markdown processing
+    md_content = convert_latex_to_mathml(md_content)
+
     # Configure markdown extensions for better rendering
     md = markdown.Markdown(
         extensions=[
@@ -117,7 +174,6 @@ def convert_docs_md() -> None:
             "fenced_code",
             "codehilite",
             "toc",
-            "nl2br",
             "sane_lists",
         ],
         extension_configs={
@@ -414,6 +470,27 @@ def convert_docs_md() -> None:
             ::-webkit-scrollbar-thumb:hover {{
                 background: #777;
             }}
+        }}
+
+        /* Math rendering styles */
+        .math-display {{
+            display: block;
+            text-align: center;
+            margin: 1.5em 0;
+            overflow-x: auto;
+        }}
+
+        .math-inline {{
+            display: inline;
+        }}
+
+        /* MathML styling */
+        math {{
+            font-size: 1.1em;
+        }}
+
+        .math-display math {{
+            font-size: 1.2em;
         }}
     </style>
 </head>
