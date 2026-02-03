@@ -368,16 +368,20 @@ def test_history_command_status_display():
     with tempfile.TemporaryDirectory() as tmpdir:
         data_dir = Path(tmpdir)
 
-        # Create a pending transaction (success=False, failure_reason="Pending confirmation")
+        # Create a pending transaction (broadcast but awaiting confirmation)
+        # Note: create_taker_history_entry defaults to "Awaiting transaction",
+        # but after broadcast it becomes "Pending confirmation"
         pending_entry = create_taker_history_entry(
             maker_nicks=["J5maker1"],
             cj_amount=100000,
             total_maker_fees=500,
             mining_fee=100,
             destination="bc1qpending...",
+            change_address="bc1qpendingchange...",
             source_mixdepth=0,
             selected_utxos=[("utxo1", 0)],
             txid="a" * 64,
+            failure_reason="Pending confirmation",  # After broadcast, waiting for confirmation
         )
         append_history_entry(pending_entry, data_dir)
 
@@ -388,6 +392,7 @@ def test_history_command_status_display():
             total_maker_fees=600,
             mining_fee=150,
             destination="bc1qsuccess...",
+            change_address="bc1qsuccesschange...",
             source_mixdepth=0,
             selected_utxos=[("utxo2", 0)],
             txid="b" * 64,
@@ -404,6 +409,7 @@ def test_history_command_status_display():
             total_maker_fees=550,
             mining_fee=120,
             destination="bc1qfailed...",
+            change_address="bc1qfailedchange...",
             source_mixdepth=0,
             selected_utxos=[("utxo3", 0)],
             txid="c" * 64,
