@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Improved CoinJoin Confirmation Display** (#110): Redesigned the `jm-taker coinjoin` confirmation screen for better readability:
+  - Title changed from "EXPECTED CJ TX" (all caps) to "Expected COINJOIN Transaction" (mixed case)
+  - Information displayed in column form with consistent label widths
+  - Reordered fields to match workflow: Source Mixdepth → Destination → CoinJoin Amount → Makers → Fees
+  - Added "Miner Fee Rate" display (sat/vB)
+  - Maker list now shows right-aligned fee and bond values for easier comparison
+  - Removed redundant "Counterparties" field (count now shown inline as "Makers (N):")
+
 ## [0.11.6] - 2026-02-03
 
 ### Fixed

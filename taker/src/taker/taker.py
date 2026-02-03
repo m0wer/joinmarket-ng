@@ -1702,6 +1702,7 @@ class Taker:
                         total_fee=total_fee + estimated_tx_fee,
                         destination=destination,
                         mining_fee=estimated_tx_fee,
+                        fee_rate=self._fee_rate,
                     )
                     if not confirmed:
                         logger.info("CoinJoin cancelled by user")
@@ -2143,6 +2144,7 @@ class Taker:
                         total_fee=total_cost,
                         destination=destination,
                         mining_fee=actual_mining_fee,
+                        fee_rate=actual_fee_rate,
                     )
                     if not confirmed:
                         logger.warning("User declined final broadcast confirmation")

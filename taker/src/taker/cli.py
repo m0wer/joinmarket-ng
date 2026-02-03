@@ -544,12 +544,12 @@ async def _run_coinjoin(
         total_fee: int,
         destination: str,
         mining_fee: int | None = None,
+        fee_rate: float | None = None,
     ) -> bool:
         """Callback for user confirmation after maker selection."""
         from jmcore.confirmation import confirm_transaction, format_maker_summary
 
-        additional_info = format_maker_summary(maker_details)
-        additional_info["CoinJoin Amount"] = cj_amount
+        additional_info = format_maker_summary(maker_details, fee_rate=fee_rate)
         additional_info["Source Mixdepth"] = mixdepth
 
         return confirm_transaction(
