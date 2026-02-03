@@ -76,6 +76,8 @@ class WalletService:
         # These addresses have been shared with a taker but the CoinJoin hasn't
         # completed yet. They must not be reused until the session ends.
         self.reserved_addresses: set[str] = set()
+        # Cache for fidelity bond locktimes (address -> locktime)
+        self.fidelity_bond_locktime_cache: dict[str, int] = {}
 
     def get_address(self, mixdepth: int, change: int, index: int) -> str:
         """Get address for given path"""
@@ -212,8 +214,6 @@ class WalletService:
         # Path format: m/84'/coin'/0'/2/index:locktime
         self.address_cache[address] = (0, FIDELITY_BOND_BRANCH, index)
         # Also store the locktime in a separate cache for fidelity bonds
-        if not hasattr(self, "fidelity_bond_locktime_cache"):
-            self.fidelity_bond_locktime_cache: dict[str, int] = {}
         self.fidelity_bond_locktime_cache[address] = locktime
 
         logger.trace(f"Created fidelity bond address {address} with locktime {locktime}")
@@ -1377,7 +1377,8 @@ class WalletService:
         """
         Find the derivation path for an address.
 
-        First checks the cache, then tries to derive and match.
+        First checks the cache, then checks the fidelity bond registry,
+        then tries to derive and match.
 
         Args:
             address: Bitcoin address
@@ -1390,6 +1391,28 @@ class WalletService:
         # Check cache first
         if address in self.address_cache:
             return self.address_cache[address]
+
+        # Check fidelity bond registry if data_dir is available
+        # Fidelity bond addresses use branch 2 and aren't in the normal cache
+        if self.data_dir:
+            try:
+                from jmwallet.wallet.bond_registry import load_registry
+
+                registry = load_registry(self.data_dir)
+                bond = registry.get_bond_by_address(address)
+                if bond is not None:
+                    # Found in fidelity bond registry - cache it and return
+                    path_info = (0, FIDELITY_BOND_BRANCH, bond.index)
+                    self.address_cache[address] = path_info
+                    # Also cache the locktime
+                    self.fidelity_bond_locktime_cache[address] = bond.locktime
+                    logger.debug(
+                        f"Found address {address[:20]}... in fidelity bond registry "
+                        f"(index={bond.index}, locktime={bond.locktime})"
+                    )
+                    return path_info
+            except Exception as e:
+                logger.trace(f"Could not check bond registry: {e}")
 
         # Determine scan range - use the current descriptor range if available
         if max_scan is None:

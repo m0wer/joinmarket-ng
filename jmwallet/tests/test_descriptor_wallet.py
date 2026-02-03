@@ -7,6 +7,7 @@ Integration tests (marked with @pytest.mark.docker) require a running Bitcoin Co
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -1223,6 +1224,120 @@ class TestFidelityBondSync:
         assert fb_balance == external_bond_value, (
             f"Expected FB balance {external_bond_value}, got {fb_balance}"
         )
+
+    def test_find_address_path_checks_fidelity_bond_registry(self, tmp_path: Path) -> None:
+        """Test that _find_address_path checks the fidelity bond registry.
+
+        Regression test for bug: During wallet sync, fidelity bond addresses
+        were flagged as "out of range" because _find_address_path only searched
+        branches [0, 1] (external/internal), but fidelity bonds use branch 2.
+
+        The fix checks the fidelity bond registry before doing expensive derivation.
+        This avoids triggering unnecessary extended range searches (~40 seconds).
+        """
+        from unittest.mock import MagicMock, patch
+
+        from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
+        from jmwallet.wallet.bond_registry import BondRegistry, FidelityBondInfo
+        from jmwallet.wallet.service import FIDELITY_BOND_BRANCH, WalletService
+
+        backend = DescriptorWalletBackend(wallet_name="test_find_fb")
+        backend._wallet_loaded = True
+        backend._descriptors_imported = True
+
+        test_mnemonic = (
+            "abandon abandon abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon about"
+        )
+
+        # Create wallet with data_dir so it can access bond registry
+        wallet = WalletService(
+            mnemonic=test_mnemonic,
+            backend=backend,
+            network="mainnet",
+            mixdepth_count=5,
+            data_dir=tmp_path,
+        )
+
+        # Create a mock bond in the registry
+        bond_address = "bc1qxl3vzaf0cxwl9c0jsyyphwdekc6j0xh48qlfv8ja39qzqn92u7ws5arznw"
+        bond_locktime = 1736899200
+        bond_index = 0
+
+        mock_bond = FidelityBondInfo(
+            address=bond_address,
+            locktime=bond_locktime,
+            locktime_human="2025-01-15 00:00:00 UTC",
+            index=bond_index,
+            path="m/84'/0'/0'/2/0",
+            pubkey="02" + "ab" * 32,
+            witness_script_hex="0014" + "ab" * 20,
+            network="mainnet",
+            created_at="2025-01-01T00:00:00Z",
+            txid="abc123" * 10 + "ab",
+            vout=0,
+            value=29890,
+            confirmations=100,
+        )
+        mock_registry = MagicMock(spec=BondRegistry)
+        mock_registry.get_bond_by_address.return_value = mock_bond
+
+        # Patch load_registry to return our mock
+        with patch("jmwallet.wallet.bond_registry.load_registry", return_value=mock_registry):
+            # Clear address cache to ensure we're testing the registry lookup
+            wallet.address_cache.clear()
+
+            # Find the address path - should find it in registry without deriving
+            result = wallet._find_address_path(bond_address)
+
+            # Verify the result
+            assert result is not None, "Should have found address in bond registry"
+            assert result == (0, FIDELITY_BOND_BRANCH, bond_index), (
+                f"Expected (0, {FIDELITY_BOND_BRANCH}, {bond_index}), got {result}"
+            )
+
+            # Verify the address was cached
+            assert bond_address in wallet.address_cache
+            assert wallet.address_cache[bond_address] == (0, FIDELITY_BOND_BRANCH, bond_index)
+
+            # Verify the locktime was cached
+            assert hasattr(wallet, "fidelity_bond_locktime_cache")
+            assert wallet.fidelity_bond_locktime_cache[bond_address] == bond_locktime
+
+            # Verify that registry lookup was called
+            mock_registry.get_bond_by_address.assert_called_once_with(bond_address)
+
+    def test_find_address_path_without_data_dir_skips_registry(self) -> None:
+        """Test that _find_address_path skips registry lookup when data_dir is None."""
+        from jmwallet.backends.descriptor_wallet import DescriptorWalletBackend
+        from jmwallet.wallet.service import WalletService
+
+        backend = DescriptorWalletBackend(wallet_name="test_no_data_dir")
+        backend._wallet_loaded = True
+
+        test_mnemonic = (
+            "abandon abandon abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon about"
+        )
+
+        # Create wallet WITHOUT data_dir
+        wallet = WalletService(
+            mnemonic=test_mnemonic,
+            backend=backend,
+            network="mainnet",
+            mixdepth_count=5,
+            data_dir=None,  # No data_dir
+        )
+
+        # Clear cache
+        wallet.address_cache.clear()
+
+        # Try to find a non-existent address with max_scan=0 to avoid long derivation
+        # This should return None without errors (not crash due to missing data_dir)
+        result = wallet._find_address_path("bc1qnonexistent123", max_scan=0)
+
+        # Should return None (not found, and no crash)
+        assert result is None
 
 
 # =============================================================================

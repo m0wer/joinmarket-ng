@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Fidelity Bond Address Detection During Sync**: Fixed a bug where fidelity bond addresses were incorrectly flagged as "out of range" during wallet sync, triggering an unnecessary extended range search. The root cause was that `_find_address_path()` only searched branches 0 and 1 (external/internal), but fidelity bond addresses use branch 2. The fix checks the fidelity bond registry before falling back to expensive derivation scanning, allowing bond addresses to be identified immediately.
+
 - **Early Fund Validation for CoinJoin** ([#102](../../issues/102), [#106](../../issues/106)): Added early fund validation for `jm-taker coinjoin` to check if sufficient funds are available before connecting to directory servers. This avoids unnecessary waiting time when the wallet has insufficient funds. The `Taker` class now exposes `sync_wallet()` and `connect()` methods separately, allowing the CLI to validate funds after wallet sync but before directory connection. Additionally, when using `--select-utxos`, funds are now validated immediately after UTXO selection (fixing the bug where coinjoins would start with insufficient funds and only fail later with "Failed to generate PoDLE commitment").
 
 ### Changed
