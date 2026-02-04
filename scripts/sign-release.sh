@@ -13,6 +13,7 @@
 #   - curl or wget
 #   - git
 #   - gh (GitHub CLI) for auto-detection
+#   - docker with buildx (for --reproduce)
 # =============================================================================
 
 set -euo pipefail
@@ -20,6 +21,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 REPO="m0wer/joinmarket-ng"  # Update this with your actual repo
+REGISTRY="ghcr.io"
 
 # Colors for output
 RED='\033[0;31m'
@@ -43,14 +45,19 @@ Arguments:
 
 Options:
   --key KEY       GPG key fingerprint to use for signing (required for auto-detect)
-  --verify-first  Verify reproducibility before signing (recommended)
+  --reproduce     Build locally and verify digests match before signing (recommended)
+  --no-reproduce  Skip local build verification (not recommended)
   --no-push       Don't automatically commit and push the signature (default: push)
   --help          Show this help message
 
+All signers should use --reproduce to independently verify that builds are reproducible
+before signing. Multiple signatures only add value if each signer verifies independently.
+By default, --reproduce is enabled unless --no-reproduce is specified.
+
 Examples:
-  $(basename "$0") 1.0.0 --key ABCD1234...
-  $(basename "$0") --key ABCD1234...          # Auto-detect latest unsigned
-  $(basename "$0") 1.0.0 --verify-first
+  $(basename "$0") 1.0.0 --key ABCD1234...              # Verify and sign
+  $(basename "$0") 1.0.0 --key ABCD1234... --no-reproduce  # Sign without verify (not recommended)
+  $(basename "$0") --key ABCD1234...                    # Auto-detect latest unsigned
   $(basename "$0") 1.0.0 --key ABCD1234... --no-push
 EOF
     exit 1
@@ -59,7 +66,7 @@ EOF
 # Parse arguments
 VERSION=""
 GPG_KEY=""
-VERIFY_FIRST=false
+REPRODUCE=true  # Default to true - all signers should verify
 AUTO_PUSH=true
 
 while [[ $# -gt 0 ]]; do
@@ -68,8 +75,12 @@ while [[ $# -gt 0 ]]; do
             GPG_KEY="$2"
             shift 2
             ;;
-        --verify-first)
-            VERIFY_FIRST=true
+        --reproduce)
+            REPRODUCE=true
+            shift
+            ;;
+        --no-reproduce)
+            REPRODUCE=false
             shift
             ;;
         --no-push)
@@ -184,14 +195,155 @@ cat "$MANIFEST_FILE"
 echo ""
 
 # =============================================================================
-# Step 2: Optionally verify reproducibility
+# Step 2: Optionally reproduce builds (for first signer)
 # =============================================================================
-if [[ "$VERIFY_FIRST" == true ]]; then
-    log_info "Verifying release before signing..."
-    "$SCRIPT_DIR/verify-release.sh" "$VERSION" --reproduce || {
-        log_error "Verification failed! Not signing."
-        exit 1
+if [[ "$REPRODUCE" == true ]]; then
+    # Detect current architecture
+    detect_arch() {
+        local arch
+        arch=$(uname -m)
+        case "$arch" in
+            x86_64)  echo "amd64" ;;
+            aarch64) echo "arm64" ;;
+            armv7l)  echo "arm-v7" ;;
+            *)       echo "$arch" ;;
+        esac
     }
+
+    CURRENT_ARCH=$(detect_arch)
+    log_info "Reproducing builds for $CURRENT_ARCH to verify manifest digests..."
+
+    # Map arch to Docker platform format
+    case "$CURRENT_ARCH" in
+        amd64)  PLATFORM="linux/amd64" ;;
+        arm64)  PLATFORM="linux/arm64" ;;
+        arm-v7) PLATFORM="linux/arm/v7" ;;
+        *)
+            log_error "Unsupported architecture: $CURRENT_ARCH"
+            exit 1
+            ;;
+    esac
+
+    # Extract commit and SOURCE_DATE_EPOCH from manifest
+    COMMIT=$(grep "^commit:" "$MANIFEST_FILE" | cut -d' ' -f2)
+    SOURCE_DATE_EPOCH=$(grep "^source_date_epoch:" "$MANIFEST_FILE" | cut -d' ' -f2)
+
+    if [[ -z "$COMMIT" || -z "$SOURCE_DATE_EPOCH" ]]; then
+        log_error "Could not extract commit or SOURCE_DATE_EPOCH from manifest"
+        exit 1
+    fi
+
+    log_info "Commit: $COMMIT"
+    log_info "SOURCE_DATE_EPOCH: $SOURCE_DATE_EPOCH"
+    log_info "Platform: $PLATFORM"
+
+    # Extract expected digests from manifest
+    declare -A EXPECTED_DIGESTS
+    while IFS=': ' read -r key value || [[ -n "$key" ]]; do
+        [[ "$key" =~ ^#.*$ || -z "$value" ]] && continue
+        [[ "$key" == "commit" || "$key" == "source_date_epoch" ]] && continue
+        if [[ "$value" =~ ^sha256: ]]; then
+            EXPECTED_DIGESTS["$key"]="$value"
+        fi
+    done < "$MANIFEST_FILE"
+
+    # Clone repository at specific commit
+    REPO_DIR="$WORK_DIR/repo"
+    log_info "Cloning repository at commit $COMMIT..."
+    git clone --depth 1 "https://github.com/${REPO}.git" "$REPO_DIR"
+    cd "$REPO_DIR"
+    git fetch --depth 1 origin "$COMMIT"
+    git checkout "$COMMIT"
+
+    # Build images for current architecture only
+    IMAGES=("directory-server" "maker" "taker" "orderbook-watcher")
+    DOCKERFILES=("./directory_server/Dockerfile" "./maker/Dockerfile" "./taker/Dockerfile" "./orderbook_watcher/Dockerfile")
+
+    # Start temporary local registry
+    LOCAL_REGISTRY="localhost:5099"
+    log_info "Starting temporary local registry..."
+    docker rm -f jmng-sign-registry 2>/dev/null || true
+    docker run -d --name jmng-sign-registry -p 5099:5000 registry:2 >/dev/null
+    sleep 2
+
+    # Update trap to also clean up registry
+    trap "docker rm -f jmng-sign-registry 2>/dev/null; rm -rf $WORK_DIR" EXIT
+
+    REPRODUCE_ERRORS=0
+    REPRODUCE_SUCCESS=0
+
+    for i in "${!IMAGES[@]}"; do
+        image="${IMAGES[$i]}"
+        dockerfile="${DOCKERFILES[$i]}"
+        digest_key="${image}-${CURRENT_ARCH}"
+
+        # Check for per-platform digest (new format) or fall back to old format
+        if [[ -v "EXPECTED_DIGESTS[$digest_key]" ]]; then
+            expected="${EXPECTED_DIGESTS[$digest_key]}"
+        else
+            log_warn "No per-platform digest for $digest_key in manifest"
+            log_warn "Manifest may be old format - skipping reproduce for $image"
+            continue
+        fi
+
+        log_info "Building $image for $PLATFORM..."
+
+        # Build single platform image
+        IIDFILE="$WORK_DIR/${image}.iid"
+        LOCAL_TAG="${LOCAL_REGISTRY}/verify/${image}:test"
+
+        if ! docker buildx build \
+            --file "$dockerfile" \
+            --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
+            --platform "$PLATFORM" \
+            --iidfile "$IIDFILE" \
+            --load \
+            . 2>&1 | tee "$WORK_DIR/${image}-build.log"; then
+            log_error "  Build failed for $image"
+            REPRODUCE_ERRORS=$((REPRODUCE_ERRORS + 1))
+            continue
+        fi
+
+        # Tag and push to local registry to get manifest digest
+        IMAGE_ID=$(cat "$IIDFILE")
+        docker tag "$IMAGE_ID" "$LOCAL_TAG"
+        docker push "$LOCAL_TAG" 2>/dev/null
+
+        # Get manifest digest from local registry
+        built_digest=$(docker buildx imagetools inspect "$LOCAL_TAG" --raw 2>/dev/null | \
+                       sha256sum | cut -d' ' -f1 | sed 's/^/sha256:/')
+
+        if [[ "$built_digest" == "$expected" ]]; then
+            log_info "  Digest matches: $expected"
+            REPRODUCE_SUCCESS=$((REPRODUCE_SUCCESS + 1))
+        else
+            log_error "  Digest mismatch!"
+            log_error "    Expected: $expected"
+            log_error "    Built:    $built_digest"
+            REPRODUCE_ERRORS=$((REPRODUCE_ERRORS + 1))
+        fi
+
+        # Clean up local image
+        docker rmi "$IMAGE_ID" "$LOCAL_TAG" 2>/dev/null || true
+    done
+
+    cd "$PROJECT_ROOT"
+
+    echo ""
+    log_info "Reproducibility Summary: $REPRODUCE_SUCCESS succeeded, $REPRODUCE_ERRORS failed"
+
+    if [[ $REPRODUCE_ERRORS -gt 0 ]]; then
+        log_error "Cannot sign: builds do not reproduce!"
+        log_error "The locally built images have different digests than the manifest."
+        log_error "Possible causes:"
+        log_error "  - Different BuildKit version than CI"
+        log_error "  - Platform differences"
+        log_error "  - Non-deterministic build steps"
+        exit 1
+    fi
+
+    log_info "All builds reproduced successfully!"
+    echo ""
 fi
 
 # =============================================================================

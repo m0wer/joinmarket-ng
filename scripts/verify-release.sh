@@ -35,6 +35,18 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+# Detect current architecture in Docker format
+detect_arch() {
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64)  echo "amd64" ;;
+        aarch64) echo "arm64" ;;
+        armv7l)  echo "arm-v7" ;;
+        *)       echo "$arch" ;;
+    esac
+}
+
 usage() {
     cat << EOF
 Usage: $(basename "$0") <version> [options]
@@ -48,6 +60,9 @@ Options:
   --reproduce     Attempt to reproduce the Docker builds locally
   --min-sigs N    Require at least N valid signatures (default: 1)
   --help          Show this help message
+
+The --reproduce flag builds images for your current architecture only and
+compares against the per-platform digest in the release manifest.
 
 Examples:
   $(basename "$0") 1.0.0
@@ -178,11 +193,11 @@ if [[ $VALID_SIGS -lt $MIN_SIGS ]]; then
 fi
 
 # =============================================================================
-# Step 3: Verify Docker image digests
+# Step 3: Verify Docker image digests from registry
 # =============================================================================
-log_info "Verifying Docker image digests..."
+log_info "Verifying Docker image digests from registry..."
 
-# Extract image digests from manifest
+# Extract all digests from manifest (both per-platform and manifest-list)
 declare -A EXPECTED_DIGESTS
 while IFS=': ' read -r key value || [[ -n "$key" ]]; do
     # Skip comments and non-digest lines
@@ -196,20 +211,41 @@ done < "$MANIFEST_FILE"
 
 DIGEST_ERRORS=0
 
-for image in "${!EXPECTED_DIGESTS[@]}"; do
-    expected="${EXPECTED_DIGESTS[$image]}"
-    full_image="${REGISTRY}/${REPO}/${image}:${VERSION}"
+# Get list of unique base image names (without arch suffix)
+declare -A BASE_IMAGES
+for key in "${!EXPECTED_DIGESTS[@]}"; do
+    # Extract base name (remove -amd64, -arm64, -arm-v7, -manifest suffixes)
+    base="${key%-amd64}"
+    base="${base%-arm64}"
+    base="${base%-arm-v7}"
+    base="${base%-manifest}"
+    BASE_IMAGES["$base"]=1
+done
 
+for image in "${!BASE_IMAGES[@]}"; do
+    manifest_key="${image}-manifest"
+
+    # Check if we have a manifest digest (new format) or just image digest (old format)
+    if [[ -v "EXPECTED_DIGESTS[$manifest_key]" ]]; then
+        expected="${EXPECTED_DIGESTS[$manifest_key]}"
+    elif [[ -v "EXPECTED_DIGESTS[$image]" ]]; then
+        # Old format: just the image name without suffix
+        expected="${EXPECTED_DIGESTS[$image]}"
+    else
+        log_warn "No digest found for $image, skipping"
+        continue
+    fi
+
+    full_image="${REGISTRY}/${REPO}/${image}:${VERSION}"
     log_info "Checking $image..."
 
-    # Get actual digest from registry (manifest index digest, not platform-specific)
-    # We need the digest of the manifest list itself, not the first platform manifest
+    # Get actual manifest list digest from registry
     if actual=$(docker buildx imagetools inspect "$full_image" --raw 2>/dev/null | \
                 sha256sum | cut -d' ' -f1 | sed 's/^/sha256:/'); then
         if [[ "$actual" == "$expected" ]]; then
-            log_info "  Digest matches: $expected"
+            log_info "  Manifest digest matches: $expected"
         else
-            log_error "  Digest mismatch!"
+            log_error "  Manifest digest mismatch!"
             log_error "    Expected: $expected"
             log_error "    Actual:   $actual"
             DIGEST_ERRORS=$((DIGEST_ERRORS + 1))
@@ -226,10 +262,26 @@ if [[ $DIGEST_ERRORS -gt 0 ]]; then
 fi
 
 # =============================================================================
-# Step 4: Optionally reproduce the build
+# Step 4: Optionally reproduce the build (current architecture only)
 # =============================================================================
+REPRODUCE_ERRORS=0
+REPRODUCE_SUCCESS=0
+
 if [[ "$REPRODUCE" == true ]]; then
-    log_info "Attempting to reproduce Docker builds..."
+    # Detect current architecture
+    CURRENT_ARCH=$(detect_arch)
+    log_info "Attempting to reproduce Docker builds for $CURRENT_ARCH..."
+
+    # Map arch to Docker platform format
+    case "$CURRENT_ARCH" in
+        amd64)  PLATFORM="linux/amd64" ;;
+        arm64)  PLATFORM="linux/arm64" ;;
+        arm-v7) PLATFORM="linux/arm/v7" ;;
+        *)
+            log_error "Unsupported architecture: $CURRENT_ARCH"
+            exit 1
+            ;;
+    esac
 
     # Extract commit and SOURCE_DATE_EPOCH from manifest
     COMMIT=$(grep "^commit:" "$MANIFEST_FILE" | cut -d' ' -f2)
@@ -242,6 +294,7 @@ if [[ "$REPRODUCE" == true ]]; then
 
     log_info "Commit: $COMMIT"
     log_info "SOURCE_DATE_EPOCH: $SOURCE_DATE_EPOCH"
+    log_info "Platform: $PLATFORM"
 
     # Clone repository at specific commit
     REPO_DIR="$WORK_DIR/repo"
@@ -250,46 +303,96 @@ if [[ "$REPRODUCE" == true ]]; then
     git fetch --depth 1 origin "$COMMIT"
     git checkout "$COMMIT"
 
-    # Build images with same SOURCE_DATE_EPOCH
+    # Build images for current architecture only
     IMAGES=("directory-server" "maker" "taker" "orderbook-watcher")
     DOCKERFILES=("./directory_server/Dockerfile" "./maker/Dockerfile" "./taker/Dockerfile" "./orderbook_watcher/Dockerfile")
 
     for i in "${!IMAGES[@]}"; do
         image="${IMAGES[$i]}"
         dockerfile="${DOCKERFILES[$i]}"
+        digest_key="${image}-${CURRENT_ARCH}"
 
-        if [[ ! -v "EXPECTED_DIGESTS[$image]" ]]; then
-            log_warn "No expected digest for $image, skipping"
+        # Check for per-platform digest (new format) or fall back to manifest digest
+        if [[ -v "EXPECTED_DIGESTS[$digest_key]" ]]; then
+            manifest_expected="${EXPECTED_DIGESTS[$digest_key]}"
+        else
+            log_warn "No per-platform digest for $digest_key in manifest"
+            log_warn "Manifest may be old format - skipping reproduce for $image"
             continue
         fi
 
-        log_info "Building $image..."
+        log_info "Building $image for $PLATFORM..."
 
-        # Build with buildx for reproducibility
-        docker buildx build \
+        # Build single platform image and get its digest
+        # Use --iidfile to get the image ID (config digest)
+        IIDFILE="$WORK_DIR/${image}.iid"
+
+        if ! docker buildx build \
             --file "$dockerfile" \
             --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
-            --output "type=docker,dest=$WORK_DIR/${image}.tar" \
-            --platform linux/amd64 \
-            . 2>/dev/null
+            --platform "$PLATFORM" \
+            --iidfile "$IIDFILE" \
+            --load \
+            . 2>&1 | tee "$WORK_DIR/${image}-build.log"; then
+            log_error "  Build failed for $image"
+            REPRODUCE_ERRORS=$((REPRODUCE_ERRORS + 1))
+            continue
+        fi
 
-        # Get digest of built image
-        built_digest=$(docker load -i "$WORK_DIR/${image}.tar" 2>/dev/null | \
-                       grep -oP 'sha256:\K[a-f0-9]+')
+        # Tag and push to local registry to get manifest digest
+        LOCAL_TAG="${LOCAL_REGISTRY}/verify/${image}:test"
+        IMAGE_ID=$(cat "$IIDFILE")
+        docker tag "$IMAGE_ID" "$LOCAL_TAG"
+        docker push "$LOCAL_TAG" 2>/dev/null
+
+        # Get manifest digest from local registry
+        built_digest=$(docker buildx imagetools inspect "$LOCAL_TAG" --raw 2>/dev/null | \
+                       sha256sum | cut -d' ' -f1 | sed 's/^/sha256:/')
+
+        # Also get digest from published registry for this specific platform
+        FULL_IMAGE="${REGISTRY}/${REPO}/${image}:${VERSION}"
+        registry_digest=$(docker buildx imagetools inspect "$FULL_IMAGE" --raw 2>/dev/null | \
+                          jq -r ".manifests[] | select(.platform.os == \"linux\" and .platform.architecture == \"${CURRENT_ARCH//-v7/}\" and (.platform.variant // \"\") == \"${CURRENT_ARCH##*-}\") | .digest" 2>/dev/null || echo "")
+
+        # If variant is empty, adjust the jq filter
+        if [[ -z "$registry_digest" && "$CURRENT_ARCH" != *"-"* ]]; then
+            registry_digest=$(docker buildx imagetools inspect "$FULL_IMAGE" --raw 2>/dev/null | \
+                              jq -r ".manifests[] | select(.platform.os == \"linux\" and .platform.architecture == \"${CURRENT_ARCH}\" and (.platform.variant // \"\") == \"\") | .digest" 2>/dev/null || echo "")
+        fi
 
         if [[ -n "$built_digest" ]]; then
-            expected="${EXPECTED_DIGESTS[$image]}"
-            if [[ "sha256:$built_digest" == "$expected" ]]; then
-                log_info "  Reproduced successfully! Digest matches."
+            # Compare against manifest
+            if [[ "$built_digest" != "$manifest_expected" ]]; then
+                log_error "  Local build digest differs from manifest!"
+                log_error "    Manifest: $manifest_expected"
+                log_error "    Built:    $built_digest"
+                REPRODUCE_ERRORS=$((REPRODUCE_ERRORS + 1))
+            # Compare against published registry
+            elif [[ -n "$registry_digest" && "$built_digest" != "$registry_digest" ]]; then
+                log_error "  Local build digest differs from published registry!"
+                log_error "    Registry: $registry_digest"
+                log_error "    Built:    $built_digest"
+                log_error "    NOTE: Manifest claims $manifest_expected"
+                REPRODUCE_ERRORS=$((REPRODUCE_ERRORS + 1))
+            elif [[ "$built_digest" == "$manifest_expected" ]]; then
+                log_info "  Reproduced successfully!"
+                log_info "    Digest: $built_digest"
+                if [[ -n "$registry_digest" ]]; then
+                    log_info "    Registry verified: matches published image"
+                fi
+                REPRODUCE_SUCCESS=$((REPRODUCE_SUCCESS + 1))
             else
-                log_warn "  Build completed but digest differs"
-                log_warn "    Expected: $expected"
-                log_warn "    Built:    sha256:$built_digest"
-                log_warn "  This may be due to different BuildKit versions or platform differences"
+                log_warn "  Could not verify against published registry (no digest found)"
+                log_info "  Manifest verification: PASSED"
+                REPRODUCE_SUCCESS=$((REPRODUCE_SUCCESS + 1))
             fi
         else
-            log_warn "  Could not determine digest of built image"
+            log_error "  Could not determine digest of built image"
+            REPRODUCE_ERRORS=$((REPRODUCE_ERRORS + 1))
         fi
+
+        # Clean up local image
+        docker rmi "$IMAGE_ID" "$LOCAL_TAG" 2>/dev/null || true
     done
 fi
 
@@ -309,7 +412,23 @@ if [[ ${#SIGNERS[@]} -gt 0 ]]; then
 fi
 echo "Digest verification: PASSED"
 if [[ "$REPRODUCE" == true ]]; then
-    echo "Reproducibility check: ATTEMPTED (see output above)"
+    if [[ $REPRODUCE_ERRORS -gt 0 ]]; then
+        echo "Reproducibility check: FAILED ($REPRODUCE_ERRORS errors, $REPRODUCE_SUCCESS succeeded)"
+    else
+        echo "Reproducibility check: PASSED ($REPRODUCE_SUCCESS images reproduced)"
+    fi
 fi
 echo ""
+
+# Fail if reproducibility was requested and failed
+if [[ "$REPRODUCE" == true && $REPRODUCE_ERRORS -gt 0 ]]; then
+    log_error "Reproducibility verification failed!"
+    log_error "The builds could not be reproduced locally."
+    log_error "This may indicate:"
+    log_error "  - Different BuildKit versions"
+    log_error "  - Platform differences"
+    log_error "  - Non-deterministic build steps in Dockerfiles"
+    exit 1
+fi
+
 log_info "Release verification completed successfully!"

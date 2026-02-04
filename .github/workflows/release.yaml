@@ -159,10 +159,26 @@ jobs:
         env:
           SOURCE_DATE_EPOCH: ${{ env.SOURCE_DATE_EPOCH }}
 
-      - name: Export image digest
+      - name: Export per-platform image digests
         run: |
           mkdir -p /tmp/digests
-          echo "${{ steps.build.outputs.digest }}" > /tmp/digests/${{ matrix.image }}${{ matrix.tag_suffix || '' }}.txt
+          VERSION=${{ needs.create-release.outputs.version }}
+          IMAGE=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${VERSION}
+
+          # Extract per-platform digests from the manifest list
+          # These are the actual image digests, excluding attestation manifests
+          docker buildx imagetools inspect "$IMAGE" --raw | \
+            jq -r '.manifests[] | select(.platform.os != "unknown") |
+              "\(.platform.architecture)\(if .platform.variant then "-" + .platform.variant else "" end) \(.digest)"' | \
+            while read arch digest; do
+              echo "$digest" > /tmp/digests/${{ matrix.image }}${{ matrix.tag_suffix || '' }}-${arch}.txt
+            done
+
+          # Also store manifest list digest for reference
+          echo "${{ steps.build.outputs.digest }}" > /tmp/digests/${{ matrix.image }}${{ matrix.tag_suffix || '' }}-manifest.txt
+
+          echo "Extracted digests:"
+          cat /tmp/digests/${{ matrix.image }}*.txt
 
       - name: Upload digest artifact
         uses: actions/upload-artifact@v4

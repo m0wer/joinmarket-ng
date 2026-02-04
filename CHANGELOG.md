@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Release Verification Script Now Fails on Reproduce Errors**: Fixed `verify-release.sh --reproduce` to properly fail (exit 1) when locally built Docker images have different digests than the release manifest. Previously, digest mismatches were only logged as warnings and the script would exit successfully.
+
+- **Single-Architecture Reproducibility Verification**: Fixed `verify-release.sh --reproduce` and `sign-release.sh` to build only for the current machine's architecture (e.g., amd64 on x86_64, arm64 on Apple Silicon/RPi4). Previously attempted to build all 3 platforms which was slow and unnecessary. Verification now also cross-checks the built image against both the manifest and the published registry image to ensure the release wasn't tampered with.
+
+### Changed
+
+- **Per-Platform Digests in Release Manifest**: The release manifest now stores individual digests for each platform (`maker-amd64`, `maker-arm64`, `maker-arm-v7`) in addition to the manifest list digest (`maker-manifest`). This enables faster verification by building only the current architecture while keeping provenance/SBOM attestations enabled for supply chain security.
+
+- **All Signers Must Reproduce Builds**: The `sign-release.sh` script now enables `--reproduce` by default for all signers. Multiple signatures only add value if each signer independently verifies reproducibility. Use `--no-reproduce` to skip verification (not recommended).
+
 ## [0.13.0] - 2026-02-04
 
 ### Added

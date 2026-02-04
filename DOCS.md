@@ -1151,36 +1151,75 @@ Test markers:
 
 ### Reproducible Builds
 
-Docker images are built reproducibly using `SOURCE_DATE_EPOCH`.
+Docker images are built reproducibly using `SOURCE_DATE_EPOCH` to ensure identical builds from the same source code. This allows independent verification that released binaries match the source.
 
-**Build locally:**
+**How it works:**
+
+- `SOURCE_DATE_EPOCH` is set to the git commit timestamp
+- All platforms (amd64, arm64, armv7) are built with the same timestamp
+- Per-platform image digests are stored in the release manifest
+- Provenance and SBOM attestations are included (as separate manifests, not affecting image digests)
+
+**Verify a release:**
+
+```bash
+# Check GPG signatures and published image digests
+./scripts/verify-release.sh 1.0.0
+
+# Full verification: signatures + published digests + reproduce build locally
+./scripts/verify-release.sh 1.0.0 --reproduce
+
+# Require multiple signatures
+./scripts/verify-release.sh 1.0.0 --min-sigs 2
+```
+
+The `--reproduce` flag builds the Docker image for your current architecture and compares the digest against both the release manifest and the published registry image. This verifies the released image matches the source code.
+
+**Sign a release:**
+
+```bash
+# Verify + reproduce build + sign
+./scripts/sign-release.sh 1.0.0 --key YOUR_GPG_KEY --reproduce
+```
+
+All signers should use `--reproduce` to verify builds are reproducible before signing. Multiple signatures only add value if each signer independently verifies reproducibility.
+
+**Build locally (manual):**
 
 ```bash
 VERSION=1.0.0
 git checkout $VERSION
 SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)
 
+# Build for your architecture
 docker buildx build \
   --file ./maker/Dockerfile \
   --build-arg SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH \
-  --output type=docker \
+  --output type=docker,name=maker:local \
   .
+
+# Get the image digest
+docker inspect maker:local --format '{{.Id}}'
 ```
 
-**Verify releases:**
+**Release manifest format:**
 
-```bash
-./scripts/verify-release.sh 1.0.0           # Check signatures
-./scripts/verify-release.sh 1.0.0 --reproduce  # Full verification
+The release manifest (`release-manifest-<version>.txt`) contains:
+
+```
+commit: <git-sha>
+source_date_epoch: <timestamp>
+
+# Per-platform image digests (for reproducibility verification)
+maker-amd64: sha256:...
+maker-arm64: sha256:...
+maker-arm-v7: sha256:...
+
+# Manifest list digest (includes all platforms + attestations)
+maker-manifest: sha256:...
 ```
 
-**Sign releases:**
-
-```bash
-./scripts/sign-release.sh 1.0.0 --verify-first
-```
-
-Signatures stored in `signatures/<version>/<fingerprint>.sig`.
+Signatures are stored in `signatures/<version>/<fingerprint>.sig`.
 
 ### Troubleshooting
 
