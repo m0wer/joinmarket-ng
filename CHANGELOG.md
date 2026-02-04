@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-02-04
+
 ### Added
 
 - **NUMS Point Generation Algorithm** ([#101](../../issues/101)): Added explicit documentation and implementation of the NUMS (Nothing Up My Sleeve) point generation algorithm for PoDLE commitments. The `generate_nums_point()` function now transparently generates deterministic NUMS points using SHA256 hashing of secp256k1's generator G. NUMS points are cached for efficiency and validated against test vectors from the original JoinMarket implementation. Support for NUMS indices expanded from 10 to the full range of 256 (0-255), providing generous headroom for multiple commitment reuses per UTXO.
