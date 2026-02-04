@@ -622,6 +622,7 @@ def update_taker_awaiting_transaction_broadcast(
 
     for entry in entries:
         # Match by destination + change address and "Awaiting transaction" status
+        # Both addresses must match exactly (including empty string for no change)
         if (
             entry.destination_address == destination_address
             and entry.change_address == change_address

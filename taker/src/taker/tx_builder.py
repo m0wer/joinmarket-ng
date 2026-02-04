@@ -442,7 +442,7 @@ def build_coinjoin_tx(
     Args:
         taker_utxos: List of taker's UTXOs
         taker_cj_address: Taker's CJ output address
-        taker_change_address: Taker's change address
+        taker_change_address: Taker's change address (empty string if no change needed)
         taker_total_input: Total value of taker's inputs
         maker_data: Dict of maker nick -> {utxos, cj_addr, change_addr, cjfee, txfee}
         cj_amount: Equal CoinJoin output amount
@@ -477,12 +477,17 @@ def build_coinjoin_tx(
 
     # Taker change output (if any)
     taker_change_output = None
-    if taker_change > dust_threshold:
+    if taker_change > dust_threshold and taker_change_address:
         taker_change_output = TxOutput(address=taker_change_address, value=taker_change)
     elif taker_change > 0:
         logger.warning(
-            f"Taker change {taker_change} sats is below dust threshold ({dust_threshold}), "
-            "no change output will be created"
+            f"Taker change {taker_change} sats "
+            + (
+                "has no address (sweep mode)"
+                if not taker_change_address
+                else f"is below dust threshold ({dust_threshold})"
+            )
+            + ", no change output will be created"
         )
 
     # Build maker data

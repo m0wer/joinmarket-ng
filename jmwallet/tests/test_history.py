@@ -997,6 +997,48 @@ class TestUpdateTakerAwaitingTransactionBroadcast:
         assert len(entries) == 1
         assert entries[0].txid == "existing_taker_txid"
 
+    def test_update_taker_awaiting_transaction_broadcast_sweep_no_change(
+        self, temp_data_dir: Path
+    ) -> None:
+        """Test updating entry when sweep has no change output.
+
+        In sweep mode with no dust, there may be no change output in the final transaction.
+        The history entry should be created with empty change_address, and the update
+        should match successfully with empty change_address.
+        """
+        # Create entry with empty change_address (sweep with no change output)
+        entry = create_taker_history_entry(
+            maker_nicks=["J5maker1", "J5maker2"],
+            cj_amount=1_000_000,
+            total_maker_fees=500,
+            mining_fee=0,
+            destination="bc1qtakersweep12345",
+            change_address="",  # No change output in sweep
+            source_mixdepth=0,
+            selected_utxos=[("utxo1", 0)],
+            txid="",
+            failure_reason="Awaiting transaction",
+        )
+        append_history_entry(entry, temp_data_dir)
+
+        # Update with empty change_address (matching the entry)
+        result = update_taker_awaiting_transaction_broadcast(
+            destination_address="bc1qtakersweep12345",
+            change_address="",  # No change in actual transaction
+            txid="sweep_txid_abcdef123",
+            mining_fee=200,
+            data_dir=temp_data_dir,
+        )
+        assert result is True
+
+        # Verify entry was updated
+        entries = read_history(temp_data_dir)
+        assert len(entries) == 1
+        assert entries[0].txid == "sweep_txid_abcdef123"
+        assert entries[0].mining_fee_paid == 200
+        assert entries[0].change_address == ""  # Still empty
+        assert entries[0].failure_reason == "Pending confirmation"
+
 
 class TestPeerCountDetection:
     """Tests for automatic peer count detection from transaction outputs."""

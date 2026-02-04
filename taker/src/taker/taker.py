@@ -2214,7 +2214,7 @@ class Taker:
 
                 updated = update_taker_awaiting_transaction_broadcast(
                     destination_address=self.cj_destination,
-                    change_address=self.taker_change_address,
+                    change_address=self.taker_change_address,  # Empty string if no change
                     txid=self.txid,
                     mining_fee=mining_fee,
                     data_dir=self.config.data_dir,
@@ -2889,11 +2889,28 @@ class Taker:
 
             taker_total = sum(u.value for u in selected_utxos)
 
-            # Taker change address - store for broadcast verification
-            # (Even for sweep, we generate one in case of dust handling)
-            change_index = self.wallet.get_next_address_index(mixdepth, 1)
-            taker_change_address = self.wallet.get_change_address(mixdepth, change_index)
-            self.taker_change_address = taker_change_address
+            # Calculate expected change to determine if we need a change address
+            # Change = total_input - cj_amount - maker_fees - tx_fee
+            expected_change = taker_total - self.cj_amount - total_maker_fee - tx_fee
+
+            # Only generate change address if we'll actually have a change output
+            # This avoids recording unused addresses in history
+            if expected_change > self.config.dust_threshold:
+                change_index = self.wallet.get_next_address_index(mixdepth, 1)
+                taker_change_address = self.wallet.get_change_address(mixdepth, change_index)
+                self.taker_change_address = taker_change_address
+                logger.debug(f"Generated change address (expected: {expected_change} sats)")
+            else:
+                # No change output needed (sweep or change is dust)
+                taker_change_address = ""  # Will be ignored by tx builder
+                self.taker_change_address = ""
+                if expected_change > 0:
+                    logger.debug(
+                        f"No change address needed: change {expected_change} sats "
+                        f"is below dust threshold ({self.config.dust_threshold})"
+                    )
+                else:
+                    logger.debug("No change address needed: sweep mode (exact spend)")
 
             # Build maker data
             maker_data = {}
@@ -3176,7 +3193,7 @@ class Taker:
                 total_maker_fees=total_maker_fees,
                 mining_fee=0,  # Will be updated after signing
                 destination=self.cj_destination,
-                change_address=self.taker_change_address,
+                change_address=self.taker_change_address,  # Empty string if no change needed
                 source_mixdepth=self.tx_metadata.get("source_mixdepth", 0),
                 selected_utxos=[(utxo.txid, utxo.vout) for utxo in self.selected_utxos],
                 txid="",  # Will be updated after broadcast
@@ -3187,6 +3204,7 @@ class Taker:
             append_history_entry(history_entry, data_dir=self.config.data_dir)
             logger.debug(
                 f"Recorded pre-broadcast history entry for CJ to {self.cj_destination[:20]}..."
+                + (" (no change)" if not self.taker_change_address else "")
             )
         except Exception as e:
             logger.warning(f"Failed to record pre-broadcast history: {e}")
@@ -3477,6 +3495,7 @@ class Taker:
                 total_maker_fees=total_maker_fees,
                 mining_fee=mining_fee,
                 destination=destination,
+                change_address=self.taker_change_address,  # May be empty string if no change
                 source_mixdepth=self.tx_metadata.get("source_mixdepth", 0),
                 selected_utxos=[(utxo.txid, utxo.vout) for utxo in self.selected_utxos],
                 txid=txid,
