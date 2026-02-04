@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-02-04
+
 ### Fixed
 
 - **Release Verification Script Now Fails on Reproduce Errors**: Fixed `verify-release.sh --reproduce` to properly fail (exit 1) when locally built Docker images have different digests than the release manifest. Previously, digest mismatches were only logged as warnings and the script would exit successfully.
