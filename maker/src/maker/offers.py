@@ -54,8 +54,11 @@ class OfferManager:
                 logger.warning("No mixdepth with positive balance")
                 return []
 
+            logger.debug(f"Mixdepth balances (excluding fidelity bonds): {balances}")
+
             max_mixdepth = max(available_mixdepths, key=lambda md: available_mixdepths[md])
             max_balance = available_mixdepths[max_mixdepth]
+            logger.info(f"Selected mixdepth {max_mixdepth} with balance {max_balance} sats")
 
             # Get effective offer configurations
             offer_configs = self.config.get_effective_offer_configs()
@@ -121,7 +124,8 @@ class OfferManager:
             if max_available <= offer_cfg.min_size:
                 logger.warning(
                     f"Offer {offer_id}: Insufficient balance: "
-                    f"{max_available} <= {offer_cfg.min_size}"
+                    f"max_available={max_available} <= min_size={offer_cfg.min_size} "
+                    f"(max_balance={max_balance}, dust_threshold={self.config.dust_threshold})"
                 )
                 return None
 

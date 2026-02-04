@@ -49,6 +49,7 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
+from jmcore.constants import DUST_THRESHOLD
 from jmcore.models import NetworkType
 from jmcore.paths import get_default_data_dir
 
@@ -269,9 +270,9 @@ class MakerSettings(BaseModel):
     """Maker-specific settings."""
 
     min_size: int = Field(
-        default=100000,
+        default=DUST_THRESHOLD,
         ge=0,
-        description="Minimum CoinJoin amount in satoshis",
+        description="Minimum CoinJoin amount in satoshis (default: dust threshold)",
     )
     offer_type: str = Field(
         default="sw0reloffer",

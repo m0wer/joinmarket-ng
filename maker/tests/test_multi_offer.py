@@ -10,6 +10,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from jmcore.constants import DUST_THRESHOLD
 from jmcore.models import NetworkType, Offer, OfferType
 
 from maker.bot import MakerBot
@@ -24,7 +25,7 @@ class TestOfferConfig:
         """Test default OfferConfig values."""
         cfg = OfferConfig()
         assert cfg.offer_type == OfferType.SW0_RELATIVE
-        assert cfg.min_size == 100_000
+        assert cfg.min_size == DUST_THRESHOLD
         assert cfg.cj_fee_relative == "0.001"
         assert cfg.cj_fee_absolute == 500
         assert cfg.tx_fee_contribution == 0

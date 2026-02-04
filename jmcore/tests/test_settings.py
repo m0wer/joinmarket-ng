@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from jmcore.constants import DUST_THRESHOLD
 from jmcore.models import NetworkType
 from jmcore.settings import (
     JoinMarketSettings,
@@ -128,7 +129,7 @@ class TestSettingsDefaults:
         """Test default maker settings."""
         settings = JoinMarketSettings()
 
-        assert settings.maker.min_size == 100000
+        assert settings.maker.min_size == DUST_THRESHOLD
         assert settings.maker.offer_type == "sw0reloffer"
         assert settings.maker.cj_fee_relative == "0.001"
         assert settings.maker.cj_fee_absolute == 500

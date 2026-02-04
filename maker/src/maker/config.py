@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation
 from enum import Enum
 
 from jmcore.config import TorControlConfig, WalletConfig
+from jmcore.constants import DUST_THRESHOLD
 from jmcore.models import OfferType
 from jmcore.tor_control import HiddenServiceDoSConfig
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -49,9 +50,9 @@ class OfferConfig(BaseModel):
         description="Offer type (sw0reloffer for relative, sw0absoffer for absolute)",
     )
     min_size: int = Field(
-        default=100_000,
+        default=DUST_THRESHOLD,
         ge=0,
-        description="Minimum CoinJoin amount in satoshis",
+        description="Minimum CoinJoin amount in satoshis (default: dust threshold)",
     )
     cj_fee_relative: str = Field(
         default="0.001",
@@ -188,7 +189,9 @@ class MakerConfig(WalletConfig):
     offer_type: OfferType = Field(
         default=OfferType.SW0_RELATIVE, description="Offer type (relative/absolute fee)"
     )
-    min_size: int = Field(default=100_000, ge=0, description="Minimum CoinJoin amount in satoshis")
+    min_size: int = Field(
+        default=DUST_THRESHOLD, ge=0, description="Minimum CoinJoin amount in satoshis"
+    )
     cj_fee_relative: str = Field(default="0.001", description="Relative CJ fee (0.001 = 0.1%)")
     cj_fee_absolute: int = Field(default=500, ge=0, description="Absolute CJ fee in satoshis")
     tx_fee_contribution: int = Field(
