@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.5] - 2026-02-05
+
 ### Changed
 
 - **Layer-Based Reproducibility Verification**: Replaced manifest digest comparison with layer digest comparison for reproducible build verification. Layer digests are content-addressable hashes of actual image content and are identical regardless of manifest format (Docker vs OCI). This fixes the fundamental issue where CI builds (pushed to registry) produce Docker distribution manifests while local builds produce OCI manifests - even for identical image content, these have different manifest digests. By comparing layer digests instead, verification works reliably across different build environments.
