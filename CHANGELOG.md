@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-02-05
+
 ### Changed
 
 - **Disabled Docker Attestations for Reproducible Builds**: Disabled provenance and SBOM attestations in the CI release workflow (`provenance: false`, `sbom: false`). These attestations include timestamps and environment-specific data that made builds non-reproducible across different build environments. While this removes supply chain metadata from images, it enables true reproducibility verification where anyone can build the same image and get the exact same digest.
