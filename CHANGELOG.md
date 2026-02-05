@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.7] - 2026-02-05
+
 ### Fixed
 
 - **File Timestamp Reproducibility with rewrite-timestamp**: Added `rewrite-timestamp=true` to Docker build outputs in both CI and verification scripts. This BuildKit feature clamps all file timestamps inside image layers to `SOURCE_DATE_EPOCH`, ensuring files created by `apt-get install`, `pip install`, and other commands have consistent timestamps regardless of when the build runs. Without this, directories like `/etc`, `/var/lib/apt`, etc. have timestamps from build time, causing layer digest mismatches.
