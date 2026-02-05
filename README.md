@@ -73,6 +73,8 @@ jm-maker start
 
 This is a modern alternative to the reference implementation, fully compatible but with key improvements:
 
+**Cross-compatible**: Makers running JoinMarket-NG are automatically discovered by takers using the legacy implementation, and vice versa. The wire protocol is 100% compatible, so you can seamlessly join the existing JoinMarket network.
+
 - **No daemon** - just run commands, no background services
 - **Run maker + taker simultaneously** - no suspicious gaps in offers
 - **Light client support** - Neutrino backend, no full node required
