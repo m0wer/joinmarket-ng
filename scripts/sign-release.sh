@@ -14,7 +14,7 @@
 #   - git
 #   - gh (GitHub CLI) for auto-detection
 #   - docker with buildx (for --reproduce)
-#   - jq (for --reproduce digest extraction)
+#   - jq (for layer digest extraction)
 # =============================================================================
 
 set -euo pipefail
@@ -55,6 +55,9 @@ All signers should use --reproduce to independently verify that builds are repro
 before signing. Multiple signatures only add value if each signer verifies independently.
 By default, --reproduce is enabled unless --no-reproduce is specified.
 
+The reproduce check compares layer digests (content-addressable, format-independent)
+rather than manifest digests, ensuring reliable comparison regardless of build environment.
+
 Examples:
   $(basename "$0") 1.0.0 --key ABCD1234...              # Verify and sign
   $(basename "$0") 1.0.0 --key ABCD1234... --no-reproduce  # Sign without verify (not recommended)
@@ -62,6 +65,18 @@ Examples:
   $(basename "$0") 1.0.0 --key ABCD1234... --no-push
 EOF
     exit 1
+}
+
+# Detect current architecture in Docker format
+detect_arch() {
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64)  echo "amd64" ;;
+        aarch64) echo "arm64" ;;
+        armv7l)  echo "arm-v7" ;;
+        *)       echo "$arch" ;;
+    esac
 }
 
 # Parse arguments
@@ -102,6 +117,12 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Check for jq (required for all operations now)
+if ! command -v jq &> /dev/null; then
+    log_error "jq is required. Please install it."
+    exit 1
+fi
 
 # =============================================================================
 # Step 0: Get GPG key early (needed for auto-detection)
@@ -196,29 +217,12 @@ cat "$MANIFEST_FILE"
 echo ""
 
 # =============================================================================
-# Step 2: Optionally reproduce builds (for first signer)
+# Step 2: Optionally reproduce builds (recommended for all signers)
 # =============================================================================
 if [[ "$REPRODUCE" == true ]]; then
-    # Check for jq (required for OCI manifest parsing)
-    if ! command -v jq &> /dev/null; then
-        log_error "jq is required for --reproduce. Please install it."
-        exit 1
-    fi
-
-    # Detect current architecture
-    detect_arch() {
-        local arch
-        arch=$(uname -m)
-        case "$arch" in
-            x86_64)  echo "amd64" ;;
-            aarch64) echo "arm64" ;;
-            armv7l)  echo "arm-v7" ;;
-            *)       echo "$arch" ;;
-        esac
-    }
-
     CURRENT_ARCH=$(detect_arch)
-    log_info "Reproducing builds for $CURRENT_ARCH to verify manifest digests..."
+    log_info "Reproducing builds for $CURRENT_ARCH to verify layer digests..."
+    log_info "Layer digests are content-addressable and format-independent"
 
     # Map arch to Docker platform format
     case "$CURRENT_ARCH" in
@@ -244,16 +248,6 @@ if [[ "$REPRODUCE" == true ]]; then
     log_info "SOURCE_DATE_EPOCH: $SOURCE_DATE_EPOCH"
     log_info "Platform: $PLATFORM"
 
-    # Extract expected digests from manifest
-    declare -A EXPECTED_DIGESTS
-    while IFS=': ' read -r key value || [[ -n "$key" ]]; do
-        [[ "$key" =~ ^#.*$ || -z "$value" ]] && continue
-        [[ "$key" == "commit" || "$key" == "source_date_epoch" ]] && continue
-        if [[ "$value" =~ ^sha256: ]]; then
-            EXPECTED_DIGESTS["$key"]="$value"
-        fi
-    done < "$MANIFEST_FILE"
-
     # Clone repository at specific commit
     REPO_DIR="$WORK_DIR/repo"
     log_info "Cloning repository at commit $COMMIT..."
@@ -276,22 +270,11 @@ if [[ "$REPRODUCE" == true ]]; then
     for i in "${!IMAGES[@]}"; do
         image="${IMAGES[$i]}"
         dockerfile="${DOCKERFILES[$i]}"
-        digest_key="${image}-${CURRENT_ARCH}"
-
-        # Check for per-platform digest (new format) or fall back to old format
-        if [[ -v "EXPECTED_DIGESTS[$digest_key]" ]]; then
-            expected="${EXPECTED_DIGESTS[$digest_key]}"
-        else
-            log_warn "No per-platform digest for $digest_key in manifest"
-            log_warn "Manifest may be old format - skipping reproduce for $image"
-            continue
-        fi
+        layers_key="${image}-${CURRENT_ARCH}-layers"
 
         log_info "Building $image for $PLATFORM..."
 
-        # Build to OCI tar format (no local registry needed)
-        # Use rewrite-timestamp=true to clamp all file timestamps to SOURCE_DATE_EPOCH
-        # Use --no-cache to ensure a clean build matching CI
+        # Build to OCI tar format
         OCI_TAR="$OCI_DIR/${image}.tar"
         OCI_EXTRACT="$OCI_DIR/${image}"
         mkdir -p "$OCI_EXTRACT"
@@ -301,7 +284,7 @@ if [[ "$REPRODUCE" == true ]]; then
             --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
             --build-arg VERSION="$VERSION" \
             --platform "$PLATFORM" \
-            --output "type=oci,dest=${OCI_TAR},rewrite-timestamp=true" \
+            --output "type=oci,dest=${OCI_TAR}" \
             --no-cache \
             . 2>&1 | tee "$WORK_DIR/${image}-build.log"; then
             log_error "  Build failed for $image"
@@ -309,21 +292,40 @@ if [[ "$REPRODUCE" == true ]]; then
             continue
         fi
 
-        # Extract OCI tar and get manifest digest
+        # Extract OCI tar and get layer digests
         tar -xf "$OCI_TAR" -C "$OCI_EXTRACT"
 
         # Get the manifest digest from OCI index.json
-        # For single-platform builds, index.json points to the image manifest
-        built_digest=$(jq -r '.manifests[0].digest' "$OCI_EXTRACT/index.json")
+        manifest_digest=$(jq -r '.manifests[0].digest' "$OCI_EXTRACT/index.json")
+        manifest_file="$OCI_EXTRACT/blobs/sha256/${manifest_digest#sha256:}"
 
-        if [[ "$built_digest" == "$expected" ]]; then
-            log_info "  Digest matches: $expected"
-            REPRODUCE_SUCCESS=$((REPRODUCE_SUCCESS + 1))
+        # Extract layer digests from the manifest
+        built_layers=$(jq -r '.layers[].digest' "$manifest_file" | sort)
+        built_layers_file="$WORK_DIR/${image}-built-layers.txt"
+        echo "$built_layers" > "$built_layers_file"
+
+        # Extract expected layers from manifest file
+        expected_layers_file="$WORK_DIR/${image}-expected-layers.txt"
+        awk "/^### ${image}-${CURRENT_ARCH}-layers$/,/^(###|$)/" "$MANIFEST_FILE" | \
+            grep "^sha256:" | sort > "$expected_layers_file"
+
+        # Compare layer digests
+        if [[ -s "$expected_layers_file" ]]; then
+            if diff -q "$expected_layers_file" "$built_layers_file" > /dev/null 2>&1; then
+                layer_count=$(wc -l < "$built_layers_file")
+                log_info "  Layer digests match ($layer_count layers)"
+                REPRODUCE_SUCCESS=$((REPRODUCE_SUCCESS + 1))
+            else
+                log_error "  Layer digest mismatch!"
+                log_error "  Expected layers:"
+                cat "$expected_layers_file" | sed 's/^/    /'
+                log_error "  Built layers:"
+                cat "$built_layers_file" | sed 's/^/    /'
+                REPRODUCE_ERRORS=$((REPRODUCE_ERRORS + 1))
+            fi
         else
-            log_error "  Digest mismatch!"
-            log_error "    Expected: $expected"
-            log_error "    Built:    $built_digest"
-            REPRODUCE_ERRORS=$((REPRODUCE_ERRORS + 1))
+            log_warn "  No layer digests found in manifest for $layers_key"
+            log_warn "  Manifest may be old format - skipping layer comparison"
         fi
 
         # Clean up OCI files
@@ -337,7 +339,7 @@ if [[ "$REPRODUCE" == true ]]; then
 
     if [[ $REPRODUCE_ERRORS -gt 0 ]]; then
         log_error "Cannot sign: builds do not reproduce!"
-        log_error "The locally built images have different digests than the manifest."
+        log_error "The locally built images have different layer digests than the manifest."
         log_error "Possible causes:"
         log_error "  - Different BuildKit version than CI"
         log_error "  - Platform differences"
@@ -350,13 +352,9 @@ if [[ "$REPRODUCE" == true ]]; then
 fi
 
 # =============================================================================
-# Step 3: Get GPG key (already done above for auto-detection)
+# Step 3: Sign the manifest
 # =============================================================================
 log_info "Using GPG key: $FULL_FINGERPRINT"
-
-# =============================================================================
-# Step 4: Sign the manifest
-# =============================================================================
 log_info "Signing release manifest..."
 
 SIG_DIR="$PROJECT_ROOT/signatures/$VERSION"
@@ -369,7 +367,7 @@ gpg --local-user "$GPG_KEY" --armor --detach-sign --output "$SIG_FILE" "$MANIFES
 log_info "Signature created: $SIG_FILE"
 
 # =============================================================================
-# Step 5: Verify the signature
+# Step 4: Verify the signature
 # =============================================================================
 log_info "Verifying signature..."
 
@@ -403,7 +401,7 @@ if ! grep -q "$FULL_FINGERPRINT" "$TRUSTED_KEYS" 2>/dev/null; then
 fi
 
 # =============================================================================
-# Step 6: Auto commit and push (unless --no-push)
+# Step 5: Auto commit and push (unless --no-push)
 # =============================================================================
 if [[ "$AUTO_PUSH" == true ]]; then
     log_info "Committing and pushing signature..."

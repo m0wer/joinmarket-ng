@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Layer-Based Reproducibility Verification**: Replaced manifest digest comparison with layer digest comparison for reproducible build verification. Layer digests are content-addressable hashes of actual image content and are identical regardless of manifest format (Docker vs OCI). This fixes the fundamental issue where CI builds (pushed to registry) produce Docker distribution manifests while local builds produce OCI manifests - even for identical image content, these have different manifest digests. By comparing layer digests instead, verification works reliably across different build environments.
+
+- **Simplified CI Release Workflow**: Removed the slow OCI tar rebuild step from the CI release workflow. Previously, after pushing to the registry, CI would rebuild each platform as an OCI tar to extract digests - this caused timeouts (30+ minutes per image). The new approach extracts layer digests directly from the pushed images using `docker buildx imagetools inspect`, which is fast and reliable.
+
+- **Updated Release Manifest Format**: The release manifest now contains per-platform layer digests in addition to manifest digests. Layer digests are listed under `### <image>-<arch>-layers` sections, enabling local verification to compare the actual image content rather than manifest metadata.
+
 ## [0.13.4] - 2026-02-05
 
 ### Changed

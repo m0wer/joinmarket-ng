@@ -16,7 +16,7 @@
 #   - docker with buildx (for image verification and reproduction)
 #   - curl or wget
 #   - git
-#   - jq (for --reproduce digest extraction)
+#   - jq (for digest extraction)
 # =============================================================================
 
 set -euo pipefail
@@ -63,7 +63,8 @@ Options:
   --help          Show this help message
 
 The --reproduce flag builds images for your current architecture only and
-compares against the per-platform digest in the release manifest.
+compares layer digests against the release manifest. Layer digests are
+content-addressable and identical regardless of manifest format.
 
 Examples:
   $(basename "$0") 1.0.0
@@ -106,6 +107,12 @@ done
 if [[ -z "$VERSION" ]]; then
     log_error "Version is required"
     usage
+fi
+
+# Check for jq (required for all operations now)
+if ! command -v jq &> /dev/null; then
+    log_error "jq is required. Please install it."
+    exit 1
 fi
 
 # Create temp directory for verification
@@ -196,46 +203,26 @@ fi
 # =============================================================================
 # Step 3: Verify Docker image digests from registry
 # =============================================================================
-log_info "Verifying Docker image digests from registry..."
+log_info "Verifying Docker image manifest digests from registry..."
 
-# Extract all digests from manifest (both per-platform and manifest-list)
-declare -A EXPECTED_DIGESTS
+# Extract manifest digests from manifest file
+declare -A EXPECTED_MANIFEST_DIGESTS
 while IFS=': ' read -r key value || [[ -n "$key" ]]; do
     # Skip comments and non-digest lines
     [[ "$key" =~ ^#.*$ || -z "$value" ]] && continue
     [[ "$key" == "commit" || "$key" == "source_date_epoch" ]] && continue
 
-    if [[ "$value" =~ ^sha256: ]]; then
-        EXPECTED_DIGESTS["$key"]="$value"
+    if [[ "$key" =~ -manifest$ && "$value" =~ ^sha256: ]]; then
+        EXPECTED_MANIFEST_DIGESTS["$key"]="$value"
     fi
 done < "$MANIFEST_FILE"
 
 DIGEST_ERRORS=0
 
-# Get list of unique base image names (without arch suffix)
-declare -A BASE_IMAGES
-for key in "${!EXPECTED_DIGESTS[@]}"; do
-    # Extract base name (remove -amd64, -arm64, -arm-v7, -manifest suffixes)
-    base="${key%-amd64}"
-    base="${base%-arm64}"
-    base="${base%-arm-v7}"
-    base="${base%-manifest}"
-    BASE_IMAGES["$base"]=1
-done
-
-for image in "${!BASE_IMAGES[@]}"; do
-    manifest_key="${image}-manifest"
-
-    # Check if we have a manifest digest (new format) or just image digest (old format)
-    if [[ -v "EXPECTED_DIGESTS[$manifest_key]" ]]; then
-        expected="${EXPECTED_DIGESTS[$manifest_key]}"
-    elif [[ -v "EXPECTED_DIGESTS[$image]" ]]; then
-        # Old format: just the image name without suffix
-        expected="${EXPECTED_DIGESTS[$image]}"
-    else
-        log_warn "No digest found for $image, skipping"
-        continue
-    fi
+for key in "${!EXPECTED_MANIFEST_DIGESTS[@]}"; do
+    expected="${EXPECTED_MANIFEST_DIGESTS[$key]}"
+    # Extract image name from key (remove -manifest suffix)
+    image="${key%-manifest}"
 
     full_image="${REGISTRY}/${REPO}/${image}:${VERSION}"
     log_info "Checking $image..."
@@ -269,15 +256,10 @@ REPRODUCE_ERRORS=0
 REPRODUCE_SUCCESS=0
 
 if [[ "$REPRODUCE" == true ]]; then
-    # Check for jq (required for OCI manifest parsing)
-    if ! command -v jq &> /dev/null; then
-        log_error "jq is required for --reproduce. Please install it."
-        exit 1
-    fi
-
     # Detect current architecture
     CURRENT_ARCH=$(detect_arch)
     log_info "Attempting to reproduce Docker builds for $CURRENT_ARCH..."
+    log_info "Comparing layer digests (content-addressable, format-independent)"
 
     # Map arch to Docker platform format
     case "$CURRENT_ARCH" in
@@ -321,22 +303,11 @@ if [[ "$REPRODUCE" == true ]]; then
     for i in "${!IMAGES[@]}"; do
         image="${IMAGES[$i]}"
         dockerfile="${DOCKERFILES[$i]}"
-        digest_key="${image}-${CURRENT_ARCH}"
-
-        # Check for per-platform digest (new format) or fall back to manifest digest
-        if [[ -v "EXPECTED_DIGESTS[$digest_key]" ]]; then
-            manifest_expected="${EXPECTED_DIGESTS[$digest_key]}"
-        else
-            log_warn "No per-platform digest for $digest_key in manifest"
-            log_warn "Manifest may be old format - skipping reproduce for $image"
-            continue
-        fi
+        layers_key="${image}-${CURRENT_ARCH}-layers"
 
         log_info "Building $image for $PLATFORM..."
 
-        # Build to OCI tar format (no local registry needed)
-        # Use rewrite-timestamp=true to clamp all file timestamps to SOURCE_DATE_EPOCH
-        # Use --no-cache to ensure a clean build matching CI
+        # Build to OCI tar format
         OCI_TAR="$OCI_DIR/${image}.tar"
         OCI_EXTRACT="$OCI_DIR/${image}"
         mkdir -p "$OCI_EXTRACT"
@@ -346,7 +317,7 @@ if [[ "$REPRODUCE" == true ]]; then
             --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
             --build-arg VERSION="$VERSION" \
             --platform "$PLATFORM" \
-            --output "type=oci,dest=${OCI_TAR},rewrite-timestamp=true" \
+            --output "type=oci,dest=${OCI_TAR}" \
             --no-cache \
             . 2>&1 | tee "$WORK_DIR/${image}-build.log"; then
             log_error "  Build failed for $image"
@@ -354,28 +325,42 @@ if [[ "$REPRODUCE" == true ]]; then
             continue
         fi
 
-        # Extract OCI tar and get manifest digest
+        # Extract OCI tar and get layer digests
         tar -xf "$OCI_TAR" -C "$OCI_EXTRACT"
 
         # Get the manifest digest from OCI index.json
-        # For single-platform builds, index.json points to the image manifest
-        built_digest=$(jq -r '.manifests[0].digest' "$OCI_EXTRACT/index.json")
+        manifest_digest=$(jq -r '.manifests[0].digest' "$OCI_EXTRACT/index.json")
+        manifest_file="$OCI_EXTRACT/blobs/${manifest_digest#sha256:}"
+        manifest_file="$OCI_EXTRACT/blobs/sha256/${manifest_digest#sha256:}"
 
-        if [[ -n "$built_digest" && "$built_digest" != "null" ]]; then
-            # Compare against manifest (which now contains OCI digests)
-            if [[ "$built_digest" == "$manifest_expected" ]]; then
-                log_info "  Reproduced successfully!"
-                log_info "    Digest: $built_digest"
+        # Extract layer digests from the manifest
+        built_layers=$(jq -r '.layers[].digest' "$manifest_file" | sort)
+        built_layers_file="$WORK_DIR/${image}-built-layers.txt"
+        echo "$built_layers" > "$built_layers_file"
+
+        # Extract expected layers from manifest file
+        # Look for section starting with "### ${image}-${CURRENT_ARCH}-layers"
+        expected_layers_file="$WORK_DIR/${image}-expected-layers.txt"
+        awk "/^### ${image}-${CURRENT_ARCH}-layers$/,/^(###|$)/" "$MANIFEST_FILE" | \
+            grep "^sha256:" | sort > "$expected_layers_file"
+
+        # Compare layer digests
+        if [[ -s "$expected_layers_file" ]]; then
+            if diff -q "$expected_layers_file" "$built_layers_file" > /dev/null 2>&1; then
+                layer_count=$(wc -l < "$built_layers_file")
+                log_info "  Reproduced successfully! ($layer_count layers match)"
                 REPRODUCE_SUCCESS=$((REPRODUCE_SUCCESS + 1))
             else
-                log_error "  Digest mismatch!"
-                log_error "    Expected (manifest): $manifest_expected"
-                log_error "    Built:               $built_digest"
+                log_error "  Layer digest mismatch!"
+                log_error "  Expected layers:"
+                cat "$expected_layers_file" | sed 's/^/    /'
+                log_error "  Built layers:"
+                cat "$built_layers_file" | sed 's/^/    /'
                 REPRODUCE_ERRORS=$((REPRODUCE_ERRORS + 1))
             fi
         else
-            log_error "  Could not determine digest of built image"
-            REPRODUCE_ERRORS=$((REPRODUCE_ERRORS + 1))
+            log_warn "  No layer digests found in manifest for $layers_key"
+            log_warn "  Manifest may be old format - skipping layer comparison"
         fi
 
         # Clean up OCI files
@@ -411,8 +396,8 @@ echo ""
 if [[ "$REPRODUCE" == true && $REPRODUCE_ERRORS -gt 0 ]]; then
     log_error "Reproducibility verification failed!"
     log_error "The builds could not be reproduced locally."
-    log_error "This may indicate:"
-    log_error "  - Different BuildKit versions"
+    log_error "Possible causes:"
+    log_error "  - Different BuildKit version than CI"
     log_error "  - Platform differences"
     log_error "  - Non-deterministic build steps in Dockerfiles"
     exit 1

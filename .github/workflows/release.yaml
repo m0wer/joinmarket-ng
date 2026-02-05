@@ -145,6 +145,7 @@ jobs:
           file: ${{ matrix.dockerfile }}
           target: ${{ matrix.target || '' }}
           platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # Disable attestations for reproducible builds
@@ -152,9 +153,6 @@ jobs:
           # that make builds non-reproducible across different build environments
           provenance: false
           sbom: false
-          # Push to registry with rewrite-timestamp for reproducible builds
-          # rewrite-timestamp clamps all file timestamps to SOURCE_DATE_EPOCH
-          outputs: type=registry,rewrite-timestamp=true
           cache-from: |
             type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache
             type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:latest
@@ -166,47 +164,38 @@ jobs:
         env:
           SOURCE_DATE_EPOCH: ${{ env.SOURCE_DATE_EPOCH }}
 
-      - name: Export per-platform OCI digests for reproducibility
+      - name: Export per-platform layer digests for reproducibility
         run: |
-          mkdir -p /tmp/digests /tmp/oci
+          mkdir -p /tmp/digests
           VERSION=${{ needs.create-release.outputs.version }}
           IMAGE=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${VERSION}
 
           # Store registry manifest list digest for reference
           echo "${{ steps.build.outputs.digest }}" > /tmp/digests/${{ matrix.image }}${{ matrix.tag_suffix || '' }}-manifest.txt
 
-          # Build each platform separately as OCI tar to get reproducible digests
-          # This ensures local verification can reproduce the exact same digest
+          # Extract per-platform layer digests from the pushed image
+          # Layer digests are content-addressable and identical regardless of manifest format
+          # This enables reproducibility verification by comparing layer content
           for platform in linux/amd64 linux/arm64 linux/arm/v7; do
-            # Convert platform to arch format (linux/arm/v7 -> arm-v7)
             arch=$(echo "$platform" | sed 's|linux/||; s|/|-|')
 
-            echo "Building $platform as OCI for reproducibility verification..."
-            OCI_TAR="/tmp/oci/${{ matrix.image }}-${arch}.tar"
+            echo "Extracting layer digests for $platform..."
 
-            docker buildx build \
-              --file "${{ matrix.dockerfile }}" \
-              ${{ matrix.target && format('--target {0}', matrix.target) || '' }} \
-              --platform "$platform" \
-              --build-arg SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }} \
-              --build-arg VERSION=${{ needs.create-release.outputs.version }} \
-              --output "type=oci,dest=${OCI_TAR},rewrite-timestamp=true" \
-              --no-cache \
-              .
+            # Get the platform-specific manifest and extract layer digests
+            layers=$(docker buildx imagetools inspect "$IMAGE" --raw | \
+              jq -r --arg os "linux" --arg arch "${arch%-*}" --arg variant "${arch#*-}" \
+                '.manifests[] | select(.platform.os == $os and .platform.architecture == $arch and (.platform.variant // "") == (if $variant == $arch then "" else $variant end)) | .digest' | \
+              head -1 | \
+              xargs -I{} docker buildx imagetools inspect "${IMAGE}@{}" --raw | \
+              jq -r '.layers[].digest' | sort)
 
-            # Extract OCI digest from index.json
-            mkdir -p /tmp/oci/extract
-            tar -xf "$OCI_TAR" -C /tmp/oci/extract
-            digest=$(jq -r '.manifests[0].digest' /tmp/oci/extract/index.json)
-            echo "$digest" > /tmp/digests/${{ matrix.image }}${{ matrix.tag_suffix || '' }}-${arch}.txt
-            echo "  $arch: $digest"
-
-            # Cleanup
-            rm -rf /tmp/oci/extract "$OCI_TAR"
+            # Store as newline-separated list of layer digests
+            echo "$layers" > /tmp/digests/${{ matrix.image }}${{ matrix.tag_suffix || '' }}-${arch}-layers.txt
+            echo "  $arch layers:"
+            echo "$layers" | sed 's/^/    /'
           done
 
-          echo "Extracted OCI digests:"
-          cat /tmp/digests/${{ matrix.image }}*.txt
+          echo "Extracted layer digests for all platforms"
 
       - name: Upload digest artifact
         uses: actions/upload-artifact@v4
@@ -250,9 +239,9 @@ jobs:
           # Build Date: ${BUILD_DATE}
           # SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH}
           #
-          # This manifest contains OCI image digests for reproducible build verification.
-          # These digests are from OCI tar exports built with rewrite-timestamp=true,
-          # ensuring anyone can reproduce the exact same digest locally.
+          # This manifest contains layer digests for reproducible build verification.
+          # Layer digests are content-addressable hashes of the actual image layers,
+          # which are identical regardless of manifest format (Docker vs OCI).
           #
           # Verification instructions: See DOCS.md#reproducible-builds
 
@@ -260,15 +249,28 @@ jobs:
           commit: ${COMMIT_SHA}
           source_date_epoch: ${SOURCE_DATE_EPOCH}
 
-          ## Docker Images (OCI digests for reproducibility)
+          ## Docker Images
           EOF
 
-          # Add all image digests
-          for digest_file in /tmp/digests/*.txt; do
+          # Add manifest digests first
+          for digest_file in /tmp/digests/*-manifest.txt; do
             if [ -f "$digest_file" ]; then
               image_name=$(basename "$digest_file" .txt)
               digest=$(cat "$digest_file")
               echo "${image_name}: ${digest}" >> release-manifest-${VERSION}.txt
+            fi
+          done
+
+          echo "" >> release-manifest-${VERSION}.txt
+          echo "## Per-Platform Layer Digests (for reproducibility verification)" >> release-manifest-${VERSION}.txt
+
+          # Add layer digests per platform
+          for digest_file in /tmp/digests/*-layers.txt; do
+            if [ -f "$digest_file" ]; then
+              image_name=$(basename "$digest_file" .txt)
+              echo "" >> release-manifest-${VERSION}.txt
+              echo "### ${image_name}" >> release-manifest-${VERSION}.txt
+              cat "$digest_file" >> release-manifest-${VERSION}.txt
             fi
           done
 
