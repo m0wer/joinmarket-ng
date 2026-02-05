@@ -335,15 +335,19 @@ if [[ "$REPRODUCE" == true ]]; then
         log_info "Building $image for $PLATFORM..."
 
         # Build to OCI tar format (no local registry needed)
+        # Use rewrite-timestamp=true to clamp all file timestamps to SOURCE_DATE_EPOCH
+        # Use --no-cache to ensure a clean build matching CI
         OCI_TAR="$OCI_DIR/${image}.tar"
         OCI_EXTRACT="$OCI_DIR/${image}"
         mkdir -p "$OCI_EXTRACT"
 
-        if ! docker buildx build \
+        if ! SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" docker buildx build \
             --file "$dockerfile" \
             --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
+            --build-arg VERSION="$VERSION" \
             --platform "$PLATFORM" \
-            --output "type=oci,dest=${OCI_TAR}" \
+            --output "type=oci,dest=${OCI_TAR},rewrite-timestamp=true" \
+            --no-cache \
             . 2>&1 | tee "$WORK_DIR/${image}-build.log"; then
             log_error "  Build failed for $image"
             REPRODUCE_ERRORS=$((REPRODUCE_ERRORS + 1))
@@ -357,42 +361,17 @@ if [[ "$REPRODUCE" == true ]]; then
         # For single-platform builds, index.json points to the image manifest
         built_digest=$(jq -r '.manifests[0].digest' "$OCI_EXTRACT/index.json")
 
-        # Also get digest from published registry for this specific platform
-        FULL_IMAGE="${REGISTRY}/${REPO}/${image}:${VERSION}"
-        registry_digest=$(docker buildx imagetools inspect "$FULL_IMAGE" --raw 2>/dev/null | \
-                          jq -r ".manifests[] | select(.platform.os == \"linux\" and .platform.architecture == \"${CURRENT_ARCH//-v7/}\" and (.platform.variant // \"\") == \"${CURRENT_ARCH##*-}\") | .digest" 2>/dev/null || echo "")
-
-        # If variant is empty, adjust the jq filter
-        if [[ -z "$registry_digest" && "$CURRENT_ARCH" != *"-"* ]]; then
-            registry_digest=$(docker buildx imagetools inspect "$FULL_IMAGE" --raw 2>/dev/null | \
-                              jq -r ".manifests[] | select(.platform.os == \"linux\" and .platform.architecture == \"${CURRENT_ARCH}\" and (.platform.variant // \"\") == \"\") | .digest" 2>/dev/null || echo "")
-        fi
-
         if [[ -n "$built_digest" && "$built_digest" != "null" ]]; then
-            # Compare against manifest
-            if [[ "$built_digest" != "$manifest_expected" ]]; then
-                log_error "  Local build digest differs from manifest!"
-                log_error "    Manifest: $manifest_expected"
-                log_error "    Built:    $built_digest"
-                REPRODUCE_ERRORS=$((REPRODUCE_ERRORS + 1))
-            # Compare against published registry
-            elif [[ -n "$registry_digest" && "$built_digest" != "$registry_digest" ]]; then
-                log_error "  Local build digest differs from published registry!"
-                log_error "    Registry: $registry_digest"
-                log_error "    Built:    $built_digest"
-                log_error "    NOTE: Manifest claims $manifest_expected"
-                REPRODUCE_ERRORS=$((REPRODUCE_ERRORS + 1))
-            elif [[ "$built_digest" == "$manifest_expected" ]]; then
+            # Compare against manifest (which now contains OCI digests)
+            if [[ "$built_digest" == "$manifest_expected" ]]; then
                 log_info "  Reproduced successfully!"
                 log_info "    Digest: $built_digest"
-                if [[ -n "$registry_digest" ]]; then
-                    log_info "    Registry verified: matches published image"
-                fi
                 REPRODUCE_SUCCESS=$((REPRODUCE_SUCCESS + 1))
             else
-                log_warn "  Could not verify against published registry (no digest found)"
-                log_info "  Manifest verification: PASSED"
-                REPRODUCE_SUCCESS=$((REPRODUCE_SUCCESS + 1))
+                log_error "  Digest mismatch!"
+                log_error "    Expected (manifest): $manifest_expected"
+                log_error "    Built:               $built_digest"
+                REPRODUCE_ERRORS=$((REPRODUCE_ERRORS + 1))
             fi
         else
             log_error "  Could not determine digest of built image"

@@ -145,7 +145,6 @@ jobs:
           file: ${{ matrix.dockerfile }}
           target: ${{ matrix.target || '' }}
           platforms: linux/amd64,linux/arm64,linux/arm/v7
-          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # Disable attestations for reproducible builds
@@ -153,6 +152,9 @@ jobs:
           # that make builds non-reproducible across different build environments
           provenance: false
           sbom: false
+          # Push to registry with rewrite-timestamp for reproducible builds
+          # rewrite-timestamp clamps all file timestamps to SOURCE_DATE_EPOCH
+          outputs: type=registry,rewrite-timestamp=true
           cache-from: |
             type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache
             type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:latest
@@ -164,25 +166,46 @@ jobs:
         env:
           SOURCE_DATE_EPOCH: ${{ env.SOURCE_DATE_EPOCH }}
 
-      - name: Export per-platform image digests
+      - name: Export per-platform OCI digests for reproducibility
         run: |
-          mkdir -p /tmp/digests
+          mkdir -p /tmp/digests /tmp/oci
           VERSION=${{ needs.create-release.outputs.version }}
           IMAGE=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${VERSION}
 
-          # Extract per-platform digests from the manifest list
-          # These are the actual image digests, excluding attestation manifests
-          docker buildx imagetools inspect "$IMAGE" --raw | \
-            jq -r '.manifests[] | select(.platform.os != "unknown") |
-              "\(.platform.architecture)\(if .platform.variant then "-" + .platform.variant else "" end) \(.digest)"' | \
-            while read arch digest; do
-              echo "$digest" > /tmp/digests/${{ matrix.image }}${{ matrix.tag_suffix || '' }}-${arch}.txt
-            done
-
-          # Also store manifest list digest for reference
+          # Store registry manifest list digest for reference
           echo "${{ steps.build.outputs.digest }}" > /tmp/digests/${{ matrix.image }}${{ matrix.tag_suffix || '' }}-manifest.txt
 
-          echo "Extracted digests:"
+          # Build each platform separately as OCI tar to get reproducible digests
+          # This ensures local verification can reproduce the exact same digest
+          for platform in linux/amd64 linux/arm64 linux/arm/v7; do
+            # Convert platform to arch format (linux/arm/v7 -> arm-v7)
+            arch=$(echo "$platform" | sed 's|linux/||; s|/|-|')
+
+            echo "Building $platform as OCI for reproducibility verification..."
+            OCI_TAR="/tmp/oci/${{ matrix.image }}-${arch}.tar"
+
+            docker buildx build \
+              --file "${{ matrix.dockerfile }}" \
+              ${{ matrix.target && format('--target {0}', matrix.target) || '' }} \
+              --platform "$platform" \
+              --build-arg SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }} \
+              --build-arg VERSION=${{ needs.create-release.outputs.version }} \
+              --output "type=oci,dest=${OCI_TAR},rewrite-timestamp=true" \
+              --no-cache \
+              .
+
+            # Extract OCI digest from index.json
+            mkdir -p /tmp/oci/extract
+            tar -xf "$OCI_TAR" -C /tmp/oci/extract
+            digest=$(jq -r '.manifests[0].digest' /tmp/oci/extract/index.json)
+            echo "$digest" > /tmp/digests/${{ matrix.image }}${{ matrix.tag_suffix || '' }}-${arch}.txt
+            echo "  $arch: $digest"
+
+            # Cleanup
+            rm -rf /tmp/oci/extract "$OCI_TAR"
+          done
+
+          echo "Extracted OCI digests:"
           cat /tmp/digests/${{ matrix.image }}*.txt
 
       - name: Upload digest artifact
@@ -227,8 +250,9 @@ jobs:
           # Build Date: ${BUILD_DATE}
           # SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH}
           #
-          # This manifest contains cryptographic digests of all release artifacts.
-          # Use these to verify the integrity and authenticity of downloaded images.
+          # This manifest contains OCI image digests for reproducible build verification.
+          # These digests are from OCI tar exports built with rewrite-timestamp=true,
+          # ensuring anyone can reproduce the exact same digest locally.
           #
           # Verification instructions: See DOCS.md#reproducible-builds
 
@@ -236,7 +260,7 @@ jobs:
           commit: ${COMMIT_SHA}
           source_date_epoch: ${SOURCE_DATE_EPOCH}
 
-          ## Docker Images
+          ## Docker Images (OCI digests for reproducibility)
           EOF
 
           # Add all image digests

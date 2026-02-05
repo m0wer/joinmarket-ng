@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Use OCI Digests for Reproducible Build Verification**: The release manifest now contains OCI tar digests instead of registry manifest digests. CI builds each platform image as an OCI tar (in addition to pushing to registry) and stores those digests in the manifest. This ensures local verification produces the exact same digest as CI, since both use the same output format (`type=oci,dest=...,rewrite-timestamp=true`). Previously, local verification used OCI output while CI stored registry digests, which are fundamentally different even for identical image content.
+
+- **Enabled rewrite-timestamp for Reproducible Builds**: Added `rewrite-timestamp=true` to Docker build outputs in CI and verification scripts. This BuildKit feature clamps all file timestamps inside images to `SOURCE_DATE_EPOCH`, ensuring that file metadata (like directory mtimes created by apt-get, ldconfig) doesn't vary between builds. Combined with disabling attestations, this achieves true reproducible Docker builds.
+
+### Fixed
+
+- **Docker Image Reproducibility (ldconfig cache)**: Added deletion of `/var/cache/ldconfig/aux-cache` after apt-get install in all Dockerfiles. This binary cache file contains non-deterministic data that caused builds to differ even with the same inputs.
+
 ## [0.13.3] - 2026-02-05
 
 ### Changed

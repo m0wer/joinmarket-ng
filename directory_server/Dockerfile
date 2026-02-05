@@ -51,11 +51,12 @@ FROM python:${PYTHON_VERSION}-slim AS production
 WORKDIR /app
 
 # Install only runtime dependencies (no build tools)
-# Delete apt/dpkg logs which contain timestamps (for reproducible builds)
+# Delete apt/dpkg logs and ldconfig cache for reproducible builds
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libsodium23 \
     && rm -rf /var/lib/apt/lists/* \
-    && rm -rf /var/log/dpkg.log /var/log/apt/*
+    && rm -rf /var/log/dpkg.log /var/log/apt/* \
+    && rm -rf /var/cache/ldconfig/aux-cache
 
 # Create non-root user first
 RUN useradd -m -u 1000 jm
@@ -122,12 +123,13 @@ FROM python:${PYTHON_VERSION} AS debug
 WORKDIR /app
 
 # Install runtime and debug dependencies (sorted alphabetically for reproducibility)
-# Delete apt/dpkg logs which contain timestamps (for reproducible builds)
+# Delete apt/dpkg logs and ldconfig cache for reproducible builds
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gdb \
     libsodium23 \
     && rm -rf /var/lib/apt/lists/* \
-    && rm -rf /var/log/dpkg.log /var/log/apt/*
+    && rm -rf /var/log/dpkg.log /var/log/apt/* \
+    && rm -rf /var/cache/ldconfig/aux-cache
 
 # Create non-root user first
 RUN useradd -m -u 1000 jm

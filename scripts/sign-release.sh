@@ -290,15 +290,19 @@ if [[ "$REPRODUCE" == true ]]; then
         log_info "Building $image for $PLATFORM..."
 
         # Build to OCI tar format (no local registry needed)
+        # Use rewrite-timestamp=true to clamp all file timestamps to SOURCE_DATE_EPOCH
+        # Use --no-cache to ensure a clean build matching CI
         OCI_TAR="$OCI_DIR/${image}.tar"
         OCI_EXTRACT="$OCI_DIR/${image}"
         mkdir -p "$OCI_EXTRACT"
 
-        if ! docker buildx build \
+        if ! SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" docker buildx build \
             --file "$dockerfile" \
             --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
+            --build-arg VERSION="$VERSION" \
             --platform "$PLATFORM" \
-            --output "type=oci,dest=${OCI_TAR}" \
+            --output "type=oci,dest=${OCI_TAR},rewrite-timestamp=true" \
+            --no-cache \
             . 2>&1 | tee "$WORK_DIR/${image}-build.log"; then
             log_error "  Build failed for $image"
             REPRODUCE_ERRORS=$((REPRODUCE_ERRORS + 1))
