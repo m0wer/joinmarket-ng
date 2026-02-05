@@ -145,9 +145,12 @@ jobs:
           file: ${{ matrix.dockerfile }}
           target: ${{ matrix.target || '' }}
           platforms: linux/amd64,linux/arm64,linux/arm/v7
-          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Use outputs with rewrite-timestamp for reproducible builds
+          # rewrite-timestamp clamps all file timestamps inside the image to SOURCE_DATE_EPOCH
+          # This ensures files created by apt-get, pip, etc. have consistent timestamps
+          outputs: type=registry,rewrite-timestamp=true
           # Disable attestations for reproducible builds
           # Provenance and SBOM attestations include timestamps and environment data
           # that make builds non-reproducible across different build environments

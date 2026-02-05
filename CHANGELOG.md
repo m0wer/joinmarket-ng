@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **File Timestamp Reproducibility with rewrite-timestamp**: Added `rewrite-timestamp=true` to Docker build outputs in both CI and verification scripts. This BuildKit feature clamps all file timestamps inside image layers to `SOURCE_DATE_EPOCH`, ensuring files created by `apt-get install`, `pip install`, and other commands have consistent timestamps regardless of when the build runs. Without this, directories like `/etc`, `/var/lib/apt`, etc. have timestamps from build time, causing layer digest mismatches.
+
+- **Verification Script Target Mismatch**: Fixed `verify-release.sh --reproduce` and `sign-release.sh --reproduce` to specify the correct `--target` for each image, matching the CI workflow. Previously, `directory-server` was being built without a target, which defaults to the last stage (`debug`) instead of `production`.
+
+### Note
+
+Releases prior to these changes (including 0.13.5 and 0.13.6) cannot be reproduced locally because they were built without `rewrite-timestamp=true`. Only releases built with these changes will be fully reproducible.
+
 ## [0.13.6] - 2026-02-05
 
 ### Changed

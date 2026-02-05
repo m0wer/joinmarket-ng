@@ -268,8 +268,10 @@ if [[ "$REPRODUCE" == true ]]; then
     cd "$REPO_DIR"
 
     # Build images for current architecture only
+    # Images and their corresponding targets (must match CI workflow matrix)
     IMAGES=("directory-server" "maker" "taker" "orderbook-watcher")
     DOCKERFILES=("./directory_server/Dockerfile" "./maker/Dockerfile" "./taker/Dockerfile" "./orderbook_watcher/Dockerfile")
+    TARGETS=("production" "" "" "")  # Empty string means no --target (uses default)
 
     # Create OCI output directory
     OCI_DIR="$WORK_DIR/oci"
@@ -281,6 +283,7 @@ if [[ "$REPRODUCE" == true ]]; then
     for i in "${!IMAGES[@]}"; do
         image="${IMAGES[$i]}"
         dockerfile="${DOCKERFILES[$i]}"
+        target="${TARGETS[$i]}"
         layers_key="${image}-${CURRENT_ARCH}-layers"
 
         log_info "Building $image for $PLATFORM..."
@@ -290,13 +293,20 @@ if [[ "$REPRODUCE" == true ]]; then
         OCI_EXTRACT="$OCI_DIR/${image}"
         mkdir -p "$OCI_EXTRACT"
 
-        if ! SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" docker buildx build \
-            --file "$dockerfile" \
-            --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
-            --build-arg VERSION="$VERSION" \
-            --platform "$PLATFORM" \
-            --output "type=oci,dest=${OCI_TAR}" \
-            --no-cache \
+        # Build command with optional --target
+        # Use rewrite-timestamp to clamp file timestamps to SOURCE_DATE_EPOCH for reproducibility
+        BUILD_CMD=(docker buildx build
+            --file "$dockerfile"
+            --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH"
+            --build-arg VERSION="$VERSION"
+            --platform "$PLATFORM"
+            --output "type=oci,dest=${OCI_TAR},rewrite-timestamp=true"
+            --no-cache)
+        if [[ -n "$target" ]]; then
+            BUILD_CMD+=(--target "$target")
+        fi
+
+        if ! SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" "${BUILD_CMD[@]}" \
             . 2>&1 | tee "$WORK_DIR/${image}-build.log"; then
             log_error "  Build failed for $image"
             REPRODUCE_ERRORS=$((REPRODUCE_ERRORS + 1))
