@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.10] - 2026-02-06
+
 ### Fixed
 
 - **User Creation Shadow File Reproducibility**: Fixed reproducible builds broken by `useradd` setting the "last password change" field in `/etc/shadow` to the current day (days since Unix epoch). When verifying a release on a different day than CI built it, layer 7 (useradd) would have different digests. Now, if `SOURCE_DATE_EPOCH` is set, we calculate days from that epoch and fix the shadow entry to match.
@@ -832,7 +834,8 @@ Releases prior to these changes (including 0.13.5, 0.13.6, and 0.13.7) cannot be
 - Pre-built image support for directory server compose.
 - Tor configuration instructions.
 
-[Unreleased]: ../../compare/0.13.9...HEAD
+[Unreleased]: ../../compare/0.13.10...HEAD
+[0.13.10]: ../../compare/0.13.9...0.13.10
 [0.13.9]: ../../compare/0.13.8...0.13.9
 [0.13.8]: ../../compare/0.13.7...0.13.8
 [0.13.7]: ../../compare/0.13.6...0.13.7
