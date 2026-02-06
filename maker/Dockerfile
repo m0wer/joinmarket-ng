@@ -73,8 +73,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/log/dpkg.log /var/log/apt/* \
     && rm -rf /var/cache/ldconfig/aux-cache
 
-# Create non-root user first
-RUN useradd -m -u 1000 jm
+# Reproducible builds: SOURCE_DATE_EPOCH for consistent timestamps
+ARG SOURCE_DATE_EPOCH
+
+# Create non-root user with reproducible shadow entry
+# useradd sets "last password change" to current day, breaking reproducibility
+# We fix it by calculating days since epoch from SOURCE_DATE_EPOCH
+RUN useradd -m -u 1000 jm && \
+    if [ -n "$SOURCE_DATE_EPOCH" ]; then \
+        DAYS_SINCE_EPOCH=$((SOURCE_DATE_EPOCH / 86400)) && \
+        sed -i "s/^jm:!:[0-9]*:/jm:!:${DAYS_SINCE_EPOCH}:/" /etc/shadow; \
+    fi
 
 # Copy Python packages from builder and set ownership
 COPY --from=builder --chown=jm:jm /root/.local /home/jm/.local

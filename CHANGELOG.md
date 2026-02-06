@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **User Creation Shadow File Reproducibility**: Fixed reproducible builds broken by `useradd` setting the "last password change" field in `/etc/shadow` to the current day (days since Unix epoch). When verifying a release on a different day than CI built it, layer 7 (useradd) would have different digests. Now, if `SOURCE_DATE_EPOCH` is set, we calculate days from that epoch and fix the shadow entry to match.
+
+- **Source File Timestamp Normalization**: Fixed reproducible builds for orderbook-watcher by normalizing source file timestamps to `SOURCE_DATE_EPOCH` in the builder stage. BuildKit's `rewrite-timestamp=true` only modifies the OCI tar output, not layer content hashes. Layer digests are computed before rewriting, so files must have identical timestamps during the build. Without normalization, local files (with old modification times) differ from CI (fresh git clone with recent times).
+
 ## [0.13.9] - 2026-02-05
 
 ### Fixed
@@ -826,7 +832,17 @@ Releases prior to these changes (including 0.13.5, 0.13.6, and 0.13.7) cannot be
 - Pre-built image support for directory server compose.
 - Tor configuration instructions.
 
-[Unreleased]: ../../compare/0.9.0...HEAD
+[Unreleased]: ../../compare/0.13.9...HEAD
+[0.13.9]: ../../compare/0.13.8...0.13.9
+[0.13.8]: ../../compare/0.13.7...0.13.8
+[0.13.7]: ../../compare/0.13.6...0.13.7
+[0.13.6]: ../../compare/0.13.5...0.13.6
+[0.13.5]: ../../compare/0.13.4...0.13.5
+[0.13.4]: ../../compare/0.13.3...0.13.4
+[0.13.3]: ../../compare/0.13.2...0.13.3
+[0.13.2]: ../../compare/0.13.1...0.13.2
+[0.13.1]: ../../compare/0.13.0...0.13.1
+[0.13.0]: ../../compare/0.11.6...0.13.0
 [0.11.6]: ../../compare/0.11.5...0.11.6
 [0.11.5]: ../../compare/0.11.4...0.11.5
 [0.11.4]: ../../compare/0.11.3...0.11.4

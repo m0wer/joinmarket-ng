@@ -40,12 +40,19 @@ COPY orderbook_watcher/requirements.txt /build/orderbook_watcher/
 RUN if [ -n "$SOURCE_DATE_EPOCH" ]; then export SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH; fi && \
     pip install --no-cache-dir --user -r /build/orderbook_watcher/requirements.txt
 
-# Copy source and static files, normalize permissions for reproducibility
+# Copy source and static files, normalize permissions and timestamps for reproducibility
 # This runs as root in builder, ensuring consistent 644/755 permissions regardless of source
+# Timestamps are normalized to SOURCE_DATE_EPOCH because:
+# - BuildKit's rewrite-timestamp only modifies the OCI tar output, not layer content hashes
+# - Layer digests are computed BEFORE rewriting, so files must have identical timestamps
+# - Without this, local files (old mtime) differ from CI (fresh git clone mtime)
 COPY orderbook_watcher/src /build/orderbook_watcher/src
 COPY orderbook_watcher/static /build/orderbook_watcher/static
 RUN find /build/orderbook_watcher/src /build/orderbook_watcher/static -type f -exec chmod 644 {} + && \
-    find /build/orderbook_watcher/src /build/orderbook_watcher/static -type d -exec chmod 755 {} +
+    find /build/orderbook_watcher/src /build/orderbook_watcher/static -type d -exec chmod 755 {} + && \
+    if [ -n "$SOURCE_DATE_EPOCH" ]; then \
+        find /build/orderbook_watcher/src /build/orderbook_watcher/static -exec touch -d @${SOURCE_DATE_EPOCH} {} +; \
+    fi
 
 # =============================================================================
 # Production stage: Minimal runtime image
@@ -62,8 +69,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/log/dpkg.log /var/log/apt/* \
     && rm -rf /var/cache/ldconfig/aux-cache
 
-# Create non-root user first
-RUN useradd -m -u 1000 jm
+# Reproducible builds: SOURCE_DATE_EPOCH for consistent timestamps
+ARG SOURCE_DATE_EPOCH
+
+# Create non-root user with reproducible shadow entry
+# useradd sets "last password change" to current day, breaking reproducibility
+# We fix it by calculating days since epoch from SOURCE_DATE_EPOCH
+RUN useradd -m -u 1000 jm && \
+    if [ -n "$SOURCE_DATE_EPOCH" ]; then \
+        DAYS_SINCE_EPOCH=$((SOURCE_DATE_EPOCH / 86400)) && \
+        sed -i "s/^jm:!:[0-9]*:/jm:!:${DAYS_SINCE_EPOCH}:/" /etc/shadow; \
+    fi
 
 # Copy Python packages from builder and set ownership
 COPY --from=builder --chown=jm:jm /root/.local /home/jm/.local
