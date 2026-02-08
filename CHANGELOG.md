@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.11] - 2026-02-08
+
 ### Fixed
 
 - **Pin Apt Package Versions for Reproducible Builds**: All apt packages in Dockerfiles are now pinned to exact versions (e.g., `libsodium23=1.0.18-1+deb13u1`). Previously, `apt-get install` without version pins meant that a security update to any package (like libsodium23) between CI build time and local verification would produce a different layer digest, breaking `verify-release.sh --reproduce` within days of release.
@@ -844,7 +846,8 @@ Releases prior to these changes (including 0.13.5, 0.13.6, and 0.13.7) cannot be
 - Pre-built image support for directory server compose.
 - Tor configuration instructions.
 
-[Unreleased]: ../../compare/0.13.10...HEAD
+[Unreleased]: ../../compare/0.13.11...HEAD
+[0.13.11]: ../../compare/0.13.10...0.13.11
 [0.13.10]: ../../compare/0.13.9...0.13.10
 [0.13.9]: ../../compare/0.13.8...0.13.9
 [0.13.8]: ../../compare/0.13.7...0.13.8

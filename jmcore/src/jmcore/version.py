@@ -9,7 +9,7 @@ from __future__ import annotations
 
 # The project version - update this when releasing
 # Format: MAJOR.MINOR.PATCH (Semantic Versioning)
-__version__ = "0.13.10"
+__version__ = "0.13.11"
 
 # Alias for convenience
 VERSION = __version__
