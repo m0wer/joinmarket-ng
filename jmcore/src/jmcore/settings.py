@@ -257,7 +257,14 @@ class NotificationSettings(BaseModel):
     notify_mempool: bool = Field(default=True, description="Notify on mempool detection")
     notify_confirmed: bool = Field(default=True, description="Notify on confirmation")
     notify_nick_change: bool = Field(default=True, description="Notify on nick change")
-    notify_disconnect: bool = Field(default=True, description="Notify on directory disconnect")
+    notify_disconnect: bool = Field(
+        default=False,
+        description="Notify on individual directory server disconnect/reconnect (noisy)",
+    )
+    notify_all_disconnect: bool = Field(
+        default=True,
+        description="Notify when ALL directory servers are disconnected (critical)",
+    )
     notify_coinjoin_start: bool = Field(default=True, description="Notify on CoinJoin start")
     notify_coinjoin_complete: bool = Field(default=True, description="Notify on CoinJoin complete")
     notify_coinjoin_failed: bool = Field(default=True, description="Notify on CoinJoin failure")

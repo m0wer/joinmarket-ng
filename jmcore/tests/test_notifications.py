@@ -37,6 +37,8 @@ class TestNotificationConfig:
         assert config.notify_fill is True
         assert config.notify_rejection is True
         assert config.notify_peer_events is False  # Disabled by default
+        assert config.notify_disconnect is False  # Disabled by default (noisy)
+        assert config.notify_all_disconnect is True  # Enabled by default (critical)
 
     def test_config_from_dict(self) -> None:
         """Test creating config from dict."""
@@ -309,6 +311,82 @@ class TestNotifier:
         notifier = Notifier(config)
 
         result = await notifier.notify_peer_connected("alice", "onion", 10)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_notify_directory_disconnect_disabled_by_default(self) -> None:
+        """Test that individual directory disconnect is disabled by default."""
+        config = NotificationConfig(enabled=True, urls=["test://"])
+        notifier = Notifier(config)
+
+        assert config.notify_disconnect is False
+
+        result = await notifier.notify_directory_disconnect("server1", 1, 3, reconnecting=True)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_notify_directory_disconnect_enabled(self) -> None:
+        """Test that individual directory disconnect sends when enabled."""
+        config = NotificationConfig(enabled=True, urls=["test://"], notify_disconnect=True)
+        notifier = Notifier(config)
+
+        # Mock _send to avoid needing apprise
+        notifier._send = AsyncMock(return_value=True)
+
+        result = await notifier.notify_directory_disconnect("server1", 1, 3, reconnecting=True)
+
+        assert result is True
+        notifier._send.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_notify_directory_reconnect_disabled_by_default(self) -> None:
+        """Test that directory reconnect notification is disabled by default."""
+        config = NotificationConfig(enabled=True, urls=["test://"])
+        notifier = Notifier(config)
+
+        result = await notifier.notify_directory_reconnect("server1", 2, 3)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_notify_directory_reconnect_enabled(self) -> None:
+        """Test that directory reconnect sends when notify_disconnect is enabled."""
+        config = NotificationConfig(enabled=True, urls=["test://"], notify_disconnect=True)
+        notifier = Notifier(config)
+
+        notifier._send = AsyncMock(return_value=True)
+
+        result = await notifier.notify_directory_reconnect("server1", 2, 3)
+
+        assert result is True
+        notifier._send.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_notify_all_directories_disconnected_enabled_by_default(self) -> None:
+        """Test that all-directories-disconnected is enabled by default."""
+        config = NotificationConfig(enabled=True, urls=["test://"])
+        notifier = Notifier(config)
+
+        assert config.notify_all_disconnect is True
+
+        notifier._send = AsyncMock(return_value=True)
+
+        result = await notifier.notify_all_directories_disconnected()
+
+        assert result is True
+        notifier._send.assert_called_once()
+        call_args = notifier._send.call_args
+        assert "CRITICAL" in call_args[1]["title"] or "CRITICAL" in call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_notify_all_directories_disconnected_disabled(self) -> None:
+        """Test that all-directories-disconnected respects toggle."""
+        config = NotificationConfig(enabled=True, urls=["test://"], notify_all_disconnect=False)
+        notifier = Notifier(config)
+
+        result = await notifier.notify_all_directories_disconnected()
 
         assert result is False
 
@@ -735,6 +813,8 @@ class TestConvertSettingsToNotificationConfig:
                 notify_signing=False,
                 notify_coinjoin_start=True,
                 notify_peer_events=True,
+                notify_disconnect=True,
+                notify_all_disconnect=False,
             )
         )
 
@@ -744,6 +824,8 @@ class TestConvertSettingsToNotificationConfig:
         assert config.notify_signing is False
         assert config.notify_coinjoin_start is True
         assert config.notify_peer_events is True
+        assert config.notify_disconnect is True
+        assert config.notify_all_disconnect is False
 
     def test_convert_enabled_with_urls(self) -> None:
         """Test that having URLs automatically enables notifications."""

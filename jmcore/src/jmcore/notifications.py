@@ -118,7 +118,14 @@ class NotificationConfig(BaseModel):
     notify_mempool: bool = Field(default=True, description="Notify on mempool detection")
     notify_confirmed: bool = Field(default=True, description="Notify on confirmation")
     notify_nick_change: bool = Field(default=True, description="Notify on nick change")
-    notify_disconnect: bool = Field(default=True, description="Notify on directory disconnect")
+    notify_disconnect: bool = Field(
+        default=False,
+        description="Notify on individual directory server disconnect/reconnect (noisy)",
+    )
+    notify_all_disconnect: bool = Field(
+        default=True,
+        description="Notify when ALL directory servers are disconnected (critical)",
+    )
     notify_coinjoin_start: bool = Field(default=True, description="Notify on CoinJoin start")
     notify_coinjoin_complete: bool = Field(default=True, description="Notify on CoinJoin complete")
     notify_coinjoin_failed: bool = Field(default=True, description="Notify on CoinJoin failure")
@@ -203,6 +210,7 @@ def convert_settings_to_notification_config(
         notify_confirmed=ns.notify_confirmed,
         notify_nick_change=ns.notify_nick_change,
         notify_disconnect=ns.notify_disconnect,
+        notify_all_disconnect=ns.notify_all_disconnect,
         notify_coinjoin_start=ns.notify_coinjoin_start,
         notify_coinjoin_complete=ns.notify_coinjoin_complete,
         notify_coinjoin_failed=ns.notify_coinjoin_failed,
@@ -546,6 +554,9 @@ class Notifier:
 
     async def notify_all_directories_disconnected(self) -> bool:
         """Notify when disconnected from ALL directory servers (critical)."""
+        if not self.config.notify_all_disconnect:
+            return False
+
         return await self._send(
             title="CRITICAL: All Directories Disconnected",
             body=(
