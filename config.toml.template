@@ -133,7 +133,8 @@
 # notify_mempool = true
 # notify_confirmed = true
 # notify_nick_change = true
-# notify_disconnect = true
+# notify_disconnect = false  # Individual directory disconnect/reconnect (noisy)
+# notify_all_disconnect = true  # All directories disconnected (critical)
 # notify_coinjoin_start = true
 # notify_coinjoin_complete = true
 # notify_coinjoin_failed = true
