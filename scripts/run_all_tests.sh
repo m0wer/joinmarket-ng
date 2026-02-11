@@ -23,18 +23,6 @@ log_info() {
     echo -e "${BLUE}[INFO]${NC} $*"
 }
 
-log_info "Working directory: $PROJECT_ROOT"
-
-# Test results tracking
-FAILED_TESTS=()
-FAILED_TEST_DETAILS=()
-COVERAGE_FILES=()
-TEMP_TEST_OUTPUT="/tmp/jm_test_suite_$$.log"
-
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $*"
-}
-
 log_success() {
     echo -e "${GREEN}[SUCCESS]${NC} $*"
 }
@@ -46,6 +34,20 @@ log_warning() {
 log_error() {
     echo -e "${RED}[ERROR]${NC} $*"
 }
+
+log_info "Working directory: $PROJECT_ROOT"
+
+# Test results tracking
+FAILED_TESTS=()
+FAILED_TEST_DETAILS=()
+COVERAGE_FILES=()
+TEMP_TEST_OUTPUT="/tmp/jm_test_suite_$$.log"
+
+# Environment variables matching CI setup
+export BITCOIN_RPC_URL="http://127.0.0.1:18443"
+export BITCOIN_RPC_USER="test"
+export BITCOIN_RPC_PASSWORD="test"
+export JM_ORDERBOOK_WAIT_TIME="10.0"
 
 # Complete cleanup function
 cleanup_all() {
@@ -93,22 +95,115 @@ wait_for_service() {
     return 1
 }
 
-# Wait for Bitcoin RPC
+# Wait for Bitcoin RPC on the specified container and port
 wait_for_bitcoin() {
-    local rpc_port=${1:-18443}
-    log_info "Waiting for Bitcoin RPC on port $rpc_port..."
+    local container=${1:-bitcoin}
+    local rpc_port=${2:-18443}
+    log_info "Waiting for Bitcoin RPC ($container:$rpc_port)..."
+
+    for i in {1..60}; do
+        if docker compose exec -T "$container" bitcoin-cli -chain=regtest \
+            -rpcport="$rpc_port" -rpcuser=test -rpcpassword=test getblockchaininfo >/dev/null 2>&1; then
+            log_success "Bitcoin RPC ready ($container:$rpc_port)"
+            return 0
+        fi
+        echo "  Attempt $i/60: $container not ready..."
+        sleep 2
+    done
+
+    log_error "Bitcoin RPC timeout ($container:$rpc_port)"
+    return 1
+}
+
+# Wait for directory server on port 5222
+wait_for_directory_server() {
+    log_info "Waiting for directory server..."
 
     for i in {1..30}; do
-        if docker compose exec -T bitcoin bitcoin-cli -chain=regtest \
-            -rpcport="$rpc_port" -rpcuser=test -rpcpassword=test getblockchaininfo >/dev/null 2>&1; then
-            log_success "Bitcoin RPC ready"
+        if nc -z localhost 5222 2>/dev/null; then
+            log_success "Directory server ready"
             return 0
         fi
         sleep 2
     done
 
-    log_error "Bitcoin RPC timeout"
+    log_error "Directory server timeout"
     return 1
+}
+
+# Wait for Tor hidden service to generate .onion address
+wait_for_tor_hidden_service() {
+    log_info "Waiting for Tor hidden service..."
+
+    for i in {1..90}; do
+        if docker compose exec -T tor cat /var/lib/tor/directory/hostname 2>/dev/null | grep -q ".onion"; then
+            local onion
+            onion=$(docker compose exec -T tor cat /var/lib/tor/directory/hostname 2>/dev/null | tr -d '[:space:]')
+            log_success "Tor ready with onion address: $onion"
+            return 0
+        fi
+        echo "  Attempt $i/90: Waiting for Tor..."
+        sleep 2
+    done
+
+    log_error "Tor hidden service timeout"
+    return 1
+}
+
+# Wait for JAM web interface
+wait_for_jam() {
+    log_info "Waiting for JAM..."
+
+    for i in {1..30}; do
+        if docker compose exec -T jam sh -c "timeout 5 bash -c '</dev/tcp/127.0.0.1/80'" 2>/dev/null; then
+            log_success "JAM ready"
+            return 0
+        fi
+        sleep 5
+    done
+
+    log_error "JAM timeout"
+    return 1
+}
+
+# Wait for JAM maker containers to be ready
+wait_for_jam_makers() {
+    log_info "Waiting for JAM makers..."
+
+    for i in {1..30}; do
+        if docker compose exec -T jam-maker1 sh -c "timeout 5 bash -c '</dev/tcp/127.0.0.1/80'" 2>/dev/null; then
+            log_success "JAM maker1 ready"
+            break
+        fi
+        sleep 5
+    done
+
+    log_info "Waiting for reference makers to connect..."
+    sleep 30
+
+    log_success "JAM makers ready"
+}
+
+# Wait for wallet-funder container to complete
+# Note: -a is required because wallet-funder exits after completion,
+# and `docker compose ps` without -a hides exited containers.
+wait_for_wallet_funder() {
+    log_info "Waiting for wallet-funder to complete..."
+
+    for i in {1..60}; do
+        local status
+        status=$(docker compose ps -a wallet-funder --format '{{.Status}}' 2>/dev/null || echo "")
+        if echo "$status" | grep -qi "exited\|completed"; then
+            log_success "Wallet funder completed"
+            return 0
+        fi
+        echo "  Attempt $i/60: wallet-funder status: $status"
+        sleep 5
+    done
+
+    # Fall back to a fixed wait if the container status check fails
+    log_warning "Could not confirm wallet-funder completion, waiting 30s as fallback..."
+    sleep 30
 }
 
 # Wait for Neutrino sync
@@ -208,14 +303,17 @@ main() {
     log_info "Starting e2e profile..."
     docker compose --profile e2e up -d --build
 
-    wait_for_bitcoin 18443
-    log_info "Waiting for wallet funding (30s)..."
-    sleep 30
-    restart_makers
+    wait_for_bitcoin bitcoin 18443
+    wait_for_directory_server
+    wait_for_wallet_funder
+
+    log_info "Waiting for makers to connect..."
+    sleep 20
 
     # Run e2e tests from tests/ directory
     COVERAGE_FILE=.coverage.e2e run_test_suite "E2E Tests" \
         -lv -m e2e \
+        --timeout=300 --reruns=1 --reruns-delay=10 \
         --cov=jmcore --cov=jmwallet --cov=directory_server \
         --cov=orderbook_watcher --cov=maker --cov=taker \
         --cov-report=term-missing \
@@ -227,6 +325,7 @@ main() {
     # Run from project root to ensure conftest.py is loaded
     COVERAGE_FILE=.coverage.docker run_test_suite "Docker Integration Tests" \
         -lv -m "docker and not e2e and not reference and not neutrino and not reference_maker" \
+        --timeout=300 \
         --cov=jmcore --cov=jmwallet --cov=directory_server \
         --cov=orderbook_watcher --cov=maker --cov=taker \
         --cov-report=term-missing \
@@ -261,21 +360,16 @@ main() {
     docker compose --profile reference up -d --build
 
     # Wait for reference-specific services
-    log_info "Waiting for Tor to generate hidden service..."
-    for i in {1..60}; do
-        if docker compose exec -T tor cat /var/lib/tor/directory/hostname 2>/dev/null | grep -q ".onion"; then
-            log_success "Tor hidden service ready"
-            break
-        fi
-        sleep 2
-    done
+    wait_for_tor_hidden_service
+    wait_for_jam
 
-    log_info "Waiting for JAM to start (60s)..."
-    sleep 60
+    log_info "Waiting for makers to connect..."
+    sleep 30
     restart_makers
 
     COVERAGE_FILE=.coverage.reference run_test_suite "Reference Tests" \
         -lv -m reference \
+        --timeout=300 --reruns=1 --reruns-delay=10 \
         --cov=jmcore --cov=jmwallet --cov=directory_server \
         --cov=orderbook_watcher --cov=maker --cov=taker \
         --cov-report=term-missing \
@@ -297,15 +391,28 @@ main() {
     # ========================================================================
     log_info "=== Phase 4: Reference Maker Tests ==="
 
-    log_info "Stopping our makers and starting JAM makers..."
-    docker compose stop maker1 maker2
-    docker compose --profile reference-maker up -d
+    # Full teardown of previous profiles - reference-maker uses its own bitcoin (bitcoin-jam).
+    # Include --profile reference-maker in the teardown so volumes shared between
+    # reference and reference-maker (jam-maker1-data, jam-maker2-data) can be removed
+    # cleanly without "Resource is still in use" warnings.
+    log_info "Tearing down previous profiles for clean reference-maker start..."
+    docker compose --profile e2e --profile reference --profile reference-maker down -v
 
-    log_info "Waiting for JAM makers to start (60s)..."
-    sleep 60
+    log_info "Starting reference-maker profile..."
+    docker compose --profile reference-maker up -d --build
 
-    COVERAGE_FILE=.coverage.reference_maker run_test_suite "Reference Maker Tests" \
+    # Wait for reference-maker specific services (uses bitcoin-jam on port 18445)
+    wait_for_bitcoin bitcoin-jam 18445
+    wait_for_directory_server
+    wait_for_tor_hidden_service
+    wait_for_jam_makers
+
+    # Override RPC URL for this phase - reference-maker uses bitcoin-jam on port 18445
+    COVERAGE_FILE=.coverage.reference_maker \
+    BITCOIN_RPC_URL="http://127.0.0.1:18445" \
+    run_test_suite "Reference Maker Tests" \
         -lv -m reference_maker \
+        --timeout=300 --reruns=1 --reruns-delay=10 \
         --cov=taker \
         --cov-report=term-missing \
         --cov-report=html:htmlcov/reference_maker \
@@ -326,21 +433,21 @@ main() {
     # ========================================================================
     log_info "=== Phase 5: Neutrino Backend Tests ==="
 
-    log_info "Stopping e2e and reference profiles..."
+    log_info "Stopping previous profiles..."
     docker compose --profile e2e --profile reference --profile reference-maker down -v
 
     log_info "Starting neutrino profile..."
     docker compose --profile neutrino up -d --build
 
-    wait_for_bitcoin 18443
+    wait_for_bitcoin bitcoin 18443
+    wait_for_directory_server
     wait_for_neutrino
+    wait_for_wallet_funder
 
-    log_info "Waiting for wallet funding (30s)..."
-    sleep 30
-
-    # Run basic neutrino tests
+    # Run basic neutrino tests (exclude coinjoin tests which need e2e makers)
     COVERAGE_FILE=.coverage.neutrino run_test_suite "Neutrino Basic Tests" \
         -lv -m "neutrino and not slow" \
+        --timeout=300 --reruns=1 --reruns-delay=10 \
         --cov=jmcore --cov=jmwallet --cov=maker \
         --cov-report=term-missing \
         --cov-report=html:htmlcov/neutrino \
@@ -357,11 +464,15 @@ main() {
     # For neutrino coinjoin tests, also start e2e makers
     log_info "Starting e2e makers for neutrino coinjoin tests..."
     docker compose --profile e2e up -d
-    sleep 10
+    wait_for_wallet_funder
+
+    log_info "Waiting for makers to connect..."
+    sleep 20
     restart_makers
 
     COVERAGE_FILE=.coverage.neutrino_slow run_test_suite "Neutrino CoinJoin Tests" \
         -lv -m 'neutrino and slow' \
+        --timeout=300 --reruns=1 --reruns-delay=10 \
         --cov=jmcore --cov=jmwallet --cov=maker --cov=taker \
         --cov-report=term-missing \
         --cov-report=html:htmlcov/neutrino_slow \
