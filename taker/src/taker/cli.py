@@ -535,6 +535,7 @@ async def _run_coinjoin(
         backend=backend,
         network=bitcoin_network.value,
         mixdepth_count=config.mixdepth_count,
+        data_dir=config.data_dir,
     )
 
     # Create confirmation callback
@@ -827,6 +828,7 @@ async def _run_tumble(
         backend=backend,
         network=bitcoin_network.value,
         mixdepth_count=config.mixdepth_count,
+        data_dir=config.data_dir,
     )
 
     # Create taker

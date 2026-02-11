@@ -141,3 +141,24 @@ class TestBuildTakerConfig:
 
         assert config.fee_rate is None
         assert config.fee_block_target == 10  # From taker.fee_block_target, not wallet default
+
+    def test_data_dir_flows_to_config(self, sample_mnemonic: str, mock_settings: MagicMock) -> None:
+        """Verify data_dir from settings flows into TakerConfig.
+
+        Regression test: taker was creating WalletService without data_dir,
+        which meant metadata_store was None and frozen UTXOs were ignored.
+        """
+        from pathlib import Path
+
+        mock_settings.get_data_dir.return_value = Path("/tmp/jm-test-data")
+
+        config = build_taker_config(
+            settings=mock_settings,
+            mnemonic=sample_mnemonic,
+            passphrase="",
+            destination="bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+            amount=100000,
+            mixdepth=0,
+        )
+
+        assert config.data_dir == Path("/tmp/jm-test-data")

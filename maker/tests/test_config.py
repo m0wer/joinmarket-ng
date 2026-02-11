@@ -384,3 +384,57 @@ class TestBuildMakerConfig:
         )
         assert config.offer_type == OfferType.SW0_RELATIVE
         assert config.cj_fee_relative == settings.maker.cj_fee_relative
+
+
+class TestCreateWalletService:
+    """Tests for create_wallet_service function.
+
+    No mocking needed: BitcoinCoreBackend.__init__ only stores params and creates
+    httpx clients (no network calls), and WalletService.__init__ only derives keys.
+    """
+
+    def test_data_dir_passed_to_wallet_service(self, tmp_path: Path) -> None:
+        """Verify create_wallet_service passes data_dir so metadata_store is initialized.
+
+        Regression test: maker was creating WalletService without data_dir,
+        which meant metadata_store was None and frozen UTXOs were ignored.
+        """
+        from maker.cli import create_wallet_service
+
+        config = MakerConfig(
+            mnemonic=TEST_MNEMONIC,
+            cj_fee_relative="0.001",
+            data_dir=tmp_path,
+            backend_type="scantxoutset",
+            backend_config={
+                "rpc_url": "http://127.0.0.1:18443",
+                "rpc_user": "test",
+                "rpc_password": "test",
+            },
+        )
+
+        wallet = create_wallet_service(config)
+
+        assert wallet.data_dir == tmp_path
+        assert wallet.metadata_store is not None
+
+    def test_data_dir_none_still_works(self) -> None:
+        """Verify create_wallet_service works when data_dir is None (no metadata)."""
+        from maker.cli import create_wallet_service
+
+        config = MakerConfig(
+            mnemonic=TEST_MNEMONIC,
+            cj_fee_relative="0.001",
+            data_dir=None,
+            backend_type="scantxoutset",
+            backend_config={
+                "rpc_url": "http://127.0.0.1:18443",
+                "rpc_user": "test",
+                "rpc_password": "test",
+            },
+        )
+
+        wallet = create_wallet_service(config)
+
+        assert wallet.data_dir is None
+        assert wallet.metadata_store is None

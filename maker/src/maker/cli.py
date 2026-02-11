@@ -380,6 +380,7 @@ def create_wallet_service(config: MakerConfig) -> WalletService:
         mixdepth_count=config.mixdepth_count,
         gap_limit=config.gap_limit,
         passphrase=config.passphrase.get_secret_value(),
+        data_dir=config.data_dir,
     )
     return wallet
 
