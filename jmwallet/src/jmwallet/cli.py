@@ -1426,9 +1426,20 @@ async def _list_fidelity_bonds(
         backend=backend,
         network=network,
         mixdepth_count=5,
-        gap_limit=gap_limit,
         passphrase=bip39_passphrase,
+        data_dir=data_dir,
     )
+
+    # Verify metadata store is writable before syncing (fail fast on read-only mounts)
+    if wallet.metadata_store is not None:
+        try:
+            wallet.metadata_store.verify_writable()
+        except OSError as e:
+            logger.error(f"Cannot run freeze command: {e}")
+            raise typer.Exit(1)
+    else:
+        logger.error("Cannot freeze UTXOs without a data directory")
+        raise typer.Exit(1)
 
     try:
         # Load known bonds from registry for optimized scanning
@@ -2029,6 +2040,22 @@ async def _send_transaction(
                 logger.info(f"Selected {len(utxos)} UTXOs")
             except RuntimeError as e:
                 logger.error(f"Cannot use interactive UTXO selection: {e}")
+                raise typer.Exit(1)
+        else:
+            # Auto-selection: filter out frozen and fidelity bond UTXOs
+            # (frozen UTXOs must never be auto-spent; fidelity bonds must be
+            # explicitly selected via interactive mode)
+            spendable = [u for u in utxos if not u.frozen and not u.is_fidelity_bond]
+            frozen_count = len(utxos) - len(spendable)
+            if frozen_count > 0:
+                logger.info(
+                    f"Excluding {frozen_count} frozen/fidelity-bond UTXO(s) from auto-selection"
+                )
+            utxos = spendable
+            if not utxos:
+                logger.error(
+                    "No spendable UTXOs available (all UTXOs are frozen or fidelity bonds)"
+                )
                 raise typer.Exit(1)
 
         # Calculate totals based on selected UTXOs
@@ -2720,6 +2747,8 @@ def _run_freeze_tui(
 
     cursor_pos = 0
     scroll_offset = 0
+    error_message: str | None = None
+    error_display_until: float = 0.0
 
     while True:
         stdscr.clear()
@@ -2806,6 +2835,19 @@ def _run_freeze_tui(
 
         stdscr.addstr(height - 3, 0, "-" * min(width - 1, 80))
 
+        # Show error message if any (displayed for 3 seconds)
+        import time
+
+        if error_message and time.monotonic() < error_display_until:
+            try:
+                stdscr.addstr(
+                    height - 4, 0, f" ERROR: {error_message}"[: width - 1], curses.color_pair(3)
+                )
+            except curses.error:
+                pass
+        else:
+            error_message = None
+
         footer1 = (
             f" Frozen: {frozen_count}/{len(utxos)} UTXOs | "
             f"Frozen value: {format_amount(total_frozen_value)} | "
@@ -2831,7 +2873,11 @@ def _run_freeze_tui(
 
         elif key == ord(" ") or key == ord("\t"):  # Space or Tab: toggle
             utxo = utxos[cursor_pos]
-            wallet.toggle_freeze_utxo(utxo.outpoint)
+            try:
+                wallet.toggle_freeze_utxo(utxo.outpoint)
+            except OSError as e:
+                error_message = f"Failed to persist freeze state: {e}"
+                error_display_until = time.monotonic() + 5.0
             # Move cursor down after toggle
             if cursor_pos < len(utxos) - 1:
                 cursor_pos += 1
@@ -2855,14 +2901,22 @@ def _run_freeze_tui(
             cursor_pos = len(utxos) - 1
 
         elif key == ord("a"):  # Freeze all
-            for utxo in utxos:
-                if not utxo.frozen:
-                    wallet.toggle_freeze_utxo(utxo.outpoint)
+            try:
+                for utxo in utxos:
+                    if not utxo.frozen:
+                        wallet.toggle_freeze_utxo(utxo.outpoint)
+            except OSError as e:
+                error_message = f"Failed to persist freeze state: {e}"
+                error_display_until = time.monotonic() + 5.0
 
         elif key == ord("n"):  # Unfreeze all
-            for utxo in utxos:
-                if utxo.frozen:
-                    wallet.toggle_freeze_utxo(utxo.outpoint)
+            try:
+                for utxo in utxos:
+                    if utxo.frozen:
+                        wallet.toggle_freeze_utxo(utxo.outpoint)
+            except OSError as e:
+                error_message = f"Failed to persist freeze state: {e}"
+                error_display_until = time.monotonic() + 5.0
 
 
 # ============================================================================

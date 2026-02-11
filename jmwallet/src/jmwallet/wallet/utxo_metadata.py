@@ -19,6 +19,7 @@ Reference: https://github.com/bitcoin/bips/blob/master/bip-0329.mediawiki
 from __future__ import annotations
 
 import json
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -136,6 +137,9 @@ class UTXOMetadataStore:
 
         Writes the entire file atomically (write to temp, then rename)
         to prevent corruption on crash.
+
+        Raises:
+            OSError: If the file cannot be written (e.g., read-only filesystem).
         """
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -152,6 +156,7 @@ class UTXOMetadataStore:
                     logger.debug("Removed empty wallet metadata file")
                 except OSError as e:
                     logger.warning(f"Failed to remove empty metadata file: {e}")
+                    raise
             return
 
         # Sort by ref for deterministic output
@@ -169,6 +174,7 @@ class UTXOMetadataStore:
                 tmp_path.unlink(missing_ok=True)
             except OSError:
                 pass
+            raise
 
     def is_frozen(self, outpoint: str) -> bool:
         """Check if an outpoint is frozen.
@@ -275,6 +281,29 @@ class UTXOMetadataStore:
         """
         record = self.records.get(outpoint)
         return record.label if record else None
+
+    def verify_writable(self) -> None:
+        """Verify that the metadata file's directory is writable.
+
+        Attempts to create and immediately remove a temporary file in the
+        same directory as the metadata file. This catches read-only mounts
+        and permission issues early, before a real save attempt.
+
+        Raises:
+            OSError: If the directory is not writable.
+        """
+        parent = self.path.parent
+        parent.mkdir(parents=True, exist_ok=True)
+        # Try creating a temp file in the target directory
+        try:
+            fd = tempfile.NamedTemporaryFile(dir=parent, prefix=".jm_write_test_", delete=True)
+            fd.close()
+        except OSError as e:
+            raise OSError(
+                f"Data directory is not writable: {parent}. "
+                f"Cannot persist UTXO metadata (frozen state, labels). "
+                f"Check mount permissions. Original error: {e}"
+            ) from e
 
 
 def load_metadata_store(data_dir: Path) -> UTXOMetadataStore:

@@ -455,3 +455,123 @@ class TestBIP329Compliance:
         outpoint = "ab" * 32 + ":0"
         assert store.is_frozen(outpoint)
         assert store.get_label(outpoint) == "My UTXO"
+
+
+# ---------------------------------------------------------------------------
+# Error handling and writability tests
+# ---------------------------------------------------------------------------
+
+
+class TestSaveErrorPropagation:
+    """Tests that save() failures propagate to callers."""
+
+    @pytest.fixture
+    def readonly_store(self, tmp_path):
+        """Create a store in a directory that will be made read-only."""
+        path = tmp_path / "metadata.jsonl"
+        store = UTXOMetadataStore(path=path)
+        return store
+
+    @pytest.fixture
+    def outpoint(self):
+        return "aa" * 32 + ":0"
+
+    def test_save_raises_on_readonly_directory(self, tmp_path, outpoint):
+        """save() raises OSError when directory is read-only."""
+        path = tmp_path / "metadata.jsonl"
+        store = UTXOMetadataStore(path=path)
+        # Make directory read-only
+        tmp_path.chmod(0o555)
+        try:
+            with pytest.raises(OSError):
+                store.freeze(outpoint)
+        finally:
+            # Restore permissions for cleanup
+            tmp_path.chmod(0o755)
+
+    def test_freeze_propagates_save_error(self, tmp_path, outpoint):
+        """freeze() propagates OSError from save()."""
+        path = tmp_path / "metadata.jsonl"
+        store = UTXOMetadataStore(path=path)
+        tmp_path.chmod(0o555)
+        try:
+            with pytest.raises(OSError):
+                store.freeze(outpoint)
+            # In-memory state may have changed, but disk is unchanged
+        finally:
+            tmp_path.chmod(0o755)
+
+    def test_unfreeze_propagates_save_error(self, tmp_path, outpoint):
+        """unfreeze() propagates OSError from save()."""
+        path = tmp_path / "metadata.jsonl"
+        store = UTXOMetadataStore(path=path)
+        # First, freeze successfully
+        store.freeze(outpoint)
+        assert store.is_frozen(outpoint)
+        # Now make read-only
+        tmp_path.chmod(0o555)
+        try:
+            with pytest.raises(OSError):
+                store.unfreeze(outpoint)
+        finally:
+            tmp_path.chmod(0o755)
+
+    def test_toggle_freeze_propagates_save_error(self, tmp_path, outpoint):
+        """toggle_freeze() propagates OSError from save()."""
+        path = tmp_path / "metadata.jsonl"
+        store = UTXOMetadataStore(path=path)
+        tmp_path.chmod(0o555)
+        try:
+            with pytest.raises(OSError):
+                store.toggle_freeze(outpoint)
+        finally:
+            tmp_path.chmod(0o755)
+
+    def test_set_label_propagates_save_error(self, tmp_path, outpoint):
+        """set_label() propagates OSError from save()."""
+        path = tmp_path / "metadata.jsonl"
+        store = UTXOMetadataStore(path=path)
+        tmp_path.chmod(0o555)
+        try:
+            with pytest.raises(OSError):
+                store.set_label(outpoint, "test label")
+        finally:
+            tmp_path.chmod(0o755)
+
+
+class TestVerifyWritable:
+    """Tests for verify_writable() method."""
+
+    def test_writable_directory_passes(self, tmp_path):
+        """verify_writable() succeeds on a writable directory."""
+        store = UTXOMetadataStore(path=tmp_path / "metadata.jsonl")
+        store.verify_writable()  # Should not raise
+
+    def test_readonly_directory_raises(self, tmp_path):
+        """verify_writable() raises OSError on read-only directory."""
+        store = UTXOMetadataStore(path=tmp_path / "metadata.jsonl")
+        tmp_path.chmod(0o555)
+        try:
+            with pytest.raises(OSError, match="not writable"):
+                store.verify_writable()
+        finally:
+            tmp_path.chmod(0o755)
+
+    def test_creates_parent_dirs(self, tmp_path):
+        """verify_writable() creates parent directories if needed."""
+        deep_path = tmp_path / "a" / "b" / "metadata.jsonl"
+        store = UTXOMetadataStore(path=deep_path)
+        store.verify_writable()
+        assert deep_path.parent.exists()
+
+    def test_nonexistent_parent_readonly(self, tmp_path):
+        """verify_writable() raises when parent can't be created."""
+        # Make tmp_path read-only so mkdir fails
+        tmp_path.chmod(0o555)
+        deep_path = tmp_path / "newdir" / "metadata.jsonl"
+        store = UTXOMetadataStore(path=deep_path)
+        try:
+            with pytest.raises(OSError):
+                store.verify_writable()
+        finally:
+            tmp_path.chmod(0o755)

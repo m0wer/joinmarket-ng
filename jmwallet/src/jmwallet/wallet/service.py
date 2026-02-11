@@ -1880,13 +1880,17 @@ class WalletService:
 
         Called after sync operations to mark UTXOs that are frozen according
         to the persisted metadata. Also applies labels from metadata.
+
+        Re-reads the metadata file from disk on each call to pick up changes
+        made by other processes (e.g., ``jm-wallet freeze`` while maker is running).
         """
         if self.metadata_store is None:
             return
 
+        # Re-read from disk to pick up changes from other processes
+        self.metadata_store.load()
+
         frozen_outpoints = self.metadata_store.get_frozen_outpoints()
-        if not frozen_outpoints and not self.metadata_store.records:
-            return
 
         frozen_count = 0
         for utxos in self.utxo_cache.values():

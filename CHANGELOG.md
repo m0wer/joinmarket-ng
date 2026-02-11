@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Automatic exclusion**: Frozen UTXOs are excluded from `select_utxos()`, `get_all_utxos()`, `select_utxos_with_merge()`, and `get_balance()`. Makers won't advertise frozen funds, and takers won't use them.
   - **Visible in wallet info**: `jm-wallet info` shows frozen amounts per mixdepth in simple view and `[FROZEN]` tags on addresses in extended view.
   - **UTXO selector integration**: The interactive UTXO selector (`--select-utxos`) now shows frozen indicators and prevents selecting frozen UTXOs via "select all".
+  - **Comprehensive e2e test suite**: 36 end-to-end tests covering freeze/unfreeze persistence, balance exclusion, UTXO selection exclusion across maker/taker/send paths, BIP-329 persistence and hot-reload, Sparrow interop, read-only filesystem handling, and realistic usage scenarios.
 
 ### Changed
 

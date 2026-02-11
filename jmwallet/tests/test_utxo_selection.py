@@ -670,3 +670,136 @@ class TestFrozenUTXOWithFidelityBonds:
         assert selected[0].value == 50_000
         assert not selected[0].frozen
         assert not selected[0].is_fidelity_bond
+
+
+# ---------------------------------------------------------------------------
+# Hot-reload of metadata store tests
+# ---------------------------------------------------------------------------
+
+
+class TestApplyFrozenStateHotReload:
+    """Tests that _apply_frozen_state() re-reads metadata from disk."""
+
+    def test_apply_picks_up_external_changes(self, test_mnemonic: str, mock_backend, tmp_path):
+        """_apply_frozen_state() sees changes written by another process."""
+        from jmwallet.wallet.utxo_metadata import UTXOMetadataStore
+
+        metadata_path = tmp_path / "wallet_metadata.jsonl"
+
+        # Create wallet with metadata store
+        ws = WalletService(
+            mnemonic=test_mnemonic,
+            backend=mock_backend,
+            network="regtest",
+            mixdepth_count=5,
+            gap_limit=20,
+        )
+        ws.metadata_store = UTXOMetadataStore(path=metadata_path)
+        ws.metadata_store.load()
+
+        outpoint_a = "a" * 64 + ":0"
+
+        # Pre-populate UTXO cache
+        ws.utxo_cache = {
+            0: [
+                UTXOInfo(
+                    txid="a" * 64,
+                    vout=0,
+                    value=100_000,
+                    address="bcrt1test1",
+                    confirmations=10,
+                    scriptpubkey="0014" + "aa" * 20,
+                    path="m/84'/0'/0'/0/0",
+                    mixdepth=0,
+                ),
+            ],
+        }
+
+        # Simulate external process writing to the metadata file
+        external_store = UTXOMetadataStore(path=metadata_path)
+        external_store.freeze(outpoint_a)
+
+        # Verify the UTXO is not yet frozen in our wallet's cache
+        assert not ws.utxo_cache[0][0].frozen
+
+        # Apply frozen state -- should re-read from disk
+        ws._apply_frozen_state()
+
+        # Now the UTXO should be frozen
+        assert ws.utxo_cache[0][0].frozen
+
+    def test_apply_clears_stale_frozen_state(self, test_mnemonic: str, mock_backend, tmp_path):
+        """_apply_frozen_state() clears frozen state when metadata file changes."""
+        from jmwallet.wallet.utxo_metadata import UTXOMetadataStore
+
+        metadata_path = tmp_path / "wallet_metadata.jsonl"
+
+        ws = WalletService(
+            mnemonic=test_mnemonic,
+            backend=mock_backend,
+            network="regtest",
+            mixdepth_count=5,
+            gap_limit=20,
+        )
+        ws.metadata_store = UTXOMetadataStore(path=metadata_path)
+
+        outpoint_a = "a" * 64 + ":0"
+
+        ws.utxo_cache = {
+            0: [
+                UTXOInfo(
+                    txid="a" * 64,
+                    vout=0,
+                    value=100_000,
+                    address="bcrt1test1",
+                    confirmations=10,
+                    scriptpubkey="0014" + "aa" * 20,
+                    path="m/84'/0'/0'/0/0",
+                    mixdepth=0,
+                    frozen=True,  # Currently frozen in cache
+                ),
+            ],
+        }
+
+        # Freeze it in the metadata store first
+        ws.metadata_store.freeze(outpoint_a)
+        ws._apply_frozen_state()
+        assert ws.utxo_cache[0][0].frozen
+
+        # Now simulate external process unfreezing it
+        external_store = UTXOMetadataStore(path=metadata_path)
+        external_store.load()
+        external_store.unfreeze(outpoint_a)
+
+        # Apply again -- should re-read and clear the frozen state
+        ws._apply_frozen_state()
+        assert not ws.utxo_cache[0][0].frozen
+
+    def test_apply_no_metadata_store_is_noop(self, test_mnemonic: str, mock_backend):
+        """_apply_frozen_state() is a no-op when metadata_store is None."""
+        ws = WalletService(
+            mnemonic=test_mnemonic,
+            backend=mock_backend,
+            network="regtest",
+            mixdepth_count=5,
+            gap_limit=20,
+        )
+        ws.metadata_store = None
+        ws.utxo_cache = {
+            0: [
+                UTXOInfo(
+                    txid="a" * 64,
+                    vout=0,
+                    value=100_000,
+                    address="bcrt1test1",
+                    confirmations=10,
+                    scriptpubkey="0014" + "aa" * 20,
+                    path="m/84'/0'/0'/0/0",
+                    mixdepth=0,
+                ),
+            ],
+        }
+
+        # Should not raise
+        ws._apply_frozen_state()
+        assert not ws.utxo_cache[0][0].frozen
