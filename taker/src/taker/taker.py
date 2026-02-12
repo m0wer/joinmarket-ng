@@ -2210,19 +2210,21 @@ class Taker:
             # Update the "Awaiting transaction" history entry with txid and mining fee
             # The entry was created before sending !tx to preserve address privacy
             try:
-                mining_fee = self.tx_metadata.get("fee", 0)
-
+                # Use actual_mining_fee (total_inputs - total_outputs) computed from the
+                # signed transaction, NOT tx_metadata["fee"] which is just the estimated
+                # fee used during transaction construction. The actual fee includes any
+                # residual from sweep rounding and reflects the real cost to the taker.
                 updated = update_taker_awaiting_transaction_broadcast(
                     destination_address=self.cj_destination,
                     change_address=self.taker_change_address,  # Empty string if no change
                     txid=self.txid,
-                    mining_fee=mining_fee,
+                    mining_fee=actual_mining_fee,
                     data_dir=self.config.data_dir,
                 )
                 if updated:
                     logger.debug(
                         f"Updated history entry for CJ txid {self.txid[:16]}..., "
-                        f"mining_fee={mining_fee} sats"
+                        f"mining_fee={actual_mining_fee} sats"
                     )
                 else:
                     logger.warning(

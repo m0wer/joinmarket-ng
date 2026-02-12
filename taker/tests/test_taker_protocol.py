@@ -1474,3 +1474,125 @@ class TestUpdatePendingTransactionNow:
         assert len(history) == 1
         assert history[0].success is True
         assert history[0].confirmations == 1
+
+
+class TestHistoryMiningFeeRecording:
+    """Regression tests for correct mining fee recording in taker history.
+
+    The taker must record actual_mining_fee (total_inputs - total_outputs) from the
+    signed transaction, NOT tx_metadata["fee"] which is just the estimated fee used
+    during transaction construction. These values differ in sweep mode (residual goes
+    to miners) and can differ in normal mode (signature size variance).
+    """
+
+    @pytest.fixture
+    def temp_data_dir(self, tmp_path):
+        """Create a temporary data directory."""
+        return tmp_path
+
+    def test_sweep_actual_mining_fee_exceeds_estimate(self, temp_data_dir) -> None:
+        """Verify that actual mining fee (not estimated) is recorded for sweeps.
+
+        In sweep mode, the taker has no change output. The equation is:
+          taker_input = cj_amount + maker_fees + estimated_tx_fee + residual
+        where residual goes to miners. The actual_mining_fee = estimated_tx_fee + residual.
+
+        Previously, tx_metadata["fee"] (= estimated_tx_fee only) was used, causing
+        the recorded mining fee to be too low and net_fee to only reflect maker fees.
+        """
+        from jmwallet.history import (
+            append_history_entry,
+            create_taker_history_entry,
+            read_history,
+            update_taker_awaiting_transaction_broadcast,
+        )
+
+        maker_fees = 6
+        # Simulate: taker_input=94478, cj_amount=94157, actual_mining_fee=315
+        # The estimated tx_fee might have been different (e.g., 300), but the actual
+        # mining fee from the signed transaction is 315 (includes residual).
+        actual_mining_fee = 315
+
+        # Phase 1: Create the initial "Awaiting transaction" entry (mining_fee=0)
+        entry = create_taker_history_entry(
+            maker_nicks=["J5maker1", "J5maker2", "J5maker3"],
+            cj_amount=94_157,
+            total_maker_fees=maker_fees,
+            mining_fee=0,  # Unknown before broadcast
+            destination="bcrt1qsweepdest123456",
+            change_address="",  # Sweep: no change output
+            source_mixdepth=0,
+            selected_utxos=[("a" * 64, 0)],
+            txid="",
+            failure_reason="Awaiting transaction",
+        )
+        append_history_entry(entry, data_dir=temp_data_dir)
+
+        # Verify initial state: net_fee only reflects maker fees (bug behavior)
+        history = read_history(data_dir=temp_data_dir)
+        assert history[0].mining_fee_paid == 0
+        assert history[0].net_fee == -(maker_fees + 0)  # -6, missing mining fee
+
+        # Phase 2: Update with ACTUAL mining fee after broadcast
+        # This is what taker.py now does: passes actual_mining_fee, not tx_metadata["fee"]
+        updated = update_taker_awaiting_transaction_broadcast(
+            destination_address="bcrt1qsweepdest123456",
+            change_address="",
+            txid="7d374988a00caf0c41d02fdd925c1a65023cf5676ecc3cedbcbfb6fa42999511",
+            mining_fee=actual_mining_fee,
+            data_dir=temp_data_dir,
+        )
+        assert updated is True
+
+        # Verify: mining fee and net_fee correctly reflect the full cost
+        history = read_history(data_dir=temp_data_dir)
+        assert len(history) == 1
+        assert history[0].mining_fee_paid == 315
+        assert history[0].net_fee == -(maker_fees + actual_mining_fee)  # -(6 + 315) = -321
+        assert history[0].total_maker_fees_paid == maker_fees
+
+    def test_normal_mode_mining_fee_recorded(self, temp_data_dir) -> None:
+        """Verify mining fee is correctly recorded in normal (non-sweep) mode.
+
+        In normal mode, the taker has a change output that absorbs the difference
+        between the estimated and actual fee. The actual_mining_fee from
+        total_inputs - total_outputs should match what's recorded.
+        """
+        from jmwallet.history import (
+            append_history_entry,
+            create_taker_history_entry,
+            read_history,
+            update_taker_awaiting_transaction_broadcast,
+        )
+
+        maker_fees = 500
+        actual_mining_fee = 750
+
+        # Create pending entry
+        entry = create_taker_history_entry(
+            maker_nicks=["J5maker1", "J5maker2"],
+            cj_amount=1_000_000,
+            total_maker_fees=maker_fees,
+            mining_fee=0,
+            destination="bcrt1qnormaldest12345",
+            change_address="bcrt1qnormalchange123",
+            source_mixdepth=0,
+            selected_utxos=[("b" * 64, 0), ("c" * 64, 1)],
+            txid="",
+            failure_reason="Awaiting transaction",
+        )
+        append_history_entry(entry, data_dir=temp_data_dir)
+
+        # Update with actual mining fee
+        updated = update_taker_awaiting_transaction_broadcast(
+            destination_address="bcrt1qnormaldest12345",
+            change_address="bcrt1qnormalchange123",
+            txid="d" * 64,
+            mining_fee=actual_mining_fee,
+            data_dir=temp_data_dir,
+        )
+        assert updated is True
+
+        history = read_history(data_dir=temp_data_dir)
+        assert history[0].mining_fee_paid == actual_mining_fee
+        assert history[0].net_fee == -(maker_fees + actual_mining_fee)  # -(500 + 750) = -1250
