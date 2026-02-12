@@ -32,6 +32,7 @@ from maker.coinjoin import CoinJoinSession
 from maker.config import MakerConfig
 from maker.fidelity import FidelityBondInfo, create_fidelity_bond_proof
 from maker.offers import OfferManager
+from maker.protocols import MakerBotProtocol
 from maker.rate_limiting import DirectConnectionRateLimiter, OrderbookRateLimiter
 
 if TYPE_CHECKING:
@@ -63,15 +64,9 @@ class ProtocolHandlersMixin:
     _direct_connection_rate_limiter: DirectConnectionRateLimiter
     _own_wallet_nicks: set[str]
 
-    # -- Methods provided by MakerBot --
-    def _get_session_lock(self, taker_nick: str) -> asyncio.Lock:  # type: ignore[empty-body]
-        ...
-    def _cleanup_session_lock(self, taker_nick: str) -> None: ...
-
-    # -- Methods provided by BackgroundTasksMixin --
-    async def _deferred_wallet_resync(self) -> None: ...
-
-    async def _handle_message(self, message: dict[str, Any], source: str = "unknown") -> None:
+    async def _handle_message(
+        self: MakerBotProtocol, message: dict[str, Any], source: str = "unknown"
+    ) -> None:
         """
         Handle incoming message from directory or direct connection.
 
@@ -171,7 +166,7 @@ class ProtocolHandlersMixin:
         except Exception as e:
             logger.error(f"Failed to handle message: {e}")
 
-    async def _handle_pubmsg(self, line: str, source: str = "unknown") -> None:
+    async def _handle_pubmsg(self: MakerBotProtocol, line: str, source: str = "unknown") -> None:
         """
         Handle public message (e.g., !orderbook request).
 
@@ -346,7 +341,7 @@ class ProtocolHandlersMixin:
         except Exception as e:
             logger.error(f"Failed to send offers to {taker_nick} via direct connection: {e}")
 
-    async def _handle_privmsg(self, line: str, source: str = "unknown") -> None:
+    async def _handle_privmsg(self: MakerBotProtocol, line: str, source: str = "unknown") -> None:
         """
         Handle private message (CoinJoin protocol).
 
@@ -478,7 +473,9 @@ class ProtocolHandlersMixin:
         except Exception as e:
             logger.error(f"Failed to handle !fill: {e}")
 
-    async def _handle_auth(self, taker_nick: str, msg: str, source: str = "unknown") -> None:
+    async def _handle_auth(
+        self: MakerBotProtocol, taker_nick: str, msg: str, source: str = "unknown"
+    ) -> None:
         """Handle !auth request from taker.
 
         The auth message is ENCRYPTED using NaCl.
@@ -639,7 +636,9 @@ class ProtocolHandlersMixin:
             except Exception as e:
                 logger.error(f"Failed to handle !auth: {e}")
 
-    async def _handle_tx(self, taker_nick: str, msg: str, source: str = "unknown") -> None:
+    async def _handle_tx(
+        self: MakerBotProtocol, taker_nick: str, msg: str, source: str = "unknown"
+    ) -> None:
         """Handle !tx request from taker.
 
         The tx message is ENCRYPTED using NaCl.

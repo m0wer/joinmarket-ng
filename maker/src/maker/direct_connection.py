@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
 
 from jmcore.directory_client import DirectoryClient
 from jmcore.models import Offer
@@ -26,6 +25,7 @@ from jmwallet.backends.base import BlockchainBackend
 from loguru import logger
 
 from maker.config import MakerConfig
+from maker.protocols import MakerBotProtocol
 from maker.rate_limiting import DirectConnectionRateLimiter
 
 
@@ -45,19 +45,6 @@ class DirectConnectionMixin:
     directory_clients: dict[str, DirectoryClient]
     direct_connections: dict[str, TCPConnection]
     _direct_connection_rate_limiter: DirectConnectionRateLimiter
-
-    # -- Methods provided by MakerBot --
-    def _log_rate_limited(self, key: str, message: str, interval_sec: float = 10.0) -> None: ...
-
-    # -- Methods provided by ProtocolHandlersMixin --
-    async def _handle_message(self, message: dict[str, Any], source: str = "unknown") -> None: ...
-    async def _handle_fill(self, taker_nick: str, msg: str, source: str = "unknown") -> None: ...
-    async def _handle_auth(self, taker_nick: str, msg: str, source: str = "unknown") -> None: ...
-    async def _handle_tx(self, taker_nick: str, msg: str, source: str = "unknown") -> None: ...
-    async def _handle_push(self, taker_nick: str, msg: str, source: str = "unknown") -> None: ...
-    async def _send_offers_via_direct_connection(
-        self, taker_nick: str, connection: TCPConnection
-    ) -> None: ...
 
     def _parse_direct_message(self, data: bytes) -> tuple[str, str, str] | None:
         """Parse a direct connection message supporting both formats.
@@ -251,7 +238,9 @@ class DirectConnectionMixin:
 
         return True
 
-    async def _on_direct_connection(self, connection: TCPConnection, peer_str: str) -> None:
+    async def _on_direct_connection(
+        self: MakerBotProtocol, connection: TCPConnection, peer_str: str
+    ) -> None:
         """Handle incoming direct connection from a taker via hidden service.
 
         Direct connections support three message formats:

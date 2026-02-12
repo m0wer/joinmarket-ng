@@ -8,7 +8,6 @@ directory reconnection, and pending transaction monitoring.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 from jmcore.crypto import NickIdentity
 from jmcore.directory_client import DirectoryClient, DirectoryClientError
@@ -19,6 +18,7 @@ from jmwallet.backends.base import BlockchainBackend
 from loguru import logger
 
 from maker.config import MakerConfig
+from maker.protocols import MakerBotProtocol
 from maker.rate_limiting import DirectConnectionRateLimiter, OrderbookRateLimiter
 
 
@@ -43,17 +43,7 @@ class BackgroundTasksMixin:
     _direct_connection_rate_limiter: DirectConnectionRateLimiter
     _directory_reconnect_attempts: dict[str, int]
 
-    # -- Methods provided by MakerBot --
-    def _cleanup_timed_out_sessions(self) -> None: ...
-    async def _resync_wallet_and_update_offers(self) -> None: ...
-    def _format_offer_announcement(  # type: ignore[empty-body]
-        self, offer: Offer, include_bond: bool = False
-    ) -> str: ...
-
-    # -- Methods provided by ProtocolHandlersMixin --
-    async def _handle_message(self, message: dict[str, Any], source: str = "unknown") -> None: ...
-
-    async def _periodic_rescan(self) -> None:
+    async def _periodic_rescan(self: MakerBotProtocol) -> None:
         """Background task to periodically rescan wallet and update offers.
 
         This runs every `rescan_interval_sec` (default: 10 minutes) to:
@@ -251,7 +241,7 @@ class BackgroundTasksMixin:
             logger.debug(f"Failed to connect to {dir_server}: {e}")
             return None
 
-    async def _periodic_directory_reconnect(self) -> None:
+    async def _periodic_directory_reconnect(self: MakerBotProtocol) -> None:
         """
         Background task to periodically reconnect to failed directory servers.
 
@@ -514,7 +504,7 @@ class BackgroundTasksMixin:
             logger.debug(f"Error discovering txid for {address[:20]}...: {e}")
             return None
 
-    async def _deferred_wallet_resync(self) -> None:
+    async def _deferred_wallet_resync(self: MakerBotProtocol) -> None:
         """Resync wallet in background after a CoinJoin completes."""
         try:
             # Small delay to allow transaction to propagate
@@ -524,7 +514,7 @@ class BackgroundTasksMixin:
         except Exception as e:
             logger.error(f"Error in deferred wallet resync: {e}")
 
-    async def _listen_client(self, node_id: str, client: DirectoryClient) -> None:
+    async def _listen_client(self: MakerBotProtocol, node_id: str, client: DirectoryClient) -> None:
         """Listen for messages from a specific directory client"""
         logger.info(f"Started listening on {node_id}")
 
@@ -540,6 +530,9 @@ class BackgroundTasksMixin:
             try:
                 # Use listen_for_messages with short duration to check running flag frequently
                 messages = await client.listen_for_messages(duration=1.0)
+
+                if messages:
+                    logger.debug(f"Received {len(messages)} messages from {node_id}")
 
                 for message in messages:
                     await self._handle_message(message, source=f"dir:{node_id}")
