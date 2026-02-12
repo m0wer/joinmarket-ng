@@ -190,7 +190,7 @@ class TestDirectoryServerConfig:
 class TestWalletConfigInheritance:
     """Test that config classes can be properly inherited."""
 
-    def test_can_inherit_wallet_config(self):
+    def test_can_inherit_wallet_config(self) -> None:
         """Test that WalletConfig can be inherited (like MakerConfig/TakerConfig do)."""
 
         class CustomConfig(WalletConfig):
@@ -201,7 +201,7 @@ class TestWalletConfigInheritance:
         assert config.network == NetworkType.MAINNET
         assert config.custom_field == "custom"
 
-    def test_inheritance_preserves_validation(self):
+    def test_inheritance_preserves_validation(self) -> None:
         """Test that inherited configs still run parent validation."""
 
         class CustomConfig(WalletConfig):

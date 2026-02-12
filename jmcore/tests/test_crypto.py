@@ -5,6 +5,7 @@ Tests for jmcore.crypto
 import base64
 import hashlib
 import struct
+from typing import Any
 
 from coincurve import PrivateKey
 
@@ -355,7 +356,7 @@ def test_verify_fidelity_bond_proof_reference_vectors():
         return bytes.fromhex(s)
 
     # Test vector 1: nicksig len = 71, certsig len = 71
-    fidelity_bond_proof_1 = {
+    fidelity_bond_proof_1: dict[str, Any] = {
         "nick-signature": (
             b"0E\x02!\x00\xdbb\x15\x96\xa0\x87\xb8\x1d\xe05\xddV\xa1\x1bn\x8f"
             + b'q\x90&\x8cG@\x89"2\xb2\x81\x9b\xc00\xa5\xb6\x02 \x03\x14l\xd7BR\xba\x8c:\x88('
@@ -408,7 +409,7 @@ def test_verify_fidelity_bond_proof_reference_vector_2():
     def hextobin(s: str) -> bytes:
         return bytes.fromhex(s)
 
-    fidelity_bond_proof = {
+    fidelity_bond_proof: dict[str, Any] = {
         "nick-signature": (
             b"0E\x02!\x00\x80\xc6$\x0c\xa1\x15YS\xacHB\xb33\xfa~\x9f\xb9`\xb3"
             + b"\xfe\xed0\xadHq\xc1~\x03.B\xbb#\x02 #y~]\xd9\xbbX2\xc0\x1b\xe57\xf4\x0f\x1f"
@@ -456,7 +457,7 @@ def test_verify_fidelity_bond_proof_reference_vector_3():
     def hextobin(s: str) -> bytes:
         return bytes.fromhex(s)
 
-    fidelity_bond_proof = {
+    fidelity_bond_proof: dict[str, Any] = {
         "nick-signature": (
             b"0D\x02 K)\xe9\x17d\x0b\xc0\x82(\xd1\xa2*l\xd8\x0eJ\xc7\x01NV\xbf"
             + b'\xcb\x02O]\xc0\x11\x01\x01B"\xed\x02 ob\xa1\xf8>\x80U)\xc8\x96\x86\x1b \x0e'
@@ -505,7 +506,7 @@ def test_verify_fidelity_bond_proof_invalid_nick_sig():
         return bytes.fromhex(s)
 
     # Invalid nick signature (starts with 'Z' instead of 0x30)
-    fidelity_bond_proof = {
+    fidelity_bond_proof: dict[str, Any] = {
         "nick-signature": (
             b"ZD\x02 K)\xe9\x17d\x0b\xc0\x82(\xd1\xa2*l\xd8\x0eJ\xc7\x01NV\xbf"
             + b'\xcb\x02O]\xc0\x11\x01\x01B"\xed\x02 ob\xa1\xf8>\x80U)\xc8\x96\x86\x1b \x0e'

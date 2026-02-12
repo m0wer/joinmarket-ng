@@ -363,7 +363,7 @@ class TestChunkedPeerlist:
     """Tests for chunked peerlist sending."""
 
     @pytest.mark.anyio
-    async def test_send_peerlist_chunks_large_list(self, registry):
+    async def test_send_peerlist_chunks_large_list(self, registry: PeerRegistry) -> None:
         """Should send peerlist in chunks for large peer lists."""
         sent_messages: list[tuple[str, bytes]] = []
 
@@ -427,7 +427,7 @@ class TestChunkedPeerlist:
         assert total_peers >= 50
 
     @pytest.mark.anyio
-    async def test_send_peerlist_single_chunk_for_small_list(self, registry):
+    async def test_send_peerlist_single_chunk_for_small_list(self, registry: PeerRegistry) -> None:
         """Should send single chunk for small peer lists."""
         sent_messages: list[tuple[str, bytes]] = []
 
@@ -467,7 +467,7 @@ class TestChunkedPeerlist:
         assert len(sent_messages) == 1
 
     @pytest.mark.anyio
-    async def test_send_peerlist_empty_registry(self, registry):
+    async def test_send_peerlist_empty_registry(self, registry: PeerRegistry) -> None:
         """Should send empty peerlist response when registry is empty."""
         sent_messages: list[tuple[str, bytes]] = []
 

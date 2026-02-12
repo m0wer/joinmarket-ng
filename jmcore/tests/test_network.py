@@ -87,7 +87,7 @@ async def test_connection_pool_close_all():
 
 
 @pytest.mark.asyncio
-async def test_tcp_connection_concurrent_receive():
+async def test_tcp_connection_concurrent_receive() -> None:
     """Test that concurrent receive calls are serialized by the receive lock.
 
     This test reproduces the bug:

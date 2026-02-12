@@ -2,6 +2,8 @@
 Tests for jmcore.models
 """
 
+from typing import Any
+
 import pytest
 
 from jmcore.models import (
@@ -108,7 +110,7 @@ def test_message_envelope_nesting_depth_limit():
     import json
 
     # Create deeply nested JSON (15 levels)
-    nested = {"a": {}}
+    nested: dict[str, Any] = {"a": {}}
     current = nested["a"]
     for _ in range(14):
         current["b"] = {}

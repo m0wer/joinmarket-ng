@@ -25,4 +25,4 @@ repos:
     hooks:
       - id: mypy
         additional_dependencies: [pydantic>=2.5.0, pydantic-settings>=2.1.0]
-        args: [--no-strict-optional, --ignore-missing-imports, --explicit-package-bases]
+        args: [--no-strict-optional, --ignore-missing-imports, --explicit-package-bases, --check-untyped-defs]

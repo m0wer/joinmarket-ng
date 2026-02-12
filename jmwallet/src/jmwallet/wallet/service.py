@@ -1074,13 +1074,16 @@ class WalletService:
                     # Check if this P2WSH address is a known fidelity bond from the registry
                     # This handles external bonds that may have been imported but not matched above
                     if hasattr(self, "fidelity_bond_locktime_cache"):
-                        locktime = self.fidelity_bond_locktime_cache.get(address)
-                        if locktime is not None:
+                        cached_locktime = self.fidelity_bond_locktime_cache.get(address)
+                        if cached_locktime is not None:
                             # This is a known fidelity bond from the registry
                             # Get index from address_cache (should have been set during import)
                             cached = self.address_cache.get(address)
                             index = cached[2] if cached else -1
-                            path = f"{self.root_path}/0'/{FIDELITY_BOND_BRANCH}/{index}:{locktime}"
+                            path = (
+                                f"{self.root_path}/0'/{FIDELITY_BOND_BRANCH}"
+                                f"/{index}:{cached_locktime}"
+                            )
                             self.addresses_with_history.add(address)
                             utxo_info = UTXOInfo(
                                 txid=utxo.txid,
@@ -1092,12 +1095,12 @@ class WalletService:
                                 path=path,
                                 mixdepth=0,
                                 height=utxo.height,
-                                locktime=locktime,
+                                locktime=cached_locktime,
                             )
                             fidelity_bond_utxos.append(utxo_info)
                             logger.debug(
                                 f"Recognized P2WSH as fidelity bond from registry: "
-                                f"{address[:20]}... locktime={locktime}"
+                                f"{address[:20]}... locktime={cached_locktime}"
                             )
                             continue
                     # Unknown P2WSH - silently skip (fidelity bonds we don't know about)
@@ -1113,12 +1116,12 @@ class WalletService:
             # the UTXO wasn't matched in bond_address_to_info (e.g., external bonds)
             if change == FIDELITY_BOND_BRANCH:
                 # Get locktime from cache
-                locktime = None
+                bond_locktime: int | None = None
                 if hasattr(self, "fidelity_bond_locktime_cache"):
-                    locktime = self.fidelity_bond_locktime_cache.get(address)
+                    bond_locktime = self.fidelity_bond_locktime_cache.get(address)
 
-                if locktime is not None:
-                    path = f"{self.root_path}/0'/{FIDELITY_BOND_BRANCH}/{index}:{locktime}"
+                if bond_locktime is not None:
+                    path = f"{self.root_path}/0'/{FIDELITY_BOND_BRANCH}/{index}:{bond_locktime}"
                     self.addresses_with_history.add(address)
                     utxo_info = UTXOInfo(
                         txid=utxo.txid,
@@ -1130,12 +1133,12 @@ class WalletService:
                         path=path,
                         mixdepth=0,
                         height=utxo.height,
-                        locktime=locktime,
+                        locktime=bond_locktime,
                     )
                     fidelity_bond_utxos.append(utxo_info)
                     logger.debug(
                         f"Recognized fidelity bond from cache: "
-                        f"{address[:20]}... locktime={locktime} index={index}"
+                        f"{address[:20]}... locktime={bond_locktime} index={index}"
                     )
                     continue
                 else:

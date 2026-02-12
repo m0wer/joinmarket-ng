@@ -23,7 +23,7 @@ from directory_server.server import DirectoryServer
 
 
 class MemoryTracker:
-    def __init__(self):
+    def __init__(self) -> None:
         self.process = psutil.Process()
         self.start_memory = 0
         self.peak_memory = 0

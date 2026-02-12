@@ -694,9 +694,19 @@ async def test_execute_reference_coinjoin(funded_jam_wallet):
     except subprocess.TimeoutExpired as e:
         logger.error("CoinJoin timed out!")
         if e.stdout:
-            logger.info(f"sendpayment stdout (partial):\n{e.stdout}")
+            stdout = (
+                e.stdout.decode(errors="replace")
+                if isinstance(e.stdout, bytes)
+                else e.stdout
+            )
+            logger.info(f"sendpayment stdout (partial):\n{stdout}")
         if e.stderr:
-            logger.error(f"sendpayment stderr (partial):\n{e.stderr}")
+            stderr = (
+                e.stderr.decode(errors="replace")
+                if isinstance(e.stderr, bytes)
+                else e.stderr
+            )
+            logger.error(f"sendpayment stderr (partial):\n{stderr}")
         raise
 
     logger.info(f"sendpayment stdout:\n{result.stdout}")
