@@ -271,6 +271,19 @@ class NotificationSettings(BaseModel):
     notify_peer_events: bool = Field(default=False, description="Notify on peer connect/disconnect")
     notify_rate_limit: bool = Field(default=True, description="Notify on rate limit bans")
     notify_startup: bool = Field(default=True, description="Notify on component startup")
+    notify_summary: bool = Field(
+        default=False,
+        description="Send periodic summary notifications with CoinJoin stats",
+    )
+    summary_interval_hours: int = Field(
+        default=24,
+        ge=1,
+        le=168,
+        description=(
+            "Interval in hours between summary notifications (1-168). "
+            "Common values: 24 (daily), 168 (weekly)"
+        ),
+    )
 
 
 class MakerSettings(BaseModel):

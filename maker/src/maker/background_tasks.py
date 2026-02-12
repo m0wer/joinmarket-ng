@@ -592,3 +592,56 @@ class BackgroundTasksMixin:
                 await asyncio.sleep(backoff)
 
         logger.info(f"Stopped listening on {node_id}")
+
+    async def _periodic_summary(self: MakerBotProtocol) -> None:
+        """Background task to periodically send summary notifications.
+
+        Sends a notification with CoinJoin stats for the configured period
+        (e.g., daily or weekly). Only runs when notify_summary is enabled.
+        """
+        from jmwallet.history import get_history_stats_for_period
+
+        notifier = get_notifier()
+        interval_hours = notifier.config.summary_interval_hours
+        interval_seconds = interval_hours * 3600
+
+        if interval_hours == 24:
+            period_label = "Daily"
+        elif interval_hours == 168:
+            period_label = "Weekly"
+        elif interval_hours == 1:
+            period_label = "Hourly"
+        else:
+            period_label = f"{interval_hours}-Hour"
+
+        logger.info(f"Starting periodic summary task ({period_label}, every {interval_hours}h)...")
+
+        while self.running:
+            try:
+                await asyncio.sleep(interval_seconds)
+
+                if not self.running:
+                    break
+
+                stats = get_history_stats_for_period(
+                    hours=interval_hours,
+                    role_filter="maker",
+                    data_dir=self.config.data_dir,
+                )
+
+                await notifier.notify_summary(
+                    period_label=period_label,
+                    total_requests=int(stats["total_coinjoins"]),
+                    successful=int(stats["successful_coinjoins"]),
+                    failed=int(stats["failed_coinjoins"]),
+                    total_earnings=int(stats["total_fees_earned"]),
+                    total_volume=int(stats["total_volume"]),
+                )
+
+            except asyncio.CancelledError:
+                logger.info("Periodic summary task cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in periodic summary: {e}")
+
+        logger.info("Periodic summary task stopped")

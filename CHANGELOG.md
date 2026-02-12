@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Periodic Summary Notifications**: Makers now receive daily summary notifications with CoinJoin statistics (requests, successes, failures, earnings, volume). Enabled by default with `notify_summary = true` and 24-hour interval. To disable, set `notify_summary = false` in config.toml `[notifications]` section. Configurable interval via `summary_interval_hours` (1-168). Respects existing privacy settings (`include_amounts`). Added `get_history_stats_for_period()` for time-filtered history stats.
+
 ### Fixed
 
 - **Taker History: Zero Mining Fee Recorded**: Fixed a bug where taker transaction history recorded `mining_fee=0` despite the taker paying the full mining fee. The history update after broadcast used `tx_metadata["fee"]` (the estimated fee from transaction construction) instead of `actual_mining_fee` (total inputs minus total outputs from the signed transaction). In sweep mode, these values diverge because the residual from integer rounding goes to miners. This caused the `Net Fee` column in `jm-wallet history` to show only maker fees, understating the taker's total cost.

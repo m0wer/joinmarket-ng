@@ -19,6 +19,7 @@ from jmcore.deduplication import MessageDeduplicator
 from jmcore.directory_client import DirectoryClient
 from jmcore.models import Offer
 from jmcore.network import HiddenServiceListener, TCPConnection
+from jmcore.notifications import get_notifier
 from jmcore.paths import read_nick_state
 from jmcore.protocol import (
     JM_VERSION,
@@ -600,6 +601,12 @@ class MakerBot(BackgroundTasksMixin, ProtocolHandlersMixin, DirectConnectionMixi
             # Start periodic directory reconnection task
             reconnect_task = asyncio.create_task(self._periodic_directory_reconnect())
             self.listen_tasks.append(reconnect_task)
+
+            # Start periodic summary notification task (if enabled)
+            notifier = get_notifier()
+            if notifier.config.notify_summary:
+                summary_task = asyncio.create_task(self._periodic_summary())
+                self.listen_tasks.append(summary_task)
 
             # Wait for all listening tasks to complete
             await asyncio.gather(*self.listen_tasks, return_exceptions=True)

@@ -620,6 +620,145 @@ class TestNotificationPriority:
         assert NotificationPriority.FAILURE.value == "failure"
 
 
+class TestNotifySummary:
+    """Tests for notify_summary method."""
+
+    @pytest.mark.asyncio
+    async def test_summary_enabled_by_default(self) -> None:
+        """Test that summary notification is enabled by default."""
+        config = NotificationConfig(enabled=True, urls=["test://"])
+        notifier = Notifier(config)
+
+        assert config.notify_summary is True
+
+        # Still returns False when called because notifications aren't truly sent in this test
+        # (we'd need to mock _send), but the key is that notify_summary=True by default
+        notifier._send = AsyncMock(return_value=True)
+
+        result = await notifier.notify_summary(
+            period_label="Daily",
+            total_requests=5,
+            successful=4,
+            failed=1,
+            total_earnings=1000,
+            total_volume=5_000_000,
+        )
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_summary_enabled_with_activity(self) -> None:
+        """Test summary notification with CoinJoin activity."""
+        config = NotificationConfig(enabled=True, urls=["test://"], notify_summary=True)
+        notifier = Notifier(config)
+        notifier._send = AsyncMock(return_value=True)
+
+        result = await notifier.notify_summary(
+            period_label="Daily",
+            total_requests=10,
+            successful=8,
+            failed=2,
+            total_earnings=2500,
+            total_volume=10_000_000,
+        )
+
+        assert result is True
+        notifier._send.assert_called_once()
+
+        call_kwargs = notifier._send.call_args
+        title = call_kwargs[1].get("title", call_kwargs[0][0] if call_kwargs[0] else "")
+        body = call_kwargs[1].get("body", call_kwargs[0][1] if len(call_kwargs[0]) > 1 else "")
+        assert "Daily Summary" in title
+        assert "Requests: 10" in body
+        assert "Successful: 8" in body
+        assert "Failed: 2" in body
+        assert "80%" in body
+
+    @pytest.mark.asyncio
+    async def test_summary_zero_activity(self) -> None:
+        """Test summary notification with no activity in the period."""
+        config = NotificationConfig(enabled=True, urls=["test://"], notify_summary=True)
+        notifier = Notifier(config)
+        notifier._send = AsyncMock(return_value=True)
+
+        result = await notifier.notify_summary(
+            period_label="Weekly",
+            total_requests=0,
+            successful=0,
+            failed=0,
+            total_earnings=0,
+            total_volume=0,
+        )
+
+        assert result is True
+        notifier._send.assert_called_once()
+
+        call_kwargs = notifier._send.call_args
+        body = call_kwargs[1].get("body", call_kwargs[0][1] if len(call_kwargs[0]) > 1 else "")
+        assert "No CoinJoin activity" in body
+
+    @pytest.mark.asyncio
+    async def test_summary_amounts_hidden(self) -> None:
+        """Test that summary respects include_amounts toggle."""
+        config = NotificationConfig(
+            enabled=True,
+            urls=["test://"],
+            notify_summary=True,
+            include_amounts=False,
+        )
+        notifier = Notifier(config)
+        notifier._send = AsyncMock(return_value=True)
+
+        await notifier.notify_summary(
+            period_label="Daily",
+            total_requests=5,
+            successful=5,
+            failed=0,
+            total_earnings=1000,
+            total_volume=5_000_000,
+        )
+
+        call_kwargs = notifier._send.call_args
+        body = call_kwargs[1].get("body", call_kwargs[0][1] if len(call_kwargs[0]) > 1 else "")
+        assert "[hidden]" in body
+
+    def test_summary_interval_hours_validation(self) -> None:
+        """Test that summary_interval_hours is validated to 1-168 range."""
+        # Valid values
+        config = NotificationConfig(summary_interval_hours=1)
+        assert config.summary_interval_hours == 1
+        config = NotificationConfig(summary_interval_hours=168)
+        assert config.summary_interval_hours == 168
+
+        # Invalid: too low
+        with pytest.raises(ValueError):
+            NotificationConfig(summary_interval_hours=0)
+
+        # Invalid: too high
+        with pytest.raises(ValueError):
+            NotificationConfig(summary_interval_hours=169)
+
+    @pytest.mark.asyncio
+    async def test_summary_weekly_label(self) -> None:
+        """Test summary with weekly period label."""
+        config = NotificationConfig(enabled=True, urls=["test://"], notify_summary=True)
+        notifier = Notifier(config)
+        notifier._send = AsyncMock(return_value=True)
+
+        await notifier.notify_summary(
+            period_label="Weekly",
+            total_requests=3,
+            successful=3,
+            failed=0,
+            total_earnings=750,
+            total_volume=3_000_000,
+        )
+
+        call_kwargs = notifier._send.call_args
+        title = call_kwargs[1].get("title", call_kwargs[0][0] if call_kwargs[0] else "")
+        assert "Weekly Summary" in title
+
+
 class TestNotificationLogging:
     """Tests for notification logging."""
 
@@ -925,3 +1064,20 @@ class TestConvertSettingsToNotificationConfig:
         config = convert_settings_to_notification_config(settings)
 
         assert config.component_name == ""
+
+    def test_convert_summary_settings(self) -> None:
+        """Test that summary notification settings are converted correctly."""
+        from jmcore.settings import JoinMarketSettings, NotificationSettings
+
+        settings = JoinMarketSettings(
+            notifications=NotificationSettings(
+                urls=["gotify://host/token"],
+                notify_summary=True,
+                summary_interval_hours=168,
+            )
+        )
+
+        config = convert_settings_to_notification_config(settings)
+
+        assert config.notify_summary is True
+        assert config.summary_interval_hours == 168

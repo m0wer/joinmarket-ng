@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import fields
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -203,27 +203,32 @@ def read_history(
     return entries
 
 
-def get_history_stats(data_dir: Path | None = None) -> dict[str, int | float]:
+def _compute_stats(entries: list[TransactionHistoryEntry]) -> dict[str, int | float]:
     """
-    Get aggregate statistics from transaction history.
+    Compute aggregate statistics from a list of history entries.
+
+    Args:
+        entries: List of TransactionHistoryEntry objects to aggregate
 
     Returns:
         Dict with statistics:
         - total_coinjoins: Total number of CoinJoins
         - maker_coinjoins: Number as maker
         - taker_coinjoins: Number as taker
+        - successful_coinjoins: Number of successful CoinJoins
+        - failed_coinjoins: Number of failed CoinJoins
         - total_volume: Total CJ amount in sats
         - total_fees_earned: Total fees earned as maker
         - total_fees_paid: Total fees paid as taker
         - success_rate: Percentage of successful CoinJoins
     """
-    entries = read_history(data_dir)
-
     if not entries:
         return {
             "total_coinjoins": 0,
             "maker_coinjoins": 0,
             "taker_coinjoins": 0,
+            "successful_coinjoins": 0,
+            "failed_coinjoins": 0,
             "total_volume": 0,
             "total_fees_earned": 0,
             "total_fees_paid": 0,
@@ -233,16 +238,70 @@ def get_history_stats(data_dir: Path | None = None) -> dict[str, int | float]:
     maker_entries = [e for e in entries if e.role == "maker"]
     taker_entries = [e for e in entries if e.role == "taker"]
     successful = [e for e in entries if e.success]
+    failed = [e for e in entries if not e.success and e.completed_at]
 
     return {
         "total_coinjoins": len(entries),
         "maker_coinjoins": len(maker_entries),
         "taker_coinjoins": len(taker_entries),
+        "successful_coinjoins": len(successful),
+        "failed_coinjoins": len(failed),
         "total_volume": sum(e.cj_amount for e in entries),
         "total_fees_earned": sum(e.fee_received for e in maker_entries),
         "total_fees_paid": sum(e.total_maker_fees_paid + e.mining_fee_paid for e in taker_entries),
         "success_rate": len(successful) / len(entries) * 100 if entries else 0.0,
     }
+
+
+def get_history_stats(data_dir: Path | None = None) -> dict[str, int | float]:
+    """
+    Get aggregate statistics from transaction history.
+
+    Returns:
+        Dict with statistics (see _compute_stats for full list).
+    """
+    entries = read_history(data_dir)
+    return _compute_stats(entries)
+
+
+def get_history_stats_for_period(
+    hours: float,
+    role_filter: Literal["maker", "taker"] | None = None,
+    data_dir: Path | None = None,
+) -> dict[str, int | float]:
+    """
+    Get aggregate statistics for a specific time period.
+
+    Filters history entries to only include those within the last `hours` hours,
+    then computes the same aggregate statistics as get_history_stats().
+
+    This is used by the periodic summary notification to report daily/weekly stats.
+
+    Args:
+        hours: Number of hours to look back (e.g., 24 for daily, 168 for weekly)
+        role_filter: Optional filter by role ("maker" or "taker")
+        data_dir: Optional data directory
+
+    Returns:
+        Dict with statistics (see _compute_stats for full list).
+    """
+    entries = read_history(data_dir, role_filter=role_filter)
+
+    if not entries:
+        return _compute_stats([])
+
+    cutoff = datetime.now() - timedelta(hours=hours)
+
+    filtered: list[TransactionHistoryEntry] = []
+    for entry in entries:
+        try:
+            entry_time = datetime.fromisoformat(entry.timestamp)
+            if entry_time >= cutoff:
+                filtered.append(entry)
+        except (ValueError, TypeError):
+            continue
+
+    return _compute_stats(filtered)
 
 
 def create_maker_history_entry(

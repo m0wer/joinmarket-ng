@@ -132,6 +132,19 @@ class NotificationConfig(BaseModel):
     notify_peer_events: bool = Field(default=False, description="Notify on peer connect/disconnect")
     notify_rate_limit: bool = Field(default=True, description="Notify on rate limit bans")
     notify_startup: bool = Field(default=True, description="Notify on component startup")
+    notify_summary: bool = Field(
+        default=True,
+        description="Send periodic summary notifications with CoinJoin stats",
+    )
+    summary_interval_hours: int = Field(
+        default=24,
+        ge=1,
+        le=168,
+        description=(
+            "Interval in hours between summary notifications (1-168). "
+            "Common values: 24 (daily), 168 (weekly)"
+        ),
+    )
 
     model_config = {"frozen": False}
 
@@ -217,6 +230,8 @@ def convert_settings_to_notification_config(
         notify_peer_events=ns.notify_peer_events,
         notify_rate_limit=ns.notify_rate_limit,
         notify_startup=ns.notify_startup,
+        notify_summary=ns.notify_summary,
+        summary_interval_hours=ns.summary_interval_hours,
     )
 
 
@@ -406,6 +421,49 @@ class Notifier:
     # =========================================================================
     # Maker notifications
     # =========================================================================
+
+    async def notify_summary(
+        self,
+        period_label: str,
+        total_requests: int,
+        successful: int,
+        failed: int,
+        total_earnings: int,
+        total_volume: int,
+    ) -> bool:
+        """
+        Send a periodic summary notification with CoinJoin statistics.
+
+        Args:
+            period_label: Human-readable period (e.g., "Daily", "Weekly")
+            total_requests: Total CoinJoin requests in the period
+            successful: Number of successful CoinJoins
+            failed: Number of failed CoinJoins
+            total_earnings: Total fees earned in sats
+            total_volume: Total CoinJoin volume in sats
+        """
+        if not self.config.notify_summary:
+            return False
+
+        if total_requests == 0:
+            body = f"Period: {period_label}\nNo CoinJoin activity in this period."
+        else:
+            success_rate = successful / total_requests * 100 if total_requests > 0 else 0.0
+            body = (
+                f"Period: {period_label}\n"
+                f"Requests: {total_requests}\n"
+                f"Successful: {successful}\n"
+                f"Failed: {failed}\n"
+                f"Success rate: {success_rate:.0f}%\n"
+                f"Earnings: {self._format_amount(total_earnings)}\n"
+                f"Volume: {self._format_amount(total_volume)}"
+            )
+
+        return await self._send(
+            title=f"{period_label} Summary",
+            body=body,
+            priority=NotificationPriority.INFO,
+        )
 
     async def notify_fill_request(
         self,

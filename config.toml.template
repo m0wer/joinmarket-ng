@@ -142,6 +142,10 @@
 # notify_rate_limit = true
 # notify_startup = true
 
+# Periodic summary notifications (enabled by default)
+# notify_summary = true  # Send periodic CoinJoin stats summary (set to false to disable)
+# summary_interval_hours = 24  # Interval: 24 (daily), 168 (weekly), or custom (1-168)
+
 # ============================================================================
 # Maker Settings (Yield Generator)
 # ============================================================================

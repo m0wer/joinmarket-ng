@@ -21,6 +21,7 @@ from jmwallet.history import (
     detect_coinjoin_peer_count,
     get_address_history_types,
     get_history_stats,
+    get_history_stats_for_period,
     get_pending_transactions,
     get_used_addresses,
     mark_pending_transaction_failed,
@@ -267,7 +268,165 @@ class TestHistoryStats:
         assert stats["success_rate"] == 100.0
 
 
-class TestHelperFunctions:
+class TestHistoryStatsForPeriod:
+    """Tests for time-filtered aggregate statistics."""
+
+    def test_empty_history(self, temp_data_dir: Path) -> None:
+        """Test stats for period with no history at all."""
+        stats = get_history_stats_for_period(24, data_dir=temp_data_dir)
+        assert stats["total_coinjoins"] == 0
+        assert stats["successful_coinjoins"] == 0
+        assert stats["failed_coinjoins"] == 0
+        assert stats["total_volume"] == 0
+
+    def test_entries_within_period(self, temp_data_dir: Path) -> None:
+        """Test that recent entries are included in the period."""
+        now = datetime.now()
+        recent_ts = (now - timedelta(hours=1)).isoformat()
+
+        entry = TransactionHistoryEntry(
+            timestamp=recent_ts,
+            role="maker",
+            txid="recent_tx" * 8,
+            cj_amount=1_000_000,
+            fee_received=500,
+            success=True,
+        )
+        append_history_entry(entry, temp_data_dir)
+
+        stats = get_history_stats_for_period(24, data_dir=temp_data_dir)
+        assert stats["total_coinjoins"] == 1
+        assert stats["successful_coinjoins"] == 1
+        assert stats["total_volume"] == 1_000_000
+        assert stats["total_fees_earned"] == 500
+
+    def test_entries_outside_period(self, temp_data_dir: Path) -> None:
+        """Test that old entries are excluded from the period."""
+        old_ts = (datetime.now() - timedelta(hours=48)).isoformat()
+
+        entry = TransactionHistoryEntry(
+            timestamp=old_ts,
+            role="maker",
+            txid="old_tx" * 8,
+            cj_amount=1_000_000,
+            fee_received=500,
+            success=True,
+        )
+        append_history_entry(entry, temp_data_dir)
+
+        stats = get_history_stats_for_period(24, data_dir=temp_data_dir)
+        assert stats["total_coinjoins"] == 0
+
+    def test_mixed_entries(self, temp_data_dir: Path) -> None:
+        """Test with entries both inside and outside the period."""
+        now = datetime.now()
+        recent_ts = (now - timedelta(hours=2)).isoformat()
+        old_ts = (now - timedelta(hours=48)).isoformat()
+
+        recent = TransactionHistoryEntry(
+            timestamp=recent_ts,
+            role="maker",
+            txid="recent_tx" * 8,
+            cj_amount=1_000_000,
+            fee_received=500,
+            success=True,
+        )
+        old = TransactionHistoryEntry(
+            timestamp=old_ts,
+            role="maker",
+            txid="old_tx1234" * 7,
+            cj_amount=2_000_000,
+            fee_received=1000,
+            success=True,
+        )
+        append_history_entry(recent, temp_data_dir)
+        append_history_entry(old, temp_data_dir)
+
+        stats = get_history_stats_for_period(24, data_dir=temp_data_dir)
+        assert stats["total_coinjoins"] == 1
+        assert stats["total_volume"] == 1_000_000
+        assert stats["total_fees_earned"] == 500
+
+    def test_role_filter(self, temp_data_dir: Path) -> None:
+        """Test filtering by role within the period."""
+        now = datetime.now()
+        recent_ts = (now - timedelta(hours=1)).isoformat()
+
+        maker_entry = TransactionHistoryEntry(
+            timestamp=recent_ts,
+            role="maker",
+            txid="maker_tx1" * 8,
+            cj_amount=1_000_000,
+            fee_received=500,
+            success=True,
+        )
+        taker_entry = TransactionHistoryEntry(
+            timestamp=recent_ts,
+            role="taker",
+            txid="taker_tx1" * 8,
+            cj_amount=2_000_000,
+            total_maker_fees_paid=800,
+            mining_fee_paid=200,
+            success=True,
+        )
+        append_history_entry(maker_entry, temp_data_dir)
+        append_history_entry(taker_entry, temp_data_dir)
+
+        stats = get_history_stats_for_period(24, role_filter="maker", data_dir=temp_data_dir)
+        assert stats["total_coinjoins"] == 1
+        assert stats["maker_coinjoins"] == 1
+        assert stats["taker_coinjoins"] == 0
+
+    def test_failed_entries_counted(self, temp_data_dir: Path) -> None:
+        """Test that failed entries with completed_at are counted as failed."""
+        now = datetime.now()
+        recent_ts = (now - timedelta(hours=1)).isoformat()
+
+        failed = TransactionHistoryEntry(
+            timestamp=recent_ts,
+            role="maker",
+            txid="failed_tx" * 8,
+            cj_amount=1_000_000,
+            success=False,
+            completed_at=recent_ts,
+            failure_reason="Taker timeout",
+        )
+        append_history_entry(failed, temp_data_dir)
+
+        stats = get_history_stats_for_period(24, data_dir=temp_data_dir)
+        assert stats["total_coinjoins"] == 1
+        assert stats["successful_coinjoins"] == 0
+        assert stats["failed_coinjoins"] == 1
+
+    def test_invalid_timestamp_skipped(self, temp_data_dir: Path) -> None:
+        """Test that entries with invalid timestamps are skipped gracefully."""
+        # Add a valid entry
+        now = datetime.now()
+        valid_ts = (now - timedelta(hours=1)).isoformat()
+        valid = TransactionHistoryEntry(
+            timestamp=valid_ts,
+            role="maker",
+            txid="valid_tx12" * 7,
+            cj_amount=1_000_000,
+            success=True,
+        )
+        append_history_entry(valid, temp_data_dir)
+
+        # Add an entry with invalid timestamp
+        invalid = TransactionHistoryEntry(
+            timestamp="not-a-timestamp",
+            role="maker",
+            txid="invalid_tx" * 7,
+            cj_amount=500_000,
+            success=True,
+        )
+        append_history_entry(invalid, temp_data_dir)
+
+        # Should only count the valid entry
+        stats = get_history_stats_for_period(24, data_dir=temp_data_dir)
+        assert stats["total_coinjoins"] == 1
+        assert stats["total_volume"] == 1_000_000
+
     """Tests for helper functions."""
 
     def test_create_maker_history_entry(self) -> None:
