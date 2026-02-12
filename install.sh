@@ -506,10 +506,6 @@ export PATH="$VENV_DIR/bin:\$PATH"
 
 # Optional: Alias for convenience
 alias jm-activate='source "$VENV_DIR/bin/activate"'
-
-echo "JoinMarket-NG environment activated"
-echo "  Data directory: $DATA_DIR"
-echo "  Config file: $DATA_DIR/config.toml"
 EOF
 
     chmod 644 "$shell_script"
