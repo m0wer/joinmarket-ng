@@ -12,6 +12,16 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from _jmwallet_test_helpers import (
+    TEST_BOND_ADDRESS,
+    TEST_BOND_LOCKTIME,
+    TEST_FAKE_TXID,
+    TEST_MNEMONIC,
+    TEST_RPC_PASSWORD,
+    TEST_RPC_URL,
+    TEST_RPC_USER,
+    make_mock_rpc,
+)
 
 from jmwallet.backends.descriptor_wallet import (
     DescriptorWalletBackend,
@@ -26,12 +36,12 @@ class TestDescriptorWalletBackendUnit:
     def test_init(self):
         """Test backend initialization."""
         backend = DescriptorWalletBackend(
-            rpc_url="http://localhost:18443",
-            rpc_user="test",
-            rpc_password="test",
+            rpc_url=TEST_RPC_URL,
+            rpc_user=TEST_RPC_USER,
+            rpc_password=TEST_RPC_PASSWORD,
             wallet_name="test_wallet",
         )
-        assert backend.rpc_url == "http://localhost:18443"
+        assert backend.rpc_url == TEST_RPC_URL
         assert backend.wallet_name == "test_wallet"
         assert backend._wallet_loaded is False
         assert backend._descriptors_imported is False
@@ -39,10 +49,10 @@ class TestDescriptorWalletBackendUnit:
     def test_get_wallet_url(self):
         """Test wallet-specific URL generation."""
         backend = DescriptorWalletBackend(
-            rpc_url="http://localhost:18443",
+            rpc_url=TEST_RPC_URL,
             wallet_name="my_wallet",
         )
-        assert backend._get_wallet_url() == "http://localhost:18443/wallet/my_wallet"
+        assert backend._get_wallet_url() == f"{TEST_RPC_URL}/wallet/my_wallet"
 
     @pytest.mark.asyncio
     async def test_create_wallet_already_loaded(self):
@@ -135,10 +145,9 @@ class TestDescriptorWalletBackendUnit:
         assert call_count == 3
 
     @pytest.mark.asyncio
-    async def test_import_descriptors(self):
+    async def test_import_descriptors(self, mock_backend: DescriptorWalletBackend):
         """Test importing descriptors into wallet."""
-        backend = DescriptorWalletBackend(wallet_name="test_wallet")
-        backend._wallet_loaded = True
+        backend = mock_backend
 
         descriptors = [
             {"desc": "wpkh(xpub.../0/*)", "range": [0, 999]},
@@ -165,10 +174,9 @@ class TestDescriptorWalletBackendUnit:
         assert backend._descriptors_imported is True
 
     @pytest.mark.asyncio
-    async def test_import_descriptors_partial_failure(self):
+    async def test_import_descriptors_partial_failure(self, mock_backend: DescriptorWalletBackend):
         """Test importing descriptors with some failures."""
-        backend = DescriptorWalletBackend(wallet_name="test_wallet")
-        backend._wallet_loaded = True
+        backend = mock_backend
 
         descriptors = ["desc1", "desc2", "desc3"]
 
@@ -200,10 +208,11 @@ class TestDescriptorWalletBackendUnit:
             await backend.import_descriptors(["desc1"])
 
     @pytest.mark.asyncio
-    async def test_import_descriptors_rescan_timestamps(self):
+    async def test_import_descriptors_rescan_timestamps(
+        self, mock_backend: DescriptorWalletBackend
+    ):
         """Test that rescan parameter correctly sets timestamp."""
-        backend = DescriptorWalletBackend(wallet_name="test_wallet")
-        backend._wallet_loaded = True
+        backend = mock_backend
 
         captured_requests = []
 
@@ -246,10 +255,9 @@ class TestDescriptorWalletBackendUnit:
         )
 
     @pytest.mark.asyncio
-    async def test_get_utxos(self):
+    async def test_get_utxos(self, mock_backend: DescriptorWalletBackend):
         """Test getting UTXOs via listunspent."""
-        backend = DescriptorWalletBackend(wallet_name="test_wallet")
-        backend._wallet_loaded = True
+        backend = mock_backend
 
         mock_utxos = [
             {
@@ -270,14 +278,12 @@ class TestDescriptorWalletBackendUnit:
             },
         ]
 
-        async def mock_rpc(method, params=None, client=None, use_wallet=True):
-            if method == "getblockchaininfo":
-                return {"blocks": 1000}
-            elif method == "listunspent":
-                return mock_utxos
-            raise ValueError(f"Unexpected method: {method}")
-
-        backend._rpc_call = mock_rpc
+        backend._rpc_call = make_mock_rpc(
+            {
+                "getblockchaininfo": {"blocks": 1000},
+                "listunspent": mock_utxos,
+            }
+        )
 
         utxos = await backend.get_utxos(["bc1qtest1", "bc1qtest2"])
 
@@ -294,15 +300,14 @@ class TestDescriptorWalletBackendUnit:
         assert utxos[1].height is None
 
     @pytest.mark.asyncio
-    async def test_get_utxos_filter_addresses(self):
+    async def test_get_utxos_filter_addresses(self, mock_backend: DescriptorWalletBackend):
         """Test that get_utxos passes addresses to Bitcoin Core for filtering.
 
         When addresses are provided, we pass them to listunspent RPC and Bitcoin Core
         does the filtering. The mock simulates Bitcoin Core's behavior of returning
         only matching UTXOs.
         """
-        backend = DescriptorWalletBackend(wallet_name="test_wallet")
-        backend._wallet_loaded = True
+        backend = mock_backend
 
         # Simulate Bitcoin Core returning only the filtered UTXO
         # (Bitcoin Core does the filtering when addresses are provided)
@@ -332,14 +337,13 @@ class TestDescriptorWalletBackendUnit:
         assert utxos[0].height == 1000  # 1000 - 1 + 1
 
     @pytest.mark.asyncio
-    async def test_get_utxos_no_filter(self):
+    async def test_get_utxos_no_filter(self, mock_backend: DescriptorWalletBackend):
         """Test that get_utxos returns all UTXOs when no addresses provided.
 
         When addresses list is empty, we omit the addresses parameter entirely
         so Bitcoin Core returns all wallet UTXOs.
         """
-        backend = DescriptorWalletBackend(wallet_name="test_wallet")
-        backend._wallet_loaded = True
+        backend = mock_backend
 
         all_utxos = [
             {"txid": "abc", "vout": 0, "amount": 0.01, "address": "bc1qtest1", "confirmations": 1},
@@ -365,10 +369,9 @@ class TestDescriptorWalletBackendUnit:
         assert len(utxos) == 3
 
     @pytest.mark.asyncio
-    async def test_get_wallet_balance(self):
+    async def test_get_wallet_balance(self, mock_backend: DescriptorWalletBackend):
         """Test getting wallet balance."""
-        backend = DescriptorWalletBackend(wallet_name="test_wallet")
-        backend._wallet_loaded = True
+        backend = mock_backend
 
         mock_balances = {
             "mine": {
@@ -386,10 +389,9 @@ class TestDescriptorWalletBackendUnit:
         assert balance["total"] == 160_000_000
 
     @pytest.mark.asyncio
-    async def test_get_transaction_from_wallet(self):
+    async def test_get_transaction_from_wallet(self, mock_backend: DescriptorWalletBackend):
         """Test getting transaction that exists in wallet."""
-        backend = DescriptorWalletBackend(wallet_name="test_wallet")
-        backend._wallet_loaded = True
+        backend = mock_backend
 
         mock_tx = {
             "confirmations": 10,
@@ -408,10 +410,9 @@ class TestDescriptorWalletBackendUnit:
         assert tx.block_height == 800000
 
     @pytest.mark.asyncio
-    async def test_rescan_blockchain(self):
+    async def test_rescan_blockchain(self, mock_backend: DescriptorWalletBackend):
         """Test blockchain rescan."""
-        backend = DescriptorWalletBackend(wallet_name="test_wallet")
-        backend._wallet_loaded = True
+        backend = mock_backend
 
         backend._rpc_call = AsyncMock(return_value={"start_height": 0, "stop_height": 800000})
 
@@ -497,7 +498,7 @@ class TestWalletNameGeneration:
 
     def test_get_mnemonic_fingerprint(self):
         """Test mnemonic fingerprint generation."""
-        mnemonic = "abandon " * 11 + "about"
+        mnemonic = TEST_MNEMONIC
         fp = get_mnemonic_fingerprint(mnemonic)
 
         assert len(fp) == 8
@@ -523,7 +524,6 @@ class TestWalletNameGeneration:
 
 
 @pytest.mark.docker
-@pytest.mark.docker
 @pytest.mark.asyncio
 async def test_descriptor_wallet_backend_integration():
     """Integration test requiring Docker Bitcoin Core service."""
@@ -533,9 +533,9 @@ async def test_descriptor_wallet_backend_integration():
     wallet_name = f"jm_test_{uuid.uuid4().hex[:8]}"
 
     backend = DescriptorWalletBackend(
-        rpc_url="http://localhost:18443",
-        rpc_user="test",
-        rpc_password="test",
+        rpc_url=TEST_RPC_URL,
+        rpc_user=TEST_RPC_USER,
+        rpc_password=TEST_RPC_PASSWORD,
         wallet_name=wallet_name,
     )
 
@@ -609,9 +609,9 @@ async def test_descriptor_wallet_with_funds():
 
     # Create backend WITHOUT disable_private_keys so we can generate addresses
     backend = DescriptorWalletBackend(
-        rpc_url="http://localhost:18443",
-        rpc_user="test",
-        rpc_password="test",
+        rpc_url=TEST_RPC_URL,
+        rpc_user=TEST_RPC_USER,
+        rpc_password=TEST_RPC_PASSWORD,
         wallet_name=wallet_name,
     )
 
@@ -684,7 +684,7 @@ async def test_descriptor_wallet_service_integration():
     from jmwallet.wallet.service import WalletService
 
     # Use the standard test mnemonic which has funds in regtest
-    mnemonic = "abandon " * 11 + "about"
+    mnemonic = TEST_MNEMONIC
     network = "regtest"
 
     # Generate deterministic wallet name
@@ -693,9 +693,9 @@ async def test_descriptor_wallet_service_integration():
     wallet_name = f"jm_{fingerprint}_{uuid.uuid4().hex[:8]}_test"
 
     backend = DescriptorWalletBackend(
-        rpc_url="http://localhost:18443",
-        rpc_user="test",
-        rpc_password="test",
+        rpc_url=TEST_RPC_URL,
+        rpc_user=TEST_RPC_USER,
+        rpc_password=TEST_RPC_PASSWORD,
         wallet_name=wallet_name,
     )
 
@@ -847,15 +847,7 @@ class TestBackgroundRescan:
         backend = DescriptorWalletBackend(wallet_name="test_rescan")
         backend._wallet_loaded = True
 
-        async def mock_rpc(
-            method: str,
-            params: list[Any] | None = None,
-            client: Any = None,
-            use_wallet: bool = True,
-        ) -> Any:
-            return {}
-
-        backend._rpc_call = mock_rpc  # type: ignore[method-assign]
+        backend._rpc_call = make_mock_rpc({}, strict=False, default={})
 
         await backend.start_background_rescan()
 
@@ -867,17 +859,11 @@ class TestBackgroundRescan:
         backend = DescriptorWalletBackend(wallet_name="test_status")
         backend._wallet_loaded = True
 
-        async def mock_rpc(
-            method: str,
-            params: list[Any] | None = None,
-            client: Any = None,
-            use_wallet: bool = True,
-        ) -> Any:
-            if method == "getwalletinfo":
-                return {"scanning": False, "walletname": "test_wallet"}
-            return {}
-
-        backend._rpc_call = mock_rpc  # type: ignore[method-assign]
+        backend._rpc_call = make_mock_rpc(
+            {"getwalletinfo": {"scanning": False, "walletname": "test_wallet"}},
+            strict=False,
+            default={},
+        )
 
         status = await backend.get_rescan_status()
 
@@ -890,20 +876,16 @@ class TestBackgroundRescan:
         backend = DescriptorWalletBackend(wallet_name="test_scanning")
         backend._wallet_loaded = True
 
-        async def mock_rpc(
-            method: str,
-            params: list[Any] | None = None,
-            client: Any = None,
-            use_wallet: bool = True,
-        ) -> Any:
-            if method == "getwalletinfo":
-                return {
+        backend._rpc_call = make_mock_rpc(
+            {
+                "getwalletinfo": {
                     "scanning": {"duration": 120, "progress": 0.45},
                     "walletname": "test_wallet",
                 }
-            return {}
-
-        backend._rpc_call = mock_rpc  # type: ignore[method-assign]
+            },
+            strict=False,
+            default={},
+        )
 
         status = await backend.get_rescan_status()
 
@@ -981,8 +963,8 @@ class TestFidelityBondSync:
         backend._descriptors_imported = True
 
         # Mock the bond address and UTXO
-        bond_address = "bc1qxl3vzaf0cxwl9c0jsyyphwdekc6j0xh48qlfv8ja39qzqn92u7ws5arznw"
-        bond_locktime = 1736899200  # 2025-01-15 00:00:00 UTC
+        bond_address = TEST_BOND_ADDRESS
+        bond_locktime = TEST_BOND_LOCKTIME  # 2025-01-15 00:00:00 UTC
         bond_index = 0
         bond_value = 29890
 
@@ -991,7 +973,7 @@ class TestFidelityBondSync:
             return [
                 # Regular wallet UTXO
                 UTXO(
-                    txid="abc123" * 10 + "ab",
+                    txid=TEST_FAKE_TXID,
                     vout=0,
                     value=100000,
                     address="bc1qregularaddress123",
@@ -1012,10 +994,7 @@ class TestFidelityBondSync:
         backend.get_all_utxos = mock_get_all_utxos  # type: ignore[method-assign]
 
         # Create wallet service with test mnemonic
-        test_mnemonic = (
-            "abandon abandon abandon abandon abandon abandon abandon abandon "
-            "abandon abandon abandon about"
-        )
+        test_mnemonic = TEST_MNEMONIC
         wallet = WalletService(
             mnemonic=test_mnemonic,
             backend=backend,
@@ -1054,7 +1033,7 @@ class TestFidelityBondSync:
         async def mock_get_all_utxos() -> list[UTXO]:
             return [
                 UTXO(
-                    txid="abc123" * 10 + "ab",
+                    txid=TEST_FAKE_TXID,
                     vout=0,
                     value=100000,
                     address="bc1qregularaddress123",
@@ -1065,10 +1044,7 @@ class TestFidelityBondSync:
 
         backend.get_all_utxos = mock_get_all_utxos  # type: ignore[method-assign]
 
-        test_mnemonic = (
-            "abandon abandon abandon abandon abandon abandon abandon abandon "
-            "abandon abandon abandon about"
-        )
+        test_mnemonic = TEST_MNEMONIC
         wallet = WalletService(
             mnemonic=test_mnemonic,
             backend=backend,
@@ -1113,10 +1089,7 @@ class TestFidelityBondSync:
         backend._rpc_call = mock_rpc  # type: ignore[method-assign]
         backend._wallet_loaded = True
 
-        test_mnemonic = (
-            "abandon abandon abandon abandon abandon abandon abandon abandon "
-            "abandon abandon abandon about"
-        )
+        test_mnemonic = TEST_MNEMONIC
         wallet = WalletService(
             mnemonic=test_mnemonic,
             backend=backend,
@@ -1125,8 +1098,8 @@ class TestFidelityBondSync:
         )
 
         # Setup with fidelity bond addresses
-        bond_address = "bc1qxl3vzaf0cxwl9c0jsyyphwdekc6j0xh48qlfv8ja39qzqn92u7ws5arznw"
-        bond_locktime = 1736899200
+        bond_address = TEST_BOND_ADDRESS
+        bond_locktime = TEST_BOND_LOCKTIME
         bond_index = 0
         fidelity_bond_addresses = [(bond_address, bond_locktime, bond_index)]
 
@@ -1183,10 +1156,7 @@ class TestFidelityBondSync:
         backend.get_all_utxos = mock_get_all_utxos  # type: ignore[method-assign]
 
         # Create wallet service with test mnemonic
-        test_mnemonic = (
-            "abandon abandon abandon abandon abandon abandon abandon abandon "
-            "abandon abandon abandon about"
-        )
+        test_mnemonic = TEST_MNEMONIC
         wallet = WalletService(
             mnemonic=test_mnemonic,
             backend=backend,
@@ -1245,10 +1215,7 @@ class TestFidelityBondSync:
         backend._wallet_loaded = True
         backend._descriptors_imported = True
 
-        test_mnemonic = (
-            "abandon abandon abandon abandon abandon abandon abandon abandon "
-            "abandon abandon abandon about"
-        )
+        test_mnemonic = TEST_MNEMONIC
 
         # Create wallet with data_dir so it can access bond registry
         wallet = WalletService(
@@ -1260,8 +1227,8 @@ class TestFidelityBondSync:
         )
 
         # Create a mock bond in the registry
-        bond_address = "bc1qxl3vzaf0cxwl9c0jsyyphwdekc6j0xh48qlfv8ja39qzqn92u7ws5arznw"
-        bond_locktime = 1736899200
+        bond_address = TEST_BOND_ADDRESS
+        bond_locktime = TEST_BOND_LOCKTIME
         bond_index = 0
 
         mock_bond = FidelityBondInfo(
@@ -1274,7 +1241,7 @@ class TestFidelityBondSync:
             witness_script_hex="0014" + "ab" * 20,
             network="mainnet",
             created_at="2025-01-01T00:00:00Z",
-            txid="abc123" * 10 + "ab",
+            txid=TEST_FAKE_TXID,
             vout=0,
             value=29890,
             confirmations=100,
@@ -1315,10 +1282,7 @@ class TestFidelityBondSync:
         backend = DescriptorWalletBackend(wallet_name="test_no_data_dir")
         backend._wallet_loaded = True
 
-        test_mnemonic = (
-            "abandon abandon abandon abandon abandon abandon abandon abandon "
-            "abandon abandon abandon about"
-        )
+        test_mnemonic = TEST_MNEMONIC
 
         # Create wallet WITHOUT data_dir
         wallet = WalletService(
@@ -1387,19 +1351,14 @@ class TestAddressHistory:
             },
         ]
 
-        async def mock_rpc(
-            method: str,
-            params: list[Any] | None = None,
-            client: Any = None,
-            use_wallet: bool = True,
-        ) -> Any:
-            if method == "listaddressgroupings":
-                return mock_groupings
-            if method == "listsinceblock":
-                return {"transactions": mock_transactions, "lastblock": "0" * 64}
-            return {}
-
-        backend._rpc_call = mock_rpc  # type: ignore[method-assign]
+        backend._rpc_call = make_mock_rpc(
+            {
+                "listaddressgroupings": mock_groupings,
+                "listsinceblock": {"transactions": mock_transactions, "lastblock": "0" * 64},
+            },
+            strict=False,
+            default={},
+        )
 
         addresses = await backend.get_addresses_with_history()
 
@@ -1415,19 +1374,14 @@ class TestAddressHistory:
         backend = DescriptorWalletBackend(wallet_name="test_empty_history")
         backend._wallet_loaded = True
 
-        async def mock_rpc(
-            method: str,
-            params: list[Any] | None = None,
-            client: Any = None,
-            use_wallet: bool = True,
-        ) -> Any:
-            if method == "listaddressgroupings":
-                return []
-            if method == "listsinceblock":
-                return {"transactions": [], "lastblock": "0" * 64}
-            return {}
-
-        backend._rpc_call = mock_rpc  # type: ignore[method-assign]
+        backend._rpc_call = make_mock_rpc(
+            {
+                "listaddressgroupings": [],
+                "listsinceblock": {"transactions": [], "lastblock": "0" * 64},
+            },
+            strict=False,
+            default={},
+        )
 
         addresses = await backend.get_addresses_with_history()
 
@@ -1482,19 +1436,14 @@ class TestAddressHistory:
             },
         ]
 
-        async def mock_rpc(
-            method: str,
-            params: list[Any] | None = None,
-            client: Any = None,
-            use_wallet: bool = True,
-        ) -> Any:
-            if method == "listaddressgroupings":
-                return mock_groupings
-            if method == "listsinceblock":
-                return {"transactions": mock_transactions, "lastblock": "0" * 64}
-            return {}
-
-        backend._rpc_call = mock_rpc  # type: ignore[method-assign]
+        backend._rpc_call = make_mock_rpc(
+            {
+                "listaddressgroupings": mock_groupings,
+                "listsinceblock": {"transactions": mock_transactions, "lastblock": "0" * 64},
+            },
+            strict=False,
+            default={},
+        )
 
         addresses = await backend.get_addresses_with_history()
 
@@ -1528,19 +1477,14 @@ class TestAddressHistory:
         # Empty transaction list - simulating missing tx history
         mock_transactions: list[dict[str, Any]] = []
 
-        async def mock_rpc(
-            method: str,
-            params: list[Any] | None = None,
-            client: Any = None,
-            use_wallet: bool = True,
-        ) -> Any:
-            if method == "listaddressgroupings":
-                return mock_groupings
-            if method == "listsinceblock":
-                return {"transactions": mock_transactions, "lastblock": "0" * 64}
-            return {}
-
-        backend._rpc_call = mock_rpc  # type: ignore[method-assign]
+        backend._rpc_call = make_mock_rpc(
+            {
+                "listaddressgroupings": mock_groupings,
+                "listsinceblock": {"transactions": mock_transactions, "lastblock": "0" * 64},
+            },
+            strict=False,
+            default={},
+        )
 
         addresses = await backend.get_addresses_with_history()
 
@@ -1567,7 +1511,7 @@ class TestAddressHistory:
         async def mock_get_all_utxos() -> list[UTXO]:
             return [
                 UTXO(
-                    txid="abc123" * 10 + "ab",
+                    txid=TEST_FAKE_TXID,
                     vout=0,
                     value=100000,
                     address=addr_with_utxo,
@@ -1582,10 +1526,7 @@ class TestAddressHistory:
         backend.get_all_utxos = mock_get_all_utxos  # type: ignore[method-assign]
         backend.get_addresses_with_history = mock_get_addresses_with_history  # type: ignore
 
-        test_mnemonic = (
-            "abandon abandon abandon abandon abandon abandon abandon abandon "
-            "abandon abandon abandon about"
-        )
+        test_mnemonic = TEST_MNEMONIC
         wallet = WalletService(
             mnemonic=test_mnemonic,
             backend=backend,
@@ -1765,10 +1706,7 @@ class TestDescriptorRangeUpgrade:
 
         backend._rpc_call = mock_rpc_call  # type: ignore[method-assign]
 
-        test_mnemonic = (
-            "abandon abandon abandon abandon abandon abandon abandon abandon "
-            "abandon abandon abandon about"
-        )
+        test_mnemonic = TEST_MNEMONIC
         wallet = WalletService(
             mnemonic=test_mnemonic,
             backend=backend,
@@ -1824,10 +1762,7 @@ class TestDescriptorRangeUpgrade:
 
         backend._rpc_call = mock_rpc_call  # type: ignore[method-assign]
 
-        test_mnemonic = (
-            "abandon abandon abandon abandon abandon abandon abandon abandon "
-            "abandon abandon abandon about"
-        )
+        test_mnemonic = TEST_MNEMONIC
         wallet = WalletService(
             mnemonic=test_mnemonic,
             backend=backend,
@@ -1855,10 +1790,7 @@ class TestDescriptorRangeUpgrade:
         backend = DescriptorWalletBackend(wallet_name="test_cache")
         backend._wallet_loaded = True
 
-        test_mnemonic = (
-            "abandon abandon abandon abandon abandon abandon abandon abandon "
-            "abandon abandon abandon about"
-        )
+        test_mnemonic = TEST_MNEMONIC
         wallet = WalletService(
             mnemonic=test_mnemonic,
             backend=backend,
@@ -1900,10 +1832,7 @@ class TestDescriptorRangeUpgrade:
         backend._wallet_loaded = True
         backend._descriptors_imported = True
 
-        test_mnemonic = (
-            "abandon abandon abandon abandon abandon abandon abandon abandon "
-            "abandon abandon abandon about"
-        )
+        test_mnemonic = TEST_MNEMONIC
         wallet = WalletService(
             mnemonic=test_mnemonic,
             backend=backend,
@@ -2010,10 +1939,7 @@ class TestDescriptorRangeUpgrade:
         backend._wallet_loaded = True
         backend._descriptors_imported = True
 
-        test_mnemonic = (
-            "abandon abandon abandon abandon abandon abandon abandon abandon "
-            "abandon abandon abandon about"
-        )
+        test_mnemonic = TEST_MNEMONIC
         wallet = WalletService(
             mnemonic=test_mnemonic,
             backend=backend,
@@ -2142,10 +2068,7 @@ class TestDescriptorRangeUpgrade:
         backend._wallet_loaded = True
         backend._descriptors_imported = True
 
-        test_mnemonic = (
-            "abandon abandon abandon abandon abandon abandon abandon abandon "
-            "abandon abandon abandon about"
-        )
+        test_mnemonic = TEST_MNEMONIC
         wallet = WalletService(
             mnemonic=test_mnemonic,
             backend=backend,

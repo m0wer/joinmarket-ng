@@ -426,13 +426,13 @@ class TestMakerBotMultiOfferFill:
             return True, {"nacl_pubkey": "abc123", "features": ["neutrino_compat"]}
 
         # Mock the CoinJoinSession.handle_fill
-        with patch("maker.bot.CoinJoinSession") as mock_session_class:
+        with patch("maker.protocol_handlers.CoinJoinSession") as mock_session_class:
             mock_session = MagicMock()
             mock_session.handle_fill = capture_handle_fill
             mock_session.validate_channel = MagicMock(return_value=True)
             mock_session_class.return_value = mock_session
 
-            with patch("maker.bot.check_commitment", return_value=True):
+            with patch("maker.protocol_handlers.check_commitment", return_value=True):
                 with patch.object(maker_bot, "_send_response", new=AsyncMock()):
                     await maker_bot._handle_fill(
                         "J5Taker123",
@@ -453,13 +453,13 @@ class TestMakerBotMultiOfferFill:
         async def mock_handle_fill(amount, commitment, taker_pk):
             return True, {"nacl_pubkey": "abc123", "features": ["neutrino_compat"]}
 
-        with patch("maker.bot.CoinJoinSession") as mock_session_class:
+        with patch("maker.protocol_handlers.CoinJoinSession") as mock_session_class:
             mock_session = MagicMock()
             mock_session.handle_fill = mock_handle_fill
             mock_session.validate_channel = MagicMock(return_value=True)
             mock_session_class.return_value = mock_session
 
-            with patch("maker.bot.check_commitment", return_value=True):
+            with patch("maker.protocol_handlers.check_commitment", return_value=True):
                 with patch.object(maker_bot, "_send_response", new=AsyncMock()):
                     await maker_bot._handle_fill(
                         "J5Taker456",
@@ -475,7 +475,7 @@ class TestMakerBotMultiOfferFill:
     @pytest.mark.asyncio
     async def test_fill_invalid_offer_id_rejected(self, maker_bot):
         """Test that !fill with invalid offer ID is rejected."""
-        with patch("maker.bot.check_commitment", return_value=True):
+        with patch("maker.protocol_handlers.check_commitment", return_value=True):
             await maker_bot._handle_fill(
                 "J5Taker789",
                 "fill 99 500000 taker_pk_hex Pcommitment789",  # oid=99 doesn't exist
@@ -488,7 +488,7 @@ class TestMakerBotMultiOfferFill:
     async def test_fill_amount_validation_per_offer(self, maker_bot):
         """Test that amount validation is per-offer."""
         # Try to fill the absolute offer (oid=1, min_size=50_000) with amount below minimum
-        with patch("maker.bot.check_commitment", return_value=True):
+        with patch("maker.protocol_handlers.check_commitment", return_value=True):
             await maker_bot._handle_fill(
                 "J5TakerLow",
                 "fill 1 30000 taker_pk_hex Pcommitment_low",  # Below min_size=50_000
@@ -505,13 +505,13 @@ class TestMakerBotMultiOfferFill:
         async def mock_handle_fill(amount, commitment, taker_pk):
             return True, {"nacl_pubkey": "abc123", "features": ["neutrino_compat"]}
 
-        with patch("maker.bot.CoinJoinSession") as mock_session_class:
+        with patch("maker.protocol_handlers.CoinJoinSession") as mock_session_class:
             mock_session = MagicMock()
             mock_session.handle_fill = mock_handle_fill
             mock_session.validate_channel = MagicMock(return_value=True)
             mock_session_class.return_value = mock_session
 
-            with patch("maker.bot.check_commitment", return_value=True):
+            with patch("maker.protocol_handlers.check_commitment", return_value=True):
                 with patch.object(maker_bot, "_send_response", new=AsyncMock()):
                     # Fill absolute offer (oid=1, min_size=50_000) with 60_000 - should work
                     await maker_bot._handle_fill(

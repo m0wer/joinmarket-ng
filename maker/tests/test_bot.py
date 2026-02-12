@@ -839,7 +839,7 @@ class TestDirectoryReconnection:
         mock_client = MagicMock()
         mock_client.connect = AsyncMock()
 
-        with patch("maker.bot.DirectoryClient", return_value=mock_client):
+        with patch("maker.background_tasks.DirectoryClient", return_value=mock_client):
             result = await maker_bot._connect_to_directory("test.onion:5222")
 
             assert result is not None
@@ -856,7 +856,7 @@ class TestDirectoryReconnection:
         mock_client = MagicMock()
         mock_client.connect = AsyncMock(side_effect=Exception("Connection failed"))
 
-        with patch("maker.bot.DirectoryClient", return_value=mock_client):
+        with patch("maker.background_tasks.DirectoryClient", return_value=mock_client):
             result = await maker_bot._connect_to_directory("bad.onion:5222")
 
             assert result is None
@@ -869,7 +869,9 @@ class TestDirectoryReconnection:
         mock_client = MagicMock()
         mock_client.connect = AsyncMock()
 
-        with patch("maker.bot.DirectoryClient", return_value=mock_client) as mock_client_class:
+        with patch(
+            "maker.background_tasks.DirectoryClient", return_value=mock_client
+        ) as mock_client_class:
             result = await maker_bot._connect_to_directory("test.onion")
 
             assert result is not None

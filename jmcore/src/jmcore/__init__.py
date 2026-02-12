@@ -135,6 +135,7 @@ from jmcore.settings import (
     get_settings,
     reset_settings,
 )
+from jmcore.tasks import parse_directory_address, run_periodic_task
 from jmcore.timenumber import (
     TIMELOCK_EPOCH,
     TIMELOCK_EPOCH_TIMESTAMP,
@@ -299,6 +300,9 @@ __all__ = [
     "serialize_outpoint",
     "serialize_transaction",
     "sha256",
+    # Tasks
+    "parse_directory_address",
+    "run_periodic_task",
     # Settings
     "BitcoinSettings",
     "DEFAULT_DIRECTORY_SERVERS",

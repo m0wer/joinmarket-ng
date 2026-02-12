@@ -15,12 +15,18 @@ import base64
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from _taker_test_helpers import (
+    make_crypto_pair,
+    make_directory_client,
+    make_taker_config,
+    make_utxo,
+)
 from jmcore.encryption import CryptoSession
 from jmcore.models import Offer, OfferType
 from jmwallet.wallet.models import UTXOInfo
 
 from taker.podle_manager import PoDLEManager
-from taker.taker import MakerSession, Taker, TakerState
+from taker.taker import MakerSession, PhaseResult, Taker, TakerState
 
 
 @pytest.fixture
@@ -33,46 +39,15 @@ def mock_wallet():
     wallet.get_balance = AsyncMock(return_value=50_000_000)
     wallet.get_utxos = AsyncMock(
         return_value=[
-            UTXOInfo(
-                txid="a" * 64,
-                vout=0,
-                value=25_000_000,
-                address="bcrt1qtest1",
-                confirmations=10,
-                scriptpubkey="001400" * 10,
-                path="m/84'/1'/0'/0/0",
-                mixdepth=0,
-            ),
-            UTXOInfo(
-                txid="b" * 64,
-                vout=0,
-                value=25_000_000,
-                address="bcrt1qtest2",
-                confirmations=10,
-                scriptpubkey="001400" * 10,
-                path="m/84'/1'/0'/0/1",
-                mixdepth=0,
-            ),
+            make_utxo(txid_char="a", address="bcrt1qtest1"),
+            make_utxo(txid_char="b", address="bcrt1qtest2", path="m/84'/1'/0'/0/1"),
         ]
     )
     wallet.get_next_address_index = Mock(return_value=0)
     wallet.get_receive_address = Mock(return_value="bcrt1qdest")
     wallet.get_change_address = Mock(return_value="bcrt1qchange")
     wallet.get_key_for_address = Mock()
-    wallet.select_utxos = Mock(
-        return_value=[
-            UTXOInfo(
-                txid="a" * 64,
-                vout=0,
-                value=25_000_000,
-                address="bcrt1qtest1",
-                confirmations=10,
-                scriptpubkey="001400" * 10,
-                path="m/84'/1'/0'/0/0",
-                mixdepth=0,
-            )
-        ]
-    )
+    wallet.select_utxos = Mock(return_value=[make_utxo(txid_char="a", address="bcrt1qtest1")])
     wallet.close = AsyncMock()
     return wallet
 
@@ -82,16 +57,7 @@ def mock_backend():
     """Mock blockchain backend."""
     backend = AsyncMock()
     backend.get_utxo = AsyncMock(
-        return_value=UTXOInfo(
-            txid="c" * 64,
-            vout=0,
-            value=10_000_000,
-            address="bcrt1qmaker",
-            confirmations=10,
-            scriptpubkey="001400" * 10,
-            path="m/84'/1'/0'/0/0",
-            mixdepth=0,
-        )
+        return_value=make_utxo(txid_char="c", value=10_000_000, address="bcrt1qmaker")
     )
     backend.get_transaction = AsyncMock()
     backend.broadcast_transaction = AsyncMock(return_value="txid123")
@@ -103,15 +69,7 @@ def mock_backend():
 @pytest.fixture
 def mock_config():
     """Mock taker config."""
-    from jmcore.models import NetworkType
-
-    from taker.config import TakerConfig
-
-    config = TakerConfig(
-        mnemonic="abandon abandon abandon abandon abandon abandon "
-        "abandon abandon abandon abandon abandon about",
-        network=NetworkType.REGTEST,
-        directory_servers=["localhost:5222"],
+    return make_taker_config(
         counterparty_count=2,
         minimum_makers=2,
         taker_utxo_age=1,
@@ -120,7 +78,6 @@ def mock_config():
         maker_timeout_sec=30.0,
         order_wait_time=10.0,
     )
-    return config
 
 
 @pytest.fixture
@@ -168,19 +125,7 @@ async def test_taker_initialization(mock_wallet, mock_backend, mock_config):
 @pytest.mark.asyncio
 async def test_encryption_session_setup():
     """Test NaCl encryption session setup between taker and maker."""
-    # Taker creates a crypto session
-    taker_crypto = CryptoSession()
-    taker_pubkey = taker_crypto.get_pubkey_hex()
-
-    # Maker creates a crypto session and sends their pubkey
-    maker_crypto = CryptoSession()
-    maker_pubkey = maker_crypto.get_pubkey_hex()
-
-    # Taker sets up encryption with maker's pubkey
-    taker_crypto.setup_encryption(maker_pubkey)
-
-    # Maker sets up encryption with taker's pubkey
-    maker_crypto.setup_encryption(taker_pubkey)
+    taker_crypto, maker_crypto = make_crypto_pair()
 
     # Test encryption/decryption
     plaintext = "test message"
@@ -203,25 +148,13 @@ async def test_podle_generation(mock_wallet, tmp_path):
     """Test PoDLE commitment generation using PoDLEManager."""
     # Create sample UTXOs
     utxos = [
-        UTXOInfo(
-            txid="a" * 64,
-            vout=0,
-            value=25_000_000,
-            address="bcrt1qtest1",
-            confirmations=10,
-            scriptpubkey="001400" * 10,
-            path="m/84'/1'/0'/0/0",
-            mixdepth=0,
-        ),
-        UTXOInfo(
-            txid="b" * 64,
+        make_utxo(txid_char="a", address="bcrt1qtest1"),
+        make_utxo(
+            txid_char="b",
             vout=1,
             value=30_000_000,
             address="bcrt1qtest2",
-            confirmations=10,
-            scriptpubkey="001400" * 10,
             path="m/84'/1'/0'/0/1",
-            mixdepth=0,
         ),
     ]
 
@@ -272,18 +205,7 @@ async def test_podle_generation(mock_wallet, tmp_path):
 async def test_podle_retry_limit(mock_wallet, tmp_path):
     """Test that PoDLE respects max_retries limit."""
     # Create a single UTXO
-    utxos = [
-        UTXOInfo(
-            txid="a" * 64,
-            vout=0,
-            value=25_000_000,
-            address="bcrt1qtest1",
-            confirmations=10,
-            scriptpubkey="001400" * 10,
-            path="m/84'/1'/0'/0/0",
-            mixdepth=0,
-        ),
-    ]
+    utxos = [make_utxo(txid_char="a", address="bcrt1qtest1")]
 
     def get_private_key(addr: str) -> bytes | None:
         return b"\x01" * 32
@@ -327,25 +249,13 @@ async def test_podle_utxo_deprioritization(mock_wallet, tmp_path):
     """
     # Create two UTXOs: UTXO_B has more confirmations, so it's tried first
     utxos = [
-        UTXOInfo(
-            txid="a" * 64,
-            vout=0,
-            value=25_000_000,
-            address="bcrt1qtest1",
-            confirmations=10,
-            scriptpubkey="001400" * 10,
-            path="m/84'/1'/0'/0/0",
-            mixdepth=0,
-        ),
-        UTXOInfo(
-            txid="b" * 64,
+        make_utxo(txid_char="a", address="bcrt1qtest1"),
+        make_utxo(
+            txid_char="b",
             vout=1,
-            value=25_000_000,
             address="bcrt1qtest2",
-            confirmations=20,  # Higher confirmations = tried first
-            scriptpubkey="001400" * 10,
+            confirmations=20,
             path="m/84'/1'/0'/0/1",
-            mixdepth=0,
         ),
     ]
 
@@ -393,21 +303,7 @@ async def test_podle_utxo_deprioritization(mock_wallet, tmp_path):
 @pytest.mark.asyncio
 async def test_fill_phase_encryption():
     """Test !fill phase with encryption setup."""
-    # Simulate taker sending !fill with pubkey
-    taker_crypto = CryptoSession()
-    taker_pubkey = taker_crypto.get_pubkey_hex()
-
-    # Taker builds fill message
-
-    # Maker receives fill and creates crypto session
-    maker_crypto = CryptoSession()
-    maker_pubkey = maker_crypto.get_pubkey_hex()
-
-    # Maker sets up encryption with taker's pubkey
-    maker_crypto.setup_encryption(taker_pubkey)
-
-    # Taker receives !pubkey response and sets up encryption
-    taker_crypto.setup_encryption(maker_pubkey)
+    taker_crypto, maker_crypto = make_crypto_pair()
 
     # Now both can communicate securely
     test_msg = "encrypted test"
@@ -419,15 +315,7 @@ async def test_fill_phase_encryption():
 @pytest.mark.asyncio
 async def test_auth_phase_encryption():
     """Test !auth phase with encrypted revelation."""
-    # Setup encryption (from fill phase)
-    taker_crypto = CryptoSession()
-    maker_crypto = CryptoSession()
-
-    taker_pubkey = taker_crypto.get_pubkey_hex()
-    maker_pubkey = maker_crypto.get_pubkey_hex()
-
-    taker_crypto.setup_encryption(maker_pubkey)
-    maker_crypto.setup_encryption(taker_pubkey)
+    taker_crypto, maker_crypto = make_crypto_pair()
 
     # Taker creates revelation and encrypts it
     revelation_str = "txid:vout|P_hex|P2_hex|sig_hex|e_hex"
@@ -449,15 +337,7 @@ async def test_auth_phase_encryption():
 @pytest.mark.asyncio
 async def test_tx_phase_encryption():
     """Test !tx phase with encrypted transaction."""
-    # Setup encryption
-    taker_crypto = CryptoSession()
-    maker_crypto = CryptoSession()
-
-    taker_pubkey = taker_crypto.get_pubkey_hex()
-    maker_pubkey = maker_crypto.get_pubkey_hex()
-
-    taker_crypto.setup_encryption(maker_pubkey)
-    maker_crypto.setup_encryption(taker_pubkey)
+    taker_crypto, maker_crypto = make_crypto_pair()
 
     # Taker encodes and encrypts transaction
     tx_bytes = b"\x01\x00\x00\x00" * 10  # Dummy transaction
@@ -549,18 +429,10 @@ async def test_message_encryption_roundtrip():
     sessions = {}
 
     # Maker 1
-    taker_crypto1 = CryptoSession()
-    maker_crypto1 = CryptoSession()
-    taker_crypto1.setup_encryption(maker_crypto1.get_pubkey_hex())
-    maker_crypto1.setup_encryption(taker_crypto1.get_pubkey_hex())
-    sessions["maker1"] = (taker_crypto1, maker_crypto1)
+    sessions["maker1"] = make_crypto_pair()
 
     # Maker 2
-    taker_crypto2 = CryptoSession()
-    maker_crypto2 = CryptoSession()
-    taker_crypto2.setup_encryption(maker_crypto2.get_pubkey_hex())
-    maker_crypto2.setup_encryption(taker_crypto2.get_pubkey_hex())
-    sessions["maker2"] = (taker_crypto2, maker_crypto2)
+    sessions["maker2"] = make_crypto_pair()
 
     # Test auth messages to both makers
     revelation = "utxo|P|P2|sig|e"
@@ -594,8 +466,6 @@ class TestPhaseResult:
 
     def test_phase_result_success(self):
         """Test successful phase result."""
-        from taker.taker import PhaseResult
-
         result = PhaseResult(success=True)
         assert result.success
         assert result.failed_makers == []
@@ -604,8 +474,6 @@ class TestPhaseResult:
 
     def test_phase_result_failure_with_failed_makers(self):
         """Test failed phase result with failed makers."""
-        from taker.taker import PhaseResult
-
         result = PhaseResult(
             success=False, failed_makers=["maker1", "maker2"], blacklist_error=False
         )
@@ -616,8 +484,6 @@ class TestPhaseResult:
 
     def test_phase_result_blacklist_error(self):
         """Test phase result with blacklist error."""
-        from taker.taker import PhaseResult
-
         result = PhaseResult(success=False, failed_makers=["maker1"], blacklist_error=True)
         assert not result.success
         assert result.blacklist_error
@@ -625,8 +491,6 @@ class TestPhaseResult:
 
     def test_phase_result_success_with_some_failures(self):
         """Test successful phase even with some failed makers (but enough remaining)."""
-        from taker.taker import PhaseResult
-
         # Success can have failed makers if enough responded
         result = PhaseResult(success=True, failed_makers=["maker1"])
         assert result.success
@@ -640,75 +504,28 @@ class TestMakerReplacementConfig:
 
     def test_max_maker_replacement_default(self):
         """Test default max_maker_replacement_attempts value."""
-        from jmcore.models import NetworkType
-
-        from taker.config import TakerConfig
-
-        config = TakerConfig(
-            mnemonic="abandon abandon abandon abandon abandon abandon "
-            "abandon abandon abandon abandon abandon about",
-            network=NetworkType.REGTEST,
-            directory_servers=["localhost:5222"],
-        )
+        config = make_taker_config()
         assert config.max_maker_replacement_attempts == 3
 
     def test_max_maker_replacement_custom(self):
         """Test custom max_maker_replacement_attempts value."""
-        from jmcore.models import NetworkType
-
-        from taker.config import TakerConfig
-
-        config = TakerConfig(
-            mnemonic="abandon abandon abandon abandon abandon abandon "
-            "abandon abandon abandon abandon abandon about",
-            network=NetworkType.REGTEST,
-            directory_servers=["localhost:5222"],
-            max_maker_replacement_attempts=5,
-        )
+        config = make_taker_config(max_maker_replacement_attempts=5)
         assert config.max_maker_replacement_attempts == 5
 
     def test_max_maker_replacement_disabled(self):
         """Test disabled maker replacement (set to 0)."""
-        from jmcore.models import NetworkType
-
-        from taker.config import TakerConfig
-
-        config = TakerConfig(
-            mnemonic="abandon abandon abandon abandon abandon abandon "
-            "abandon abandon abandon abandon abandon about",
-            network=NetworkType.REGTEST,
-            directory_servers=["localhost:5222"],
-            max_maker_replacement_attempts=0,
-        )
+        config = make_taker_config(max_maker_replacement_attempts=0)
         assert config.max_maker_replacement_attempts == 0
 
     def test_max_maker_replacement_bounds(self):
         """Test max_maker_replacement_attempts bounds validation."""
-        from jmcore.models import NetworkType
-
-        from taker.config import TakerConfig
-
         # Should accept max value of 10
-        config = TakerConfig(
-            mnemonic="abandon abandon abandon abandon abandon abandon "
-            "abandon abandon abandon abandon abandon about",
-            network=NetworkType.REGTEST,
-            directory_servers=["localhost:5222"],
-            max_maker_replacement_attempts=10,
-        )
+        config = make_taker_config(max_maker_replacement_attempts=10)
         assert config.max_maker_replacement_attempts == 10
 
         # Should reject value > 10
-        import pytest
-
         with pytest.raises(ValueError):
-            TakerConfig(
-                mnemonic="abandon abandon abandon abandon abandon abandon "
-                "abandon abandon abandon abandon abandon about",
-                network=NetworkType.REGTEST,
-                directory_servers=["localhost:5222"],
-                max_maker_replacement_attempts=11,
-            )
+            make_taker_config(max_maker_replacement_attempts=11)
 
 
 # --- Tests for MultiDirectoryClient Direct Peer Connections ---
@@ -719,16 +536,7 @@ class TestMultiDirectoryClientDirectConnections:
 
     def test_direct_connections_enabled_by_default(self):
         """Test that direct connections are enabled by default."""
-        from jmcore.crypto import NickIdentity
-
-        from taker.taker import MultiDirectoryClient
-
-        nick_identity = NickIdentity(5)
-        client = MultiDirectoryClient(
-            directory_servers=["localhost:5222"],
-            network="regtest",
-            nick_identity=nick_identity,
-        )
+        client = make_directory_client()
 
         assert client.prefer_direct_connections is True
         assert client.our_location == "NOT-SERVING-ONION"
@@ -736,64 +544,26 @@ class TestMultiDirectoryClientDirectConnections:
 
     def test_direct_connections_can_be_disabled(self):
         """Test that direct connections can be disabled."""
-        from jmcore.crypto import NickIdentity
-
-        from taker.taker import MultiDirectoryClient
-
-        nick_identity = NickIdentity(5)
-        client = MultiDirectoryClient(
-            directory_servers=["localhost:5222"],
-            network="regtest",
-            nick_identity=nick_identity,
-            prefer_direct_connections=False,
-        )
+        client = make_directory_client(prefer_direct_connections=False)
 
         assert client.prefer_direct_connections is False
 
     def test_get_peer_location_returns_none_when_not_found(self):
         """Test _get_peer_location returns None for unknown nicks."""
-        from jmcore.crypto import NickIdentity
-
-        from taker.taker import MultiDirectoryClient
-
-        nick_identity = NickIdentity(5)
-        client = MultiDirectoryClient(
-            directory_servers=["localhost:5222"],
-            network="regtest",
-            nick_identity=nick_identity,
-        )
+        client = make_directory_client()
 
         location = client._get_peer_location("J5unknown")
         assert location is None
 
     def test_should_try_direct_connect_disabled(self):
         """Test _should_try_direct_connect returns False when disabled."""
-        from jmcore.crypto import NickIdentity
-
-        from taker.taker import MultiDirectoryClient
-
-        nick_identity = NickIdentity(5)
-        client = MultiDirectoryClient(
-            directory_servers=["localhost:5222"],
-            network="regtest",
-            nick_identity=nick_identity,
-            prefer_direct_connections=False,
-        )
+        client = make_directory_client(prefer_direct_connections=False)
 
         assert not client._should_try_direct_connect("J5maker")
 
     def test_get_connected_peer_returns_none_when_not_connected(self):
         """Test _get_connected_peer returns None when no connection exists."""
-        from jmcore.crypto import NickIdentity
-
-        from taker.taker import MultiDirectoryClient
-
-        nick_identity = NickIdentity(5)
-        client = MultiDirectoryClient(
-            directory_servers=["localhost:5222"],
-            network="regtest",
-            nick_identity=nick_identity,
-        )
+        client = make_directory_client()
 
         peer = client._get_connected_peer("J5maker")
         assert peer is None
@@ -803,17 +573,9 @@ class TestMultiDirectoryClientDirectConnections:
         """Test that peer connections are cleaned up on close."""
         from unittest.mock import AsyncMock
 
-        from jmcore.crypto import NickIdentity
         from jmcore.network import OnionPeer
 
-        from taker.taker import MultiDirectoryClient
-
-        nick_identity = NickIdentity(5)
-        client = MultiDirectoryClient(
-            directory_servers=["localhost:5222"],
-            network="regtest",
-            nick_identity=nick_identity,
-        )
+        client = make_directory_client()
 
         # Add a mock peer
         mock_peer = Mock(spec=OnionPeer)
@@ -912,15 +674,7 @@ class TestSweepCjAmountPreservation:
     @pytest.fixture
     def taker_config_for_sweep(self):
         """Taker config for sweep mode test."""
-        from jmcore.models import NetworkType
-
-        from taker.config import TakerConfig
-
-        return TakerConfig(
-            mnemonic="abandon abandon abandon abandon abandon abandon "
-            "abandon abandon abandon abandon abandon about",
-            network=NetworkType.REGTEST,
-            directory_servers=["localhost:5222"],
+        return make_taker_config(
             counterparty_count=1,
             minimum_makers=1,
             taker_utxo_age=1,
@@ -930,6 +684,39 @@ class TestSweepCjAmountPreservation:
             order_wait_time=10.0,
             fee_rate=1.0,  # 1 sat/vB
         )
+
+    @staticmethod
+    def _make_single_utxo_maker_session() -> tuple[str, MakerSession]:
+        """Create a maker session with a single UTXO for sweep tests.
+
+        Returns (nick, session) tuple ready to assign to taker.maker_sessions.
+        """
+        nick = "J55Jha4vGPR5fTFv"
+        maker_offer = Offer(
+            ordertype=OfferType.SW0_ABSOLUTE,  # Absolute fee = 0
+            oid=0,
+            minsize=10000,
+            maxsize=1_000_000_000,
+            txfee=500,  # Maker contributes 500 sats to tx fee
+            cjfee=0,  # Zero fee
+            counterparty=nick,
+        )
+        session = MakerSession(nick=nick, offer=maker_offer)
+        session.pubkey = "e131e3bb667eb124" + "00" * 24
+        session.responded_fill = True
+        session.responded_auth = True
+        session.utxos = [
+            {
+                "txid": "3" * 64,
+                "vout": 18,
+                "value": 467_555,
+                "address": "bcrt1qmaker",
+            }
+        ]
+        session.cj_address = "bcrt1qqyqszqgpqyqszqgpqyqszqgpqyqszqgpvxat9t"
+        session.change_address = "bcrt1qqgpqyqszqgpqyqszqgpqyqszqgpqyqszazmwwa"
+        session.crypto = CryptoSession()
+        return nick, session
 
     @pytest.mark.asyncio
     async def test_sweep_preserves_cj_amount_from_fill(
@@ -971,35 +758,9 @@ class TestSweepCjAmountPreservation:
         taker.cj_amount = initial_cj_amount
 
         # Set up a mock maker session with offer
-        maker_offer = Offer(
-            ordertype=OfferType.SW0_ABSOLUTE,  # Absolute fee = 0
-            oid=0,
-            minsize=10000,
-            maxsize=1_000_000_000,
-            txfee=500,  # Maker contributes 500 sats to tx fee
-            cjfee=0,  # Zero fee
-            counterparty="J55Jha4vGPR5fTFv",
-        )
-
         # Simulate !ioauth response - maker has only 1 input (not 2 as estimated)
-        maker_session = MakerSession(nick="J55Jha4vGPR5fTFv", offer=maker_offer)
-        maker_session.pubkey = "e131e3bb667eb124" + "00" * 24
-        maker_session.responded_fill = True
-        maker_session.responded_auth = True
-        # Maker has 1 UTXO (we estimated 2)
-        maker_session.utxos = [
-            {
-                "txid": "3333333333333333333333333333333333333333333333333333333333333333",
-                "vout": 18,
-                "value": 467_555,
-                "address": "bcrt1qmaker",
-            }
-        ]
-        maker_session.cj_address = "bcrt1qqyqszqgpqyqszqgpqyqszqgpqyqszqgpvxat9t"
-        maker_session.change_address = "bcrt1qqgpqyqszqgpqyqszqgpqyqszqgpqyqszazmwwa"
-        maker_session.crypto = CryptoSession()
-
-        taker.maker_sessions = {"J55Jha4vGPR5fTFv": maker_session}
+        nick, maker_session = self._make_single_utxo_maker_session()
+        taker.maker_sessions = {nick: maker_session}
 
         # Call _phase_build_tx - this is where the bug occurred
         result = await taker._phase_build_tx(
@@ -1050,33 +811,8 @@ class TestSweepCjAmountPreservation:
         taker.cj_amount = total_input - budget
 
         # Maker with only 1 input (different from the estimated 2+buffer)
-        maker_offer = Offer(
-            ordertype=OfferType.SW0_ABSOLUTE,
-            oid=0,
-            minsize=10000,
-            maxsize=1_000_000_000,
-            txfee=500,
-            cjfee=0,
-            counterparty="J55Jha4vGPR5fTFv",
-        )
-
-        maker_session = MakerSession(nick="J55Jha4vGPR5fTFv", offer=maker_offer)
-        maker_session.pubkey = "e131e3bb667eb124" + "00" * 24
-        maker_session.responded_fill = True
-        maker_session.responded_auth = True
-        maker_session.utxos = [
-            {
-                "txid": "3333333333333333333333333333333333333333333333333333333333333333",
-                "vout": 18,
-                "value": 467_555,
-                "address": "bcrt1qmaker",
-            }
-        ]
-        maker_session.cj_address = "bcrt1qqyqszqgpqyqszqgpqyqszqgpqyqszqgpvxat9t"
-        maker_session.change_address = "bcrt1qqgpqyqszqgpqyqszqgpqyqszqgpqyqszazmwwa"
-        maker_session.crypto = CryptoSession()
-
-        taker.maker_sessions = {"J55Jha4vGPR5fTFv": maker_session}
+        nick, maker_session = self._make_single_utxo_maker_session()
+        taker.maker_sessions = {nick: maker_session}
 
         result = await taker._phase_build_tx(
             destination="bcrt1qqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcruj60yu",
@@ -1215,7 +951,6 @@ async def test_blacklist_rejection_doesnt_ignore_maker(
     ignore the maker. The maker might accept a different commitment.
     """
     from taker.orderbook import OrderbookManager
-    from taker.taker import PhaseResult
 
     taker = Taker(mock_wallet, mock_backend, mock_config)
     taker.orderbook_manager = OrderbookManager(
@@ -1271,19 +1006,14 @@ class TestUpdatePendingTransactionNow:
     """Tests for immediate pending transaction update on coinjoin completion."""
 
     @pytest.fixture
-    def temp_data_dir(self, tmp_path):
-        """Create a temporary data directory."""
-        return tmp_path
-
-    @pytest.fixture
-    def taker_with_backend(self, mock_wallet, mock_backend, mock_config, temp_data_dir):
+    def taker_with_backend(self, mock_wallet, mock_backend, mock_config, tmp_path):
         """Create a taker with a mock backend and temp data dir."""
-        mock_config.data_dir = temp_data_dir
+        mock_config.data_dir = tmp_path
         mock_backend.has_mempool_access = Mock(return_value=True)
         return Taker(mock_wallet, mock_backend, mock_config)
 
     @pytest.mark.asyncio
-    async def test_update_pending_tx_with_mempool_access(self, taker_with_backend, temp_data_dir):
+    async def test_update_pending_tx_with_mempool_access(self, taker_with_backend, tmp_path):
         """Test that pending transaction is updated when mempool access is available."""
         from jmwallet.backends.base import Transaction
         from jmwallet.history import (
@@ -1309,10 +1039,10 @@ class TestUpdatePendingTransactionNow:
             selected_utxos=[("b" * 64, 0)],
             txid=txid,
         )
-        append_history_entry(entry, data_dir=temp_data_dir)
+        append_history_entry(entry, data_dir=tmp_path)
 
         # Verify it's pending
-        pending = get_pending_transactions(data_dir=temp_data_dir)
+        pending = get_pending_transactions(data_dir=tmp_path)
         assert len(pending) == 1
         assert pending[0].txid == txid
 
@@ -1329,17 +1059,17 @@ class TestUpdatePendingTransactionNow:
         await taker._update_pending_transaction_now(txid, destination)
 
         # Verify transaction is no longer pending
-        pending = get_pending_transactions(data_dir=temp_data_dir)
+        pending = get_pending_transactions(data_dir=tmp_path)
         assert len(pending) == 0
 
         # Verify history shows it as confirmed
-        history = read_history(data_dir=temp_data_dir)
+        history = read_history(data_dir=tmp_path)
         assert len(history) == 1
         assert history[0].success is True
         assert history[0].confirmations >= 1
 
     @pytest.mark.asyncio
-    async def test_update_pending_tx_with_confirmations(self, taker_with_backend, temp_data_dir):
+    async def test_update_pending_tx_with_confirmations(self, taker_with_backend, tmp_path):
         """Test that confirmation count is properly recorded."""
         from jmwallet.backends.base import Transaction
         from jmwallet.history import (
@@ -1364,7 +1094,7 @@ class TestUpdatePendingTransactionNow:
             selected_utxos=[("d" * 64, 1)],
             txid=txid,
         )
-        append_history_entry(entry, data_dir=temp_data_dir)
+        append_history_entry(entry, data_dir=tmp_path)
 
         # Mock backend to return transaction with 3 confirmations
         taker.backend.get_transaction = AsyncMock(
@@ -1379,14 +1109,14 @@ class TestUpdatePendingTransactionNow:
         await taker._update_pending_transaction_now(txid, destination)
 
         # Verify history shows correct confirmation count
-        history = read_history(data_dir=temp_data_dir)
+        history = read_history(data_dir=tmp_path)
         assert len(history) == 1
         assert history[0].confirmations == 3
         assert history[0].success is True
 
     @pytest.mark.asyncio
     async def test_update_pending_tx_without_mempool_access(
-        self, mock_wallet, mock_backend, mock_config, temp_data_dir
+        self, mock_wallet, mock_backend, mock_config, tmp_path
     ):
         """Test behavior when backend has no mempool access (Neutrino)."""
         from jmwallet.history import (
@@ -1395,7 +1125,7 @@ class TestUpdatePendingTransactionNow:
             get_pending_transactions,
         )
 
-        mock_config.data_dir = temp_data_dir
+        mock_config.data_dir = tmp_path
         mock_backend.has_mempool_access = Mock(return_value=False)
         mock_backend.get_block_height = AsyncMock(return_value=100)
         # Simulate unconfirmed transaction (verify_tx_output returns False)
@@ -1417,18 +1147,18 @@ class TestUpdatePendingTransactionNow:
             selected_utxos=[("f" * 64, 0)],
             txid=txid,
         )
-        append_history_entry(entry, data_dir=temp_data_dir)
+        append_history_entry(entry, data_dir=tmp_path)
 
         # Call the update method - should not update since not confirmed
         await taker._update_pending_transaction_now(txid, destination)
 
         # Transaction should still be pending (Neutrino can't see mempool)
-        pending = get_pending_transactions(data_dir=temp_data_dir)
+        pending = get_pending_transactions(data_dir=tmp_path)
         assert len(pending) == 1
 
     @pytest.mark.asyncio
     async def test_update_pending_tx_neutrino_confirmed(
-        self, mock_wallet, mock_backend, mock_config, temp_data_dir
+        self, mock_wallet, mock_backend, mock_config, tmp_path
     ):
         """Test Neutrino backend with confirmed transaction."""
         from jmwallet.history import (
@@ -1438,7 +1168,7 @@ class TestUpdatePendingTransactionNow:
             read_history,
         )
 
-        mock_config.data_dir = temp_data_dir
+        mock_config.data_dir = tmp_path
         mock_backend.has_mempool_access = Mock(return_value=False)
         mock_backend.get_block_height = AsyncMock(return_value=100)
         # Simulate confirmed transaction (verify_tx_output returns True)
@@ -1460,17 +1190,17 @@ class TestUpdatePendingTransactionNow:
             selected_utxos=[("h" * 64, 0)],
             txid=txid,
         )
-        append_history_entry(entry, data_dir=temp_data_dir)
+        append_history_entry(entry, data_dir=tmp_path)
 
         # Call the update method
         await taker._update_pending_transaction_now(txid, destination)
 
         # Verify transaction is no longer pending
-        pending = get_pending_transactions(data_dir=temp_data_dir)
+        pending = get_pending_transactions(data_dir=tmp_path)
         assert len(pending) == 0
 
         # Verify history shows it as confirmed
-        history = read_history(data_dir=temp_data_dir)
+        history = read_history(data_dir=tmp_path)
         assert len(history) == 1
         assert history[0].success is True
         assert history[0].confirmations == 1
@@ -1485,12 +1215,7 @@ class TestHistoryMiningFeeRecording:
     to miners) and can differ in normal mode (signature size variance).
     """
 
-    @pytest.fixture
-    def temp_data_dir(self, tmp_path):
-        """Create a temporary data directory."""
-        return tmp_path
-
-    def test_sweep_actual_mining_fee_exceeds_estimate(self, temp_data_dir) -> None:
+    def test_sweep_actual_mining_fee_exceeds_estimate(self, tmp_path) -> None:
         """Verify that actual mining fee (not estimated) is recorded for sweeps.
 
         In sweep mode, the taker has no change output. The equation is:
@@ -1526,10 +1251,10 @@ class TestHistoryMiningFeeRecording:
             txid="",
             failure_reason="Awaiting transaction",
         )
-        append_history_entry(entry, data_dir=temp_data_dir)
+        append_history_entry(entry, data_dir=tmp_path)
 
         # Verify initial state: net_fee only reflects maker fees (bug behavior)
-        history = read_history(data_dir=temp_data_dir)
+        history = read_history(data_dir=tmp_path)
         assert history[0].mining_fee_paid == 0
         assert history[0].net_fee == -(maker_fees + 0)  # -6, missing mining fee
 
@@ -1540,18 +1265,18 @@ class TestHistoryMiningFeeRecording:
             change_address="",
             txid="7d374988a00caf0c41d02fdd925c1a65023cf5676ecc3cedbcbfb6fa42999511",
             mining_fee=actual_mining_fee,
-            data_dir=temp_data_dir,
+            data_dir=tmp_path,
         )
         assert updated is True
 
         # Verify: mining fee and net_fee correctly reflect the full cost
-        history = read_history(data_dir=temp_data_dir)
+        history = read_history(data_dir=tmp_path)
         assert len(history) == 1
         assert history[0].mining_fee_paid == 315
         assert history[0].net_fee == -(maker_fees + actual_mining_fee)  # -(6 + 315) = -321
         assert history[0].total_maker_fees_paid == maker_fees
 
-    def test_normal_mode_mining_fee_recorded(self, temp_data_dir) -> None:
+    def test_normal_mode_mining_fee_recorded(self, tmp_path) -> None:
         """Verify mining fee is correctly recorded in normal (non-sweep) mode.
 
         In normal mode, the taker has a change output that absorbs the difference
@@ -1581,7 +1306,7 @@ class TestHistoryMiningFeeRecording:
             txid="",
             failure_reason="Awaiting transaction",
         )
-        append_history_entry(entry, data_dir=temp_data_dir)
+        append_history_entry(entry, data_dir=tmp_path)
 
         # Update with actual mining fee
         updated = update_taker_awaiting_transaction_broadcast(
@@ -1589,10 +1314,10 @@ class TestHistoryMiningFeeRecording:
             change_address="bcrt1qnormalchange123",
             txid="d" * 64,
             mining_fee=actual_mining_fee,
-            data_dir=temp_data_dir,
+            data_dir=tmp_path,
         )
         assert updated is True
 
-        history = read_history(data_dir=temp_data_dir)
+        history = read_history(data_dir=tmp_path)
         assert history[0].mining_fee_paid == actual_mining_fee
         assert history[0].net_fee == -(maker_fees + actual_mining_fee)  # -(500 + 750) = -1250

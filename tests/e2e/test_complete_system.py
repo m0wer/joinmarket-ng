@@ -14,6 +14,7 @@ Requires: docker compose --profile e2e up -d
 """
 
 import asyncio
+import subprocess
 
 import pytest
 import pytest_asyncio
@@ -53,6 +54,30 @@ GENERIC_TEST_MNEMONIC = (
     "abandon abandon abandon abandon abandon about"
 )
 
+# Address used for mining blocks (valid P2WPKH on regtest)
+MINING_ADDRESS = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080"
+
+
+def _require_docker_container(name: str) -> None:
+    """Skip the test if a Docker container is not running."""
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", name],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.stdout.strip() != "true":
+            pytest.skip(
+                f"Docker {name} not running. Start with: docker compose --profile e2e up -d"
+            )
+    except (
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        subprocess.CalledProcessError,
+    ):
+        pytest.skip("Docker not available or containers not running")
+
 
 @pytest.fixture
 def bitcoin_backend():
@@ -64,13 +89,20 @@ def bitcoin_backend():
     )
 
 
-@pytest_asyncio.fixture
-async def funded_wallet(bitcoin_backend):
-    """Create and fund a test wallet using the generic mnemonic"""
+async def _create_funded_wallet(
+    bitcoin_backend: BitcoinCoreBackend,
+    mnemonic: str,
+    *,
+    skip_msg: str = "Wallet has no funds. Auto-funding failed; please fund manually.",
+):
+    """Factory: create a WalletService, sync it, auto-fund if empty, and yield.
+
+    Callers receive an async-generator suitable for ``pytest_asyncio.fixture``.
+    """
     from tests.e2e.rpc_utils import ensure_wallet_funded
 
     wallet = WalletService(
-        mnemonic=GENERIC_TEST_MNEMONIC,
+        mnemonic=mnemonic,
         backend=bitcoin_backend,
         network="regtest",
         mixdepth_count=5,
@@ -90,12 +122,19 @@ async def funded_wallet(bitcoin_backend):
 
     if total_balance == 0:
         await wallet.close()
-        pytest.skip("Wallet has no funds. Auto-funding failed; please fund manually.")
+        pytest.skip(skip_msg)
 
     try:
         yield wallet
     finally:
         await wallet.close()
+
+
+@pytest_asyncio.fixture
+async def funded_wallet(bitcoin_backend):
+    """Create and fund a test wallet using the generic mnemonic."""
+    async for w in _create_funded_wallet(bitcoin_backend, GENERIC_TEST_MNEMONIC):
+        yield w
 
 
 @pytest.fixture(scope="module")
@@ -242,9 +281,7 @@ async def mined_chain(bitcoin_backend):
 
     height = await bitcoin_backend.get_block_height()
     if height < 101:
-        # Mine to a fixed valid address (P2WPKH) since node runs wallet-free
-        addr = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080"
-        await mine_blocks(101 - height + 10, addr)
+        await mine_blocks(101 - height + 10, MINING_ADDRESS)
     return True
 
 
@@ -394,105 +431,34 @@ async def test_maker_bot_connect_directory(
 @pytest_asyncio.fixture
 async def funded_taker_wallet(bitcoin_backend):
     """Create and fund a taker wallet using taker mnemonic."""
-    from tests.e2e.rpc_utils import ensure_wallet_funded
-
-    wallet = WalletService(
-        mnemonic=TAKER_MNEMONIC,
-        backend=bitcoin_backend,
-        network="regtest",
-        mixdepth_count=5,
-    )
-
-    await wallet.sync_all()
-
-    total_balance = await wallet.get_total_balance()
-    if total_balance == 0:
-        funding_address = wallet.get_receive_address(0, 0)
-        funded = await ensure_wallet_funded(
-            funding_address, amount_btc=1.0, confirmations=2
-        )
-        if funded:
-            await wallet.sync_all()
-            total_balance = await wallet.get_total_balance()
-
-    if total_balance == 0:
-        await wallet.close()
-        pytest.skip(
-            "Taker wallet has no funds. Auto-funding failed; please fund manually."
-        )
-
-    try:
-        yield wallet
-    finally:
-        await wallet.close()
+    async for w in _create_funded_wallet(
+        bitcoin_backend,
+        TAKER_MNEMONIC,
+        skip_msg="Taker wallet has no funds. Auto-funding failed; please fund manually.",
+    ):
+        yield w
 
 
 @pytest_asyncio.fixture
 async def funded_maker1_wallet(bitcoin_backend):
     """Create and fund maker1 wallet."""
-    from tests.e2e.rpc_utils import ensure_wallet_funded
-
-    wallet = WalletService(
-        mnemonic=MAKER1_MNEMONIC,
-        backend=bitcoin_backend,
-        network="regtest",
-        mixdepth_count=5,
-    )
-
-    await wallet.sync_all()
-
-    total_balance = await wallet.get_total_balance()
-    if total_balance == 0:
-        funding_address = wallet.get_receive_address(0, 0)
-        funded = await ensure_wallet_funded(
-            funding_address, amount_btc=1.0, confirmations=2
-        )
-        if funded:
-            await wallet.sync_all()
-            total_balance = await wallet.get_total_balance()
-
-    if total_balance == 0:
-        await wallet.close()
-        pytest.skip("Maker1 wallet has no funds.")
-
-    try:
-        yield wallet
-    finally:
-        await wallet.close()
+    async for w in _create_funded_wallet(
+        bitcoin_backend,
+        MAKER1_MNEMONIC,
+        skip_msg="Maker1 wallet has no funds.",
+    ):
+        yield w
 
 
 @pytest_asyncio.fixture
 async def funded_maker2_wallet(bitcoin_backend):
     """Create and fund maker2 wallet."""
-    from tests.e2e.rpc_utils import ensure_wallet_funded
-
-    wallet = WalletService(
-        mnemonic=MAKER2_MNEMONIC,
-        backend=bitcoin_backend,
-        network="regtest",
-        mixdepth_count=5,
-    )
-
-    await wallet.sync_all()
-
-    total_balance = await wallet.get_total_balance()
-    if total_balance == 0:
-        funding_address = wallet.get_receive_address(0, 0)
-        funded = await ensure_wallet_funded(
-            funding_address, amount_btc=1.0, confirmations=2
-        )
-        if funded:
-            await wallet.sync_all()
-            total_balance = await wallet.get_total_balance()
-
-    if total_balance == 0:
-        await wallet.close()
-        pytest.skip("Maker2 wallet has no funds.")
-
-    try:
-        yield wallet
-    finally:
-        await wallet.close()
+    async for w in _create_funded_wallet(
+        bitcoin_backend,
+        MAKER2_MNEMONIC,
+        skip_msg="Maker2 wallet has no funds.",
+    ):
+        yield w
 
 
 @pytest.mark.asyncio
@@ -893,45 +859,15 @@ async def test_complete_coinjoin_two_makers(
     Note: This test uses Docker makers (funded by wallet-funder service) rather than
     in-process makers. This tests the real deployment scenario.
     """
-    import subprocess
-
     from tests.e2e.rpc_utils import mine_blocks
 
     # Check if Docker makers are running
-    try:
-        result = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Running}}", "jm-maker1"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.stdout.strip() != "true":
-            pytest.skip(
-                "Docker maker1 not running. Start with: docker compose --profile e2e up -d"
-            )
-
-        # Also verify maker2
-        result2 = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Running}}", "jm-maker2"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result2.stdout.strip() != "true":
-            pytest.skip(
-                "Docker maker2 not running. Start with: docker compose --profile e2e up -d"
-            )
-    except (
-        subprocess.TimeoutExpired,
-        FileNotFoundError,
-        subprocess.CalledProcessError,
-    ):
-        pytest.skip("Docker not available or makers not running")
+    _require_docker_container("jm-maker1")
+    _require_docker_container("jm-maker2")
 
     # Ensure coinbase maturity: mine extra blocks for any recent coinbase outputs
     print("Mining blocks to ensure coinbase maturity...")
-    addr = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080"
-    await mine_blocks(10, addr)
+    await mine_blocks(10, MINING_ADDRESS)
 
     # Create taker wallet
     taker_wallet = WalletService(
@@ -1039,33 +975,14 @@ async def test_coinjoin_with_multi_utxo_maker(
 
     Requires: docker compose --profile e2e up -d
     """
-    import subprocess
-
     from tests.e2e.rpc_utils import mine_blocks
 
     # Check if Docker maker3 is running (it has many UTXOs from mining)
-    try:
-        result = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Running}}", "jm-maker3"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.stdout.strip() != "true":
-            pytest.skip(
-                "Docker maker3 not running. Start with: docker compose --profile e2e up -d"
-            )
-    except (
-        subprocess.TimeoutExpired,
-        FileNotFoundError,
-        subprocess.CalledProcessError,
-    ):
-        pytest.skip("Docker not available or maker3 not running")
+    _require_docker_container("jm-maker3")
 
     # Mine extra blocks to ensure coinbase maturity
     print("Mining blocks to ensure coinbase maturity...")
-    addr = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080"
-    await mine_blocks(10, addr)
+    await mine_blocks(10, MINING_ADDRESS)
 
     # Create taker wallet
     taker_wallet = WalletService(

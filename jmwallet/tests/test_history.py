@@ -4,10 +4,10 @@ Tests for transaction history tracking.
 
 from __future__ import annotations
 
-import tempfile
-from collections.abc import Generator
+import struct
+from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -19,6 +19,7 @@ from jmwallet.history import (
     create_maker_history_entry,
     create_taker_history_entry,
     detect_coinjoin_peer_count,
+    get_address_history_types,
     get_history_stats,
     get_pending_transactions,
     get_used_addresses,
@@ -33,11 +34,64 @@ from jmwallet.history import (
 )
 
 
-@pytest.fixture
-def temp_data_dir() -> Generator[Path, None, None]:
-    """Create a temporary data directory for tests."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
+def _make_pending_maker_entry(
+    *,
+    cj_address: str = "bc1qtest...",
+    change_address: str = "bc1qchange...",
+    txid: str = "",
+    taker_nick: str = "J5taker",
+    cj_amount: int = 1_000_000,
+    fee_received: int = 250,
+    txfee_contribution: int = 50,
+    our_utxos: list[tuple[str, int]] | None = None,
+    network: str = "mainnet",
+) -> TransactionHistoryEntry:
+    """Create a pending maker history entry with standard defaults."""
+    return create_maker_history_entry(
+        taker_nick=taker_nick,
+        cj_amount=cj_amount,
+        fee_received=fee_received,
+        txfee_contribution=txfee_contribution,
+        cj_address=cj_address,
+        change_address=change_address,
+        our_utxos=our_utxos or [("abc123", 0)],
+        txid=txid,
+        network=network,
+    )
+
+
+def _make_pending_taker_entry(
+    *,
+    destination: str = "bc1qdest...",
+    change_address: str = "bc1qchange...",
+    txid: str = "",
+    maker_nicks: list[str] | None = None,
+    cj_amount: int = 1_000_000,
+    total_maker_fees: int = 500,
+    mining_fee: int = 100,
+    source_mixdepth: int = 0,
+    selected_utxos: list[tuple[str, int]] | None = None,
+    broadcast_method: str = "self",
+    network: str = "mainnet",
+    failure_reason: str | None = None,
+) -> TransactionHistoryEntry:
+    """Create a pending taker history entry with standard defaults."""
+    kwargs: dict[str, object] = dict(
+        maker_nicks=maker_nicks or ["J5maker1"],
+        cj_amount=cj_amount,
+        total_maker_fees=total_maker_fees,
+        mining_fee=mining_fee,
+        destination=destination,
+        change_address=change_address,
+        source_mixdepth=source_mixdepth,
+        selected_utxos=selected_utxos or [("utxo1", 0)],
+        txid=txid,
+        broadcast_method=broadcast_method,
+        network=network,
+    )
+    if failure_reason is not None:
+        kwargs["failure_reason"] = failure_reason
+    return create_taker_history_entry(**kwargs)  # type: ignore[arg-type]
 
 
 class TestTransactionHistoryEntry:
@@ -294,16 +348,7 @@ class TestPendingTransactions:
 
     def test_create_maker_entry_is_pending(self) -> None:
         """Test that newly created maker entries are marked as pending."""
-        entry = create_maker_history_entry(
-            taker_nick="J5taker",
-            cj_amount=1_000_000,
-            fee_received=250,
-            txfee_contribution=50,
-            cj_address="bc1qtest...",
-            change_address="bc1qchange...",
-            our_utxos=[("abc123", 0)],
-            txid="test_txid_123",
-        )
+        entry = _make_pending_maker_entry(txid="test_txid_123")
 
         # Should be marked as pending initially
         assert entry.success is False
@@ -314,17 +359,7 @@ class TestPendingTransactions:
 
     def test_create_taker_entry_is_pending(self) -> None:
         """Test that newly created taker entries are marked as pending by default."""
-        entry = create_taker_history_entry(
-            maker_nicks=["J5maker1"],
-            cj_amount=1_000_000,
-            total_maker_fees=500,
-            mining_fee=100,
-            destination="bc1qdest...",
-            change_address="bc1qchange...",
-            source_mixdepth=0,
-            selected_utxos=[("utxo1", 0)],
-            txid="test_txid_456",
-        )
+        entry = _make_pending_taker_entry(txid="test_txid_456")
 
         # Should be pending by default (Awaiting transaction)
         assert entry.success is False
@@ -336,16 +371,7 @@ class TestPendingTransactions:
     def test_get_pending_transactions(self, temp_data_dir: Path) -> None:
         """Test retrieving pending transactions."""
         # Add a pending entry
-        pending_entry = create_maker_history_entry(
-            taker_nick="J5taker",
-            cj_amount=1_000_000,
-            fee_received=250,
-            txfee_contribution=50,
-            cj_address="bc1qtest...",
-            change_address="bc1qchange...",
-            our_utxos=[("abc123", 0)],
-            txid="pending_tx",
-        )
+        pending_entry = _make_pending_maker_entry(txid="pending_tx")
         append_history_entry(pending_entry, temp_data_dir)
 
         # Add a confirmed entry
@@ -369,16 +395,7 @@ class TestPendingTransactions:
     def test_update_transaction_confirmation(self, temp_data_dir: Path) -> None:
         """Test updating transaction confirmation status."""
         # Create and save a pending entry
-        entry = create_maker_history_entry(
-            taker_nick="J5taker",
-            cj_amount=1_000_000,
-            fee_received=250,
-            txfee_contribution=50,
-            cj_address="bc1qtest...",
-            change_address="bc1qchange...",
-            our_utxos=[("abc123", 0)],
-            txid="test_tx_update",
-        )
+        entry = _make_pending_maker_entry(txid="test_tx_update")
         append_history_entry(entry, temp_data_dir)
 
         # Verify it's pending
@@ -405,16 +422,7 @@ class TestPendingTransactions:
     def test_update_transaction_confirmation_incremental(self, temp_data_dir: Path) -> None:
         """Test updating confirmations incrementally."""
         # Create and save a pending entry
-        entry = create_maker_history_entry(
-            taker_nick="J5taker",
-            cj_amount=1_000_000,
-            fee_received=250,
-            txfee_contribution=50,
-            cj_address="bc1qtest...",
-            change_address="bc1qchange...",
-            our_utxos=[("abc123", 0)],
-            txid="test_tx_incremental",
-        )
+        entry = _make_pending_maker_entry(txid="test_tx_incremental")
         append_history_entry(entry, temp_data_dir)
 
         # Update with 1 confirmation
@@ -449,14 +457,8 @@ class TestUsedAddressTracking:
         """Test get_used_addresses returns addresses from history."""
 
         # Add entries with different addresses
-        entry1 = create_maker_history_entry(
-            taker_nick="J5taker",
-            cj_amount=1_000_000,
-            fee_received=250,
-            txfee_contribution=50,
+        entry1 = _make_pending_maker_entry(
             cj_address="bc1qtest1address111111",
-            change_address="bc1qchange...",
-            our_utxos=[("abc123", 0)],
             txid="txid1" * 16,
         )
         append_history_entry(entry1, temp_data_dir)
@@ -519,14 +521,8 @@ class TestUsedAddressTracking:
         """Test that get_used_addresses includes pending transactions."""
 
         # Add a pending entry (no txid)
-        entry = create_maker_history_entry(
-            taker_nick="J5taker",
-            cj_amount=1_000_000,
-            fee_received=250,
-            txfee_contribution=50,
+        entry = _make_pending_maker_entry(
             cj_address="bc1qpending12345678",
-            change_address="bc1qchange...",
-            our_utxos=[("abc123", 0)],
             txid="",  # No txid yet - pending
         )
         append_history_entry(entry, temp_data_dir)
@@ -540,14 +536,8 @@ class TestUsedAddressTracking:
         """Test updating pending transaction with discovered txid."""
 
         # Create a pending entry without txid
-        entry = create_maker_history_entry(
-            taker_nick="J5taker",
-            cj_amount=1_000_000,
-            fee_received=250,
-            txfee_contribution=50,
+        entry = _make_pending_maker_entry(
             cj_address="bc1qdiscovered123456",
-            change_address="bc1qchange...",
-            our_utxos=[("abc123", 0)],
             txid="",  # No txid initially
         )
         append_history_entry(entry, temp_data_dir)
@@ -586,14 +576,8 @@ class TestUsedAddressTracking:
         """Test that update_pending_transaction_txid only updates entries without txid."""
 
         # Create entry that already has a txid
-        entry = create_maker_history_entry(
-            taker_nick="J5taker",
-            cj_amount=1_000_000,
-            fee_received=250,
-            txfee_contribution=50,
+        entry = _make_pending_maker_entry(
             cj_address="bc1qalreadyhas123456",
-            change_address="bc1qchange...",
-            our_utxos=[("abc123", 0)],
             txid="original_txid_12345678",
         )
         append_history_entry(entry, temp_data_dir)
@@ -613,17 +597,11 @@ class TestUsedAddressTracking:
 
     def test_get_used_addresses_includes_change_addresses(self, temp_data_dir: Path) -> None:
         """Test that get_used_addresses includes both CJ and change addresses."""
-        from jmwallet.history import get_used_addresses
 
         # Add entry with both cj_address and change_address
-        entry = create_maker_history_entry(
-            taker_nick="J5taker",
-            cj_amount=1_000_000,
-            fee_received=250,
-            txfee_contribution=50,
+        entry = _make_pending_maker_entry(
             cj_address="bc1qcoinjoin123456",
             change_address="bc1qchange789012345",
-            our_utxos=[("abc123", 0)],
             txid="txid1" * 16,
         )
         append_history_entry(entry, temp_data_dir)
@@ -854,16 +832,9 @@ class TestUpdateTakerAwaitingTransactionBroadcast:
     ) -> None:
         """Test that update only matches 'Awaiting transaction' entries."""
         # Create an entry with different failure_reason
-        entry = create_taker_history_entry(
-            maker_nicks=["J5maker1"],
-            cj_amount=1_000_000,
-            total_maker_fees=500,
-            mining_fee=100,
+        entry = _make_pending_taker_entry(
             destination="bc1qtakerpending123",
             change_address="bc1qtakerchange456",
-            source_mixdepth=0,
-            selected_utxos=[("utxo1", 0)],
-            txid="",
             failure_reason="Pending confirmation",  # Different status
         )
         append_history_entry(entry, temp_data_dir)
@@ -968,15 +939,9 @@ class TestUpdateTakerAwaitingTransactionBroadcast:
         self, temp_data_dir: Path
     ) -> None:
         """Test that entries with existing txid are not matched."""
-        entry = create_taker_history_entry(
-            maker_nicks=["J5maker1"],
-            cj_amount=1_000_000,
-            total_maker_fees=500,
-            mining_fee=100,
+        entry = _make_pending_taker_entry(
             destination="bc1qtakerwithtxid123",
             change_address="bc1qtakerchangetxid",
-            source_mixdepth=0,
-            selected_utxos=[("utxo1", 0)],
             txid="existing_taker_txid",  # Already has txid
             failure_reason="Awaiting transaction",
         )
@@ -1046,7 +1011,6 @@ class TestPeerCountDetection:
     @pytest.mark.asyncio
     async def test_detect_coinjoin_peer_count(self) -> None:
         """Test detecting peer count from equal-amount outputs."""
-        import struct
 
         # Create a minimal valid SegWit transaction with 4 equal outputs of 30,000 sats
         # Format: version(4) + marker(1) + flag(1) + inputs + outputs + witness + locktime(4)
@@ -1237,8 +1201,6 @@ class TestPeerCountDetection:
         )
 
         # Mock the peer count detection to return 4
-        from unittest.mock import patch
-
         with patch(
             "jmwallet.history.detect_coinjoin_peer_count",
             return_value=4,
@@ -1264,14 +1226,8 @@ class TestMarkPendingTransactionFailed:
     def test_mark_pending_transaction_failed_basic(self, temp_data_dir: Path) -> None:
         """Test marking a pending transaction as failed."""
         # Create a pending entry without txid (simulating taker never broadcast)
-        entry = create_maker_history_entry(
-            taker_nick="J5taker",
-            cj_amount=1_000_000,
-            fee_received=250,
-            txfee_contribution=50,
+        entry = _make_pending_maker_entry(
             cj_address="bc1qtimeout123456789",
-            change_address="bc1qchange...",
-            our_utxos=[("abc123", 0)],
             txid="",  # No txid - taker never broadcast
         )
         append_history_entry(entry, temp_data_dir)
@@ -1306,14 +1262,8 @@ class TestMarkPendingTransactionFailed:
     def test_mark_pending_transaction_failed_with_txid(self, temp_data_dir: Path) -> None:
         """Test marking a pending transaction with txid as failed."""
         # Create a pending entry with txid but never confirmed
-        entry = create_maker_history_entry(
-            taker_nick="J5taker",
-            cj_amount=1_000_000,
-            fee_received=250,
-            txfee_contribution=50,
+        entry = _make_pending_maker_entry(
             cj_address="bc1qneverconf12345",
-            change_address="bc1qchange...",
-            our_utxos=[("abc123", 0)],
             txid="deadbeef" * 8,  # Has txid but tx was never broadcast/confirmed
         )
         append_history_entry(entry, temp_data_dir)
@@ -1522,7 +1472,6 @@ class TestCleanupStalePendingTransactions:
 
     def test_cleanup_old_pending_entries(self, temp_data_dir: Path) -> None:
         """Test that old pending entries are cleaned up."""
-        from datetime import datetime, timedelta
 
         # Create an old pending entry (2 hours ago)
         old_timestamp = (datetime.now() - timedelta(hours=2)).isoformat()
@@ -1575,7 +1524,6 @@ class TestCleanupStalePendingTransactions:
 
     def test_cleanup_does_not_touch_confirmed(self, temp_data_dir: Path) -> None:
         """Test that confirmed entries are not affected by cleanup."""
-        from datetime import datetime, timedelta
 
         # Create an old confirmed entry
         old_timestamp = (datetime.now() - timedelta(hours=24)).isoformat()
@@ -1609,7 +1557,6 @@ class TestCleanupStalePendingTransactions:
 
     def test_cleanup_does_not_touch_already_failed(self, temp_data_dir: Path) -> None:
         """Test that already-failed entries are not re-processed."""
-        from datetime import datetime, timedelta
 
         # Create an old failed entry (has completed_at set)
         old_timestamp = (datetime.now() - timedelta(hours=24)).isoformat()
@@ -1653,7 +1600,6 @@ class TestAddressHistoryTypesAfterConfirmation:
         3. get_address_history_types should return 'cj_out' for destination_address
            and 'change' for change_address
         """
-        from jmwallet.history import get_address_history_types
 
         cj_address = "bc1q0690ccmpdrhha3eqau3ejha5p7pdyss0kxptzg"
         change_address = "bc1q8gkl5fg55zd4q3ff9jl2fkac287gks9akauaw6"
@@ -1708,7 +1654,6 @@ class TestAddressHistoryTypesAfterConfirmation:
 
     def test_mixed_pending_and_confirmed_entries(self, temp_data_dir: Path) -> None:
         """Test that pending entries are flagged while confirmed are typed correctly."""
-        from jmwallet.history import get_address_history_types
 
         # Create a confirmed entry
         confirmed_entry = TransactionHistoryEntry(
@@ -1758,7 +1703,6 @@ class TestAddressHistoryTypesAfterConfirmation:
         The fix ensures that once an address is used in a successful CoinJoin,
         it remains 'cj_out' or 'change' regardless of later failed transactions.
         """
-        from jmwallet.history import get_address_history_types
 
         cj_address = "bc1q0690ccmpdrhha3eqau3ejha5p7pdyss0kxptzg"
         change_address = "bc1q8gkl5fg55zd4q3ff9jl2fkac287gks9akauaw6"
@@ -1809,7 +1753,6 @@ class TestAddressHistoryTypesAfterConfirmation:
 
     def test_failed_only_address_is_flagged(self, temp_data_dir: Path) -> None:
         """Test that addresses ONLY used in failed transactions are flagged."""
-        from jmwallet.history import get_address_history_types
 
         # Create only failed entries for this address
         failed_entry = TransactionHistoryEntry(

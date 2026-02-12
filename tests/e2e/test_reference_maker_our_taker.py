@@ -641,6 +641,122 @@ pytestmark = [
     ),
 ]
 
+# Default taker funding address derived from default mnemonic: m/84'/1'/0'/0/0
+_TAKER_FUNDING_ADDRESS = "bcrt1q6rz28mcfaxtmd6v789l9rrlrusdprr9pz3cppk"
+
+# Indicators used to analyze taker output
+_SUCCESS_INDICATORS = [
+    "coinjoin completed",
+    "transaction broadcast",
+    "txid:",
+    "successfully",
+]
+
+
+async def _prepare_taker_environment(
+    compose_file: Path,
+    *,
+    funding_address: str = _TAKER_FUNDING_ADDRESS,
+    funding_btc: float = 3.0,
+) -> str:
+    """Shared pre-CoinJoin setup: ensure miner, sync nodes, fund taker, get dest address.
+
+    Returns the destination address for the CoinJoin output.
+    """
+    if not ensure_miner_wallet():
+        pytest.skip("Failed to setup miner wallet")
+
+    logger.info("Checking bitcoin node sync...")
+    if not _wait_for_node_sync(max_attempts=30):
+        pytest.fail("Bitcoin nodes failed to sync")
+
+    logger.info(f"Funding taker wallet at {funding_address}...")
+    funded = fund_jam_maker_wallet(funding_address, funding_btc)
+    if not funded:
+        pytest.fail("Failed to fund taker wallet")
+
+    await asyncio.sleep(5)  # wait for confirmations
+
+    result = run_bitcoin_cmd(["-rpcwallet=miner", "getnewaddress", "", "bech32"])
+    if result.returncode != 0:
+        pytest.fail(f"Failed to get destination address: {result.stderr}")
+    return result.stdout.strip()
+
+
+def _build_taker_docker_cmd(
+    compose_file: Path,
+    dest_address: str,
+    *,
+    amount: int = 10_000_000,
+    counterparties: int = 2,
+    mixdepth: int = 0,
+) -> list[str]:
+    """Build the ``docker compose run ... taker-reference jm-taker coinjoin`` command."""
+    return [
+        "docker",
+        "compose",
+        "-f",
+        str(compose_file),
+        "run",
+        "--rm",
+        "-e",
+        f"COINJOIN_AMOUNT={amount}",
+        "-e",
+        f"MIN_MAKERS={counterparties}",
+        "-e",
+        "MAX_CJ_FEE_REL=0.01",
+        "-e",
+        "MAX_CJ_FEE_ABS=100000",
+        "-e",
+        "LOG_LEVEL=DEBUG",
+        "taker-reference",
+        "jm-taker",
+        "coinjoin",
+        "--amount",
+        str(amount),
+        "--destination",
+        dest_address,
+        "--counterparties",
+        str(counterparties),
+        "--mixdepth",
+        str(mixdepth),
+        "--network",
+        "testnet",
+        "--bitcoin-network",
+        "regtest",
+        "--backend",
+        "scantxoutset",
+        "--max-abs-fee",
+        "100000",
+        "--max-rel-fee",
+        "0.01",
+        "--log-level",
+        "DEBUG",
+        "--yes",
+    ]
+
+
+def _run_taker_cmd(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    """Execute the taker Docker command and log output."""
+    logger.info(f"Taker command: {' '.join(cmd)}")
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=COINJOIN_TIMEOUT, check=False
+    )
+    logger.info(f"Taker stdout:\n{result.stdout}")
+    if result.stderr:
+        logger.info(f"Taker stderr:\n{result.stderr}")
+    return result
+
+
+def _analyze_taker_output(
+    result: subprocess.CompletedProcess[str],
+) -> tuple[str, str, bool]:
+    """Return ``(combined_output, lower_output, has_success)`` for a taker run."""
+    combined = result.stdout + result.stderr
+    lower = combined.lower()
+    has_success = any(ind in lower for ind in _SUCCESS_INDICATORS)
+    return combined, lower, has_success
+
 
 @pytest.fixture(scope="module")
 def reference_maker_services():
@@ -782,102 +898,12 @@ async def test_our_taker_with_reference_makers(
     Tor connections are needed between taker and makers.
     """
     compose_file = reference_maker_services["compose_file"]
+    dest_address = await _prepare_taker_environment(compose_file)
 
-    # Ensure miner wallet is ready
-    if not ensure_miner_wallet():
-        pytest.skip("Failed to setup miner wallet")
-
-    # Ensure bitcoin nodes are synced
-    logger.info("Checking bitcoin node sync...")
-    if not _wait_for_node_sync(max_attempts=30):
-        pytest.fail("Bitcoin nodes failed to sync")
-
-    # Fund the taker wallet
-    # The taker uses the default mnemonic which derives to this address
-    # Path: m/84'/1'/0'/0/0 for regtest (coin_type=1)
-    taker_address = "bcrt1q6rz28mcfaxtmd6v789l9rrlrusdprr9pz3cppk"
-    logger.info(f"Funding taker wallet at {taker_address}...")
-    funded = fund_jam_maker_wallet(taker_address, 3.0)  # 3 BTC for PoDLE requirement
-    if not funded:
-        pytest.fail("Failed to fund taker wallet")
-
-    # Wait for confirmations
-    await asyncio.sleep(5)
-
-    # Get a destination address from bitcoin node
     logger.info("Running our taker to execute CoinJoin...")
-    result = run_bitcoin_cmd(["-rpcwallet=miner", "getnewaddress", "", "bech32"])
-    if result.returncode != 0:
-        pytest.fail(f"Failed to get destination address: {result.stderr}")
-    dest_address = result.stdout.strip()
-
-    # Run the taker-reference container (has Tor access for direct connections)
-    # The taker is configured via docker-compose with environment variables
-    cmd = [
-        "docker",
-        "compose",
-        "-f",
-        str(compose_file),
-        "run",
-        "--rm",
-        "-e",
-        "COINJOIN_AMOUNT=10000000",  # 0.1 BTC
-        "-e",
-        "MIN_MAKERS=2",
-        "-e",
-        "MAX_CJ_FEE_REL=0.01",  # 1% max fee
-        "-e",
-        "MAX_CJ_FEE_ABS=100000",  # 100k sats max
-        "-e",
-        "LOG_LEVEL=DEBUG",
-        "taker-reference",
-        "jm-taker",
-        "coinjoin",
-        "--amount",
-        "10000000",
-        "--destination",
-        dest_address,
-        "--counterparties",
-        "2",
-        "--mixdepth",
-        "0",
-        "--network",
-        "testnet",
-        "--bitcoin-network",
-        "regtest",
-        "--backend",
-        "scantxoutset",
-        "--max-abs-fee",
-        "100000",
-        "--max-rel-fee",
-        "0.01",
-        "--log-level",
-        "DEBUG",
-        "--yes",
-    ]
-
-    logger.info(f"Taker command: {' '.join(cmd)}")
-
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=COINJOIN_TIMEOUT, check=False
-    )
-
-    logger.info(f"Taker stdout:\n{result.stdout}")
-    if result.stderr:
-        logger.info(f"Taker stderr:\n{result.stderr}")
-
-    # Analyze results
-    output_combined = result.stdout + result.stderr
-    output_lower = output_combined.lower()
-
-    # Success indicators
-    success_indicators = [
-        "coinjoin completed",
-        "transaction broadcast",
-        "txid:",
-        "successfully",
-    ]
-    has_success = any(ind in output_lower for ind in success_indicators)
+    cmd = _build_taker_docker_cmd(compose_file, dest_address)
+    result = _run_taker_cmd(cmd)
+    output_combined, output_lower, has_success = _analyze_taker_output(result)
 
     # Partial success indicators - taker got far into the protocol
     partial_success_indicators = [
@@ -1044,98 +1070,12 @@ async def test_our_taker_uses_direct_connections_with_reference_makers(
     """
     compose_file = reference_maker_services["compose_file"]
 
-    # Ensure miner wallet is ready
-    if not ensure_miner_wallet():
-        pytest.skip("Failed to setup miner wallet")
-
-    # Ensure bitcoin nodes are synced
-    logger.info("Checking bitcoin node sync...")
-    if not _wait_for_node_sync(max_attempts=30):
-        pytest.fail("Bitcoin nodes failed to sync")
-
-    # Fund the taker wallet
-    taker_address = "bcrt1q6rz28mcfaxtmd6v789l9rrlrusdprr9pz3cppk"
-    logger.info(f"Funding taker wallet at {taker_address}...")
-    funded = fund_jam_maker_wallet(taker_address, 3.0)
-    if not funded:
-        pytest.fail("Failed to fund taker wallet")
-
-    # Wait for confirmations
-    await asyncio.sleep(5)
-
-    # Get a destination address from bitcoin node
     logger.info("Running our taker to execute CoinJoin with direct connections...")
-    result = run_bitcoin_cmd(["-rpcwallet=miner", "getnewaddress", "", "bech32"])
-    if result.returncode != 0:
-        pytest.fail(f"Failed to get destination address: {result.stderr}")
-    dest_address = result.stdout.strip()
+    dest_address = await _prepare_taker_environment(compose_file)
 
-    # Run the taker-reference container (has Tor for direct connections)
-    cmd = [
-        "docker",
-        "compose",
-        "-f",
-        str(compose_file),
-        "run",
-        "--rm",
-        "-e",
-        "COINJOIN_AMOUNT=10000000",
-        "-e",
-        "MIN_MAKERS=2",
-        "-e",
-        "MAX_CJ_FEE_REL=0.01",
-        "-e",
-        "MAX_CJ_FEE_ABS=100000",
-        "-e",
-        "LOG_LEVEL=DEBUG",
-        "taker-reference",
-        "jm-taker",
-        "coinjoin",
-        "--amount",
-        "10000000",
-        "--destination",
-        dest_address,
-        "--counterparties",
-        "2",
-        "--mixdepth",
-        "0",
-        "--network",
-        "testnet",
-        "--bitcoin-network",
-        "regtest",
-        "--backend",
-        "scantxoutset",
-        "--max-abs-fee",
-        "100000",
-        "--max-rel-fee",
-        "0.01",
-        "--log-level",
-        "DEBUG",
-        "--yes",
-    ]
-
-    logger.info(f"Taker command: {' '.join(cmd)}")
-
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=COINJOIN_TIMEOUT, check=False
-    )
-
-    logger.info(f"Taker stdout:\n{result.stdout}")
-    if result.stderr:
-        logger.info(f"Taker stderr:\n{result.stderr}")
-
-    # Analyze results
-    output_combined = result.stdout + result.stderr
-    output_lower = output_combined.lower()
-
-    # Success indicators
-    success_indicators = [
-        "coinjoin completed",
-        "transaction broadcast",
-        "txid:",
-        "successfully",
-    ]
-    has_success = any(ind in output_lower for ind in success_indicators)
+    cmd = _build_taker_docker_cmd(compose_file, dest_address)
+    result = _run_taker_cmd(cmd)
+    output_combined, output_lower, has_success = _analyze_taker_output(result)
 
     # Direct connection indicators
     # These log messages indicate direct P2P connections were established:
@@ -1210,94 +1150,21 @@ async def test_sweep_coinjoin_with_reference_makers(
     """
     compose_file = reference_maker_services["compose_file"]
 
-    # Ensure miner wallet is ready
-    if not ensure_miner_wallet():
-        pytest.skip("Failed to setup miner wallet")
-
-    # Ensure bitcoin nodes are synced
-    logger.info("Checking bitcoin node sync...")
-    if not _wait_for_node_sync(max_attempts=30):
-        pytest.fail("Bitcoin nodes failed to sync")
-
     # Fund mixdepth 2 with 0.1 BTC for the sweep test
     # Mixdepth 2 is clean/unused by other tests, so we get a predictable sweep amount
     # The single UTXO is large enough for PoDLE (needs >=20% of CJ amount)
     # Address derived from default mnemonic: m/84'/1'/2'/0/0 (BIP84 standard path)
     mixdepth2_address = "bcrt1qzva4erlxzvafm2n3fa64ffg5j6t6ttxv6zrmmg"
-    logger.info(f"Funding mixdepth 2 for sweep test at {mixdepth2_address}...")
-    funded = fund_jam_maker_wallet(mixdepth2_address, 0.1)
-    if not funded:
-        pytest.fail("Failed to fund mixdepth 2")
-
-    # Wait for confirmations
-    await asyncio.sleep(5)
-
-    # Get a destination address from bitcoin node
-    logger.info("Running our taker to execute SWEEP CoinJoin...")
-    result = run_bitcoin_cmd(["-rpcwallet=miner", "getnewaddress", "", "bech32"])
-    if result.returncode != 0:
-        pytest.fail(f"Failed to get destination address: {result.stderr}")
-    dest_address = result.stdout.strip()
-
-    # Run the taker with amount=0 to trigger sweep mode
-    # Sweep from mixdepth 1 (which we just funded with 1.0 BTC)
-    # instead of mixdepth 0 (which has ~6.9 BTC from previous tests)
-    cmd = [
-        "docker",
-        "compose",
-        "-f",
-        str(compose_file),
-        "run",
-        "--rm",
-        "-e",
-        "COINJOIN_AMOUNT=0",  # 0 = sweep mode
-        "-e",
-        "MIN_MAKERS=2",  # Minimum 2 makers required (config setting)
-        "-e",
-        "MAX_CJ_FEE_REL=0.01",
-        "-e",
-        "MAX_CJ_FEE_ABS=100000",
-        "-e",
-        "LOG_LEVEL=DEBUG",
-        "taker-reference",
-        "jm-taker",
-        "coinjoin",
-        "--amount",
-        "0",  # Sweep mode
-        "--destination",
-        dest_address,
-        "--counterparties",
-        "2",  # Need at least minimum_makers (2) for sweep
-        "--mixdepth",
-        "2",  # Sweep from clean mixdepth 2
-        "--network",
-        "testnet",
-        "--bitcoin-network",
-        "regtest",
-        "--backend",
-        "scantxoutset",
-        "--max-abs-fee",
-        "100000",
-        "--max-rel-fee",
-        "0.01",
-        "--log-level",
-        "DEBUG",
-        "--yes",
-    ]
-
-    logger.info(f"Sweep taker command: {' '.join(cmd)}")
-
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=COINJOIN_TIMEOUT, check=False
+    dest_address = await _prepare_taker_environment(
+        compose_file, funding_address=mixdepth2_address, funding_btc=0.1
     )
 
-    logger.info(f"Taker stdout:\n{result.stdout}")
-    if result.stderr:
-        logger.info(f"Taker stderr:\n{result.stderr}")
-
-    # Analyze results
-    output_combined = result.stdout + result.stderr
-    output_lower = output_combined.lower()
+    logger.info("Running our taker to execute SWEEP CoinJoin...")
+    cmd = _build_taker_docker_cmd(
+        compose_file, dest_address, amount=0, counterparties=2, mixdepth=2
+    )
+    result = _run_taker_cmd(cmd)
+    output_combined, output_lower, has_success = _analyze_taker_output(result)
 
     # Sweep mode indicators
     sweep_indicators = [
@@ -1309,15 +1176,6 @@ async def test_sweep_coinjoin_with_reference_makers(
 
     if has_sweep:
         logger.info("Sweep mode was activated")
-
-    # Success indicators
-    success_indicators = [
-        "coinjoin completed",
-        "transaction broadcast",
-        "txid:",
-        "successfully",
-    ]
-    has_success = any(ind in output_lower for ind in success_indicators)
 
     # The specific failure we fixed - maker rejecting with "wrong change"
     wrong_change_indicators = [

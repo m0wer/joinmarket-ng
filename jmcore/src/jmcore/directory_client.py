@@ -382,131 +382,10 @@ class DirectoryClient:
             List of active peer nicks. Returns empty list if directory doesn't
             support GETPEERLIST. Returns None if rate-limited (use cached data).
         """
-        if not self.connection:
-            raise DirectoryClientError("Not connected")
-
-        # Skip if we already know this directory doesn't support GETPEERLIST
-        # (only applies to directories that didn't announce peerlist_features)
-        if self._peerlist_supported is False and not self.directory_peerlist_features:
-            logger.debug("Skipping GETPEERLIST - directory doesn't support it")
-            return []
-
-        # Rate-limit peerlist requests to avoid spamming
-        import time
-
-        current_time = time.time()
-        if current_time - self._last_peerlist_request_time < self._peerlist_min_interval:
-            logger.debug(
-                f"Skipping GETPEERLIST - rate limited "
-                f"(last request {current_time - self._last_peerlist_request_time:.1f}s ago)"
-            )
+        result = await self._fetch_peerlist()
+        if result is None:
             return None
-
-        self._last_peerlist_request_time = current_time
-
-        getpeerlist_msg = {"type": MessageType.GETPEERLIST.value, "line": ""}
-        logger.debug("Sending GETPEERLIST request")
-        await self.connection.send(json.dumps(getpeerlist_msg).encode("utf-8"))
-
-        start_time = asyncio.get_event_loop().time()
-
-        # Timeout for waiting for the first PEERLIST response
-        first_response_timeout = (
-            self._peerlist_timeout if self.directory_peerlist_features else self.timeout
-        )
-
-        # Timeout between chunks - when this expires after receiving at least one
-        # PEERLIST message, we know the directory has finished sending all chunks
-        inter_chunk_timeout = self._peerlist_chunk_timeout
-
-        # Accumulate peers from multiple PEERLIST chunks
-        all_peers: list[str] = []
-        chunks_received = 0
-        got_first_response = False
-
-        while True:
-            elapsed = asyncio.get_event_loop().time() - start_time
-
-            # Determine timeout for this receive
-            if not got_first_response:
-                remaining = first_response_timeout - elapsed
-                if remaining <= 0:
-                    self._handle_peerlist_timeout()
-                    return []
-                receive_timeout = remaining
-            else:
-                receive_timeout = inter_chunk_timeout
-
-            try:
-                response_data = await asyncio.wait_for(
-                    self.connection.receive(), timeout=receive_timeout
-                )
-                response = json.loads(response_data.decode("utf-8"))
-                msg_type = response.get("type")
-
-                if msg_type == MessageType.PEERLIST.value:
-                    got_first_response = True
-                    chunks_received += 1
-                    peerlist_str = response.get("line", "")
-
-                    # Parse this chunk
-                    chunk_peers: list[str] = []
-                    if peerlist_str:
-                        for entry in peerlist_str.split(","):
-                            if not entry or not entry.strip():
-                                continue
-                            if NICK_PEERLOCATOR_SEPARATOR not in entry:
-                                logger.debug(f"Skipping metadata entry in peerlist: '{entry}'")
-                                continue
-                            try:
-                                nick, location, disconnected, _features = parse_peerlist_entry(
-                                    entry
-                                )
-                                logger.debug(
-                                    f"Parsed peer: {nick} at {location}, "
-                                    f"disconnected={disconnected}"
-                                )
-                                if not disconnected:
-                                    chunk_peers.append(nick)
-                            except ValueError as e:
-                                logger.warning(f"Failed to parse peerlist entry '{entry}': {e}")
-                                continue
-
-                    all_peers.extend(chunk_peers)
-                    logger.debug(
-                        f"Received PEERLIST chunk {chunks_received} with "
-                        f"{len(chunk_peers)} peers (total: {len(all_peers)})"
-                    )
-                    continue
-
-                # Buffer unexpected messages
-                logger.trace(
-                    f"Buffering unexpected message type {msg_type} while waiting for PEERLIST"
-                )
-                await self._message_buffer.put(response)
-
-            except TimeoutError:
-                if not got_first_response:
-                    self._handle_peerlist_timeout()
-                    return []
-                # Inter-chunk timeout means we're done
-                break
-
-            except Exception as e:
-                logger.warning(f"Error receiving/parsing message while waiting for PEERLIST: {e}")
-                elapsed = asyncio.get_event_loop().time() - start_time
-                if not got_first_response and elapsed > first_response_timeout:
-                    self._handle_peerlist_timeout()
-                    return []
-                if got_first_response:
-                    break
-
-        # Mark peerlist as supported since we got a valid response
-        self._peerlist_supported = True
-        self._peerlist_timeout_count = 0
-
-        logger.info(f"Received {len(all_peers)} active peers from {self.host}:{self.port}")
-        return all_peers
+        return [nick for nick, _location, _features in result]
 
     async def get_peerlist_with_features(self) -> list[tuple[str, str, FeatureSet]]:
         """
@@ -529,6 +408,23 @@ class DirectoryClient:
             Features will be empty for directories that don't support peerlist_features.
             Returns empty list if directory doesn't support GETPEERLIST or is rate-limited.
         """
+        result = await self._fetch_peerlist()
+        if result is None:
+            return []
+        return result
+
+    async def _fetch_peerlist(self) -> list[tuple[str, str, FeatureSet]] | None:
+        """
+        Internal method to fetch the peerlist with features from the directory.
+
+        Handles connection checks, peerlist support detection, rate limiting,
+        sending the GETPEERLIST request, and accumulating chunked responses.
+
+        Returns:
+            List of (nick, location, features) tuples for active peers.
+            Returns empty list if directory doesn't support GETPEERLIST.
+            Returns None if rate-limited (caller should use cached data).
+        """
         if not self.connection:
             raise DirectoryClientError("Not connected")
 
@@ -539,15 +435,13 @@ class DirectoryClient:
             return []
 
         # Rate-limit peerlist requests to avoid spamming
-        import time
-
         current_time = time.time()
         if current_time - self._last_peerlist_request_time < self._peerlist_min_interval:
             logger.debug(
                 f"Skipping GETPEERLIST - rate limited "
                 f"(last request {current_time - self._last_peerlist_request_time:.1f}s ago)"
             )
-            return []  # Return empty - will use offers for nick tracking
+            return None
 
         self._last_peerlist_request_time = current_time
 
@@ -638,6 +532,8 @@ class DirectoryClient:
         # Success - reset timeout counter and mark as supported
         self._peerlist_timeout_count = 0
         self._peerlist_supported = True
+
+        logger.info(f"Received {len(all_peers)} active peers from {self.host}:{self.port}")
         return all_peers
 
     def _handle_peerlist_timeout(self) -> None:
@@ -908,106 +804,27 @@ class DirectoryClient:
                     logger.debug("Empty message content")
                     continue
 
-                offer_types = ["sw0absoffer", "sw0reloffer", "swabsoffer", "swreloffer"]
-                parsed = False
-                for offer_type in offer_types:
-                    if rest.startswith(offer_type):
-                        try:
-                            # Split on '!' to extract flags (neutrino, tbond)
-                            # Format: sw0reloffer 0 750000 790107726787 500 0.001!neutrino!tbond <proof>
-                            # NOTE: !neutrino in offers is deprecated - primary detection is via
-                            # handshake features. This parsing is kept for backwards compatibility.
-                            rest_parts = rest.split(COMMAND_PREFIX)
-                            offer_line = rest_parts[0]
-                            bond_data = None
-                            neutrino_compat = False
+                result = self._parse_offer_from_message(rest, from_nick, to_nick, msg_type)
+                if result is not None:
+                    offer, bond_data, _neutrino_compat = result
+                    offers.append(offer)
 
-                            # Parse flags after the offer line (backwards compat for !neutrino)
-                            for flag_part in rest_parts[1:]:
-                                if flag_part.startswith("neutrino"):
-                                    neutrino_compat = True
-                                    logger.debug(f"Maker {from_nick} requires neutrino_compat")
-                                elif flag_part.startswith("tbond "):
-                                    bond_parts = flag_part[6:].split()
-                                    if bond_parts:
-                                        bond_proof_b64 = bond_parts[0]
-                                        # For PRIVMSG, the maker signs with taker's actual nick
-                                        # For PUBMSG, both nicks are the maker's (self-signed)
-                                        is_privmsg = msg_type == MessageType.PRIVMSG.value
-                                        taker_nick_for_proof = to_nick if is_privmsg else from_nick
-                                        bond_data = parse_fidelity_bond_proof(
-                                            bond_proof_b64, from_nick, taker_nick_for_proof
-                                        )
-                                        if bond_data:
-                                            logger.debug(
-                                                f"Parsed fidelity bond from {from_nick}: "
-                                                f"txid={bond_data['utxo_txid'][:16]}..., "
-                                                f"locktime={bond_data['locktime']}"
-                                            )
-
-                                            utxo_str = (
-                                                f"{bond_data['utxo_txid']}:{bond_data['utxo_vout']}"
-                                            )
-                                            if utxo_str not in bond_utxo_set:
-                                                bond_utxo_set.add(utxo_str)
-                                                bond = FidelityBond(
-                                                    counterparty=from_nick,
-                                                    utxo_txid=bond_data["utxo_txid"],
-                                                    utxo_vout=bond_data["utxo_vout"],
-                                                    locktime=bond_data["locktime"],
-                                                    script=bond_data["utxo_pub"],
-                                                    utxo_confirmations=0,
-                                                    cert_expiry=bond_data["cert_expiry"],
-                                                    fidelity_bond_data=bond_data,
-                                                )
-                                                bonds.append(bond)
-
-                            offer_parts = offer_line.split()
-                            if len(offer_parts) < 6:
-                                logger.warning(
-                                    f"Offer from {from_nick} has {len(offer_parts)} parts, need 6"
-                                )
-                                continue
-
-                            oid = int(offer_parts[1])
-                            minsize = int(offer_parts[2])
-                            maxsize = int(offer_parts[3])
-                            txfee = int(offer_parts[4])
-                            cjfee_str = offer_parts[5]
-
-                            if offer_type in ["sw0absoffer", "swabsoffer"]:
-                                cjfee = str(int(cjfee_str))
-                            else:
-                                cjfee = str(Decimal(cjfee_str))
-
-                            offer = Offer(
+                    if bond_data:
+                        utxo_str = f"{bond_data['utxo_txid']}:{bond_data['utxo_vout']}"
+                        if utxo_str not in bond_utxo_set:
+                            bond_utxo_set.add(utxo_str)
+                            bond = FidelityBond(
                                 counterparty=from_nick,
-                                oid=oid,
-                                ordertype=OfferType(offer_type),
-                                minsize=minsize,
-                                maxsize=maxsize,
-                                txfee=txfee,
-                                cjfee=cjfee,
-                                fidelity_bond_value=0,
-                                neutrino_compat=neutrino_compat,
-                                features=self.peer_features.get(from_nick, {}),
+                                utxo_txid=bond_data["utxo_txid"],
+                                utxo_vout=bond_data["utxo_vout"],
+                                locktime=bond_data["locktime"],
+                                script=bond_data["utxo_pub"],
+                                utxo_confirmations=0,
+                                cert_expiry=bond_data["cert_expiry"],
+                                fidelity_bond_data=bond_data,
                             )
-                            offers.append(offer)
-
-                            if bond_data:
-                                offer.fidelity_bond_data = bond_data
-
-                            logger.debug(
-                                f"Parsed {offer_type} from {from_nick}: "
-                                f"oid={oid}, size={minsize}-{maxsize}, fee={cjfee}, "
-                                f"has_bond={bond_data is not None}, neutrino_compat={neutrino_compat}"
-                            )
-                            parsed = True
-                        except Exception as e:
-                            logger.warning(f"Failed to parse {offer_type} from {from_nick}: {e}")
-                        break
-
-                if not parsed:
+                            bonds.append(bond)
+                else:
                     logger.debug(f"Message not an offer: {rest[:50]}...")
 
             except Exception as e:
@@ -1149,8 +966,6 @@ class DirectoryClient:
                 logger.warning(f"Failed to send !orderbook request: {e}")
 
         # Track when we last sent an orderbook request (to avoid spamming)
-        import time
-
         last_orderbook_request = time.time()
         orderbook_request_min_interval = 60.0  # Minimum 60 seconds between requests
 
@@ -1245,114 +1060,51 @@ class DirectoryClient:
                                             logger.debug(f"Failed to send !orderbook: {e}")
 
                                 # Parse offer announcements
-                                for offer_type_prefix in [
-                                    "sw0reloffer",
-                                    "sw0absoffer",
-                                    "swreloffer",
-                                    "swabsoffer",
-                                ]:
-                                    if rest.startswith(offer_type_prefix):
-                                        # Separate offer from fidelity bond data
-                                        rest_parts = rest.split(COMMAND_PREFIX, 1)
-                                        offer_line = rest_parts[0].strip()
+                                result = self._parse_offer_from_message(
+                                    rest, from_nick, to_nick, msg_type
+                                )
+                                if result is not None:
+                                    offer, bond_data, _neutrino_compat = result
 
-                                        # Parse fidelity bond if present
-                                        bond_data = None
-                                        if len(rest_parts) > 1 and rest_parts[1].startswith(
-                                            "tbond "
-                                        ):
-                                            bond_parts = rest_parts[1][6:].split()
-                                            if bond_parts:
-                                                bond_proof_b64 = bond_parts[0]
-                                                # For PUBLIC announcements, maker uses their own nick
-                                                # as taker_nick when creating the proof.
-                                                # For PRIVMSG (response to !orderbook), maker signs
-                                                # for the recipient (us).
-                                                taker_nick_for_proof = (
-                                                    from_nick if to_nick == "PUBLIC" else to_nick
-                                                )
-                                                bond_data = parse_fidelity_bond_proof(
-                                                    bond_proof_b64, from_nick, taker_nick_for_proof
-                                                )
-                                                if bond_data:
-                                                    logger.debug(
-                                                        f"Parsed fidelity bond from {from_nick}: "
-                                                        f"txid={bond_data['utxo_txid'][:16]}..., "
-                                                        f"locktime={bond_data['locktime']}"
-                                                    )
-                                                    # Store bond in bonds cache
-                                                    utxo_str = (
-                                                        f"{bond_data['utxo_txid']}:"
-                                                        f"{bond_data['utxo_vout']}"
-                                                    )
-                                                    bond = FidelityBond(
-                                                        counterparty=from_nick,
-                                                        utxo_txid=bond_data["utxo_txid"],
-                                                        utxo_vout=bond_data["utxo_vout"],
-                                                        locktime=bond_data["locktime"],
-                                                        script=bond_data["utxo_pub"],
-                                                        utxo_confirmations=0,
-                                                        cert_expiry=bond_data["cert_expiry"],
-                                                        fidelity_bond_data=bond_data,
-                                                    )
-                                                    self.bonds[utxo_str] = bond
+                                    # Store bond in bonds cache
+                                    if bond_data:
+                                        utxo_str = (
+                                            f"{bond_data['utxo_txid']}:{bond_data['utxo_vout']}"
+                                        )
+                                        bond = FidelityBond(
+                                            counterparty=from_nick,
+                                            utxo_txid=bond_data["utxo_txid"],
+                                            utxo_vout=bond_data["utxo_vout"],
+                                            locktime=bond_data["locktime"],
+                                            script=bond_data["utxo_pub"],
+                                            utxo_confirmations=0,
+                                            cert_expiry=bond_data["cert_expiry"],
+                                            fidelity_bond_data=bond_data,
+                                        )
+                                        self.bonds[utxo_str] = bond
 
-                                        offer_parts = offer_line.split()
-                                        if len(offer_parts) >= 6:
-                                            try:
-                                                oid = int(offer_parts[1])
-                                                minsize = int(offer_parts[2])
-                                                maxsize = int(offer_parts[3])
-                                                txfee = int(offer_parts[4])
-                                                cjfee_str = offer_parts[5]
+                                    # Extract bond UTXO key for deduplication
+                                    bond_utxo_key: str | None = None
+                                    if bond_data:
+                                        bond_utxo_key = (
+                                            f"{bond_data['utxo_txid']}:{bond_data['utxo_vout']}"
+                                        )
 
-                                                if offer_type_prefix in [
-                                                    "sw0absoffer",
-                                                    "swabsoffer",
-                                                ]:
-                                                    cjfee = str(int(cjfee_str))
-                                                else:
-                                                    cjfee = str(Decimal(cjfee_str))
+                                    # Update cache using tuple key
+                                    offer_key = (from_nick, offer.oid)
+                                    self._store_offer(offer_key, offer, bond_utxo_key)
 
-                                                offer = Offer(
-                                                    counterparty=from_nick,
-                                                    oid=oid,
-                                                    ordertype=OfferType(offer_type_prefix),
-                                                    minsize=minsize,
-                                                    maxsize=maxsize,
-                                                    txfee=txfee,
-                                                    cjfee=cjfee,
-                                                    fidelity_bond_value=0,
-                                                    fidelity_bond_data=bond_data,
-                                                    features=self.peer_features.get(from_nick, {}),
-                                                )
+                                    # Track this peer as "known" even if peerlist didn't
+                                    # return features. This prevents re-triggering new peer
+                                    # logic for every message from this peer.
+                                    if from_nick not in self.peer_features:
+                                        self.peer_features[from_nick] = {}
 
-                                                # Extract bond UTXO key for deduplication
-                                                bond_utxo_key: str | None = None
-                                                if bond_data:
-                                                    bond_utxo_key = (
-                                                        f"{bond_data['utxo_txid']}:"
-                                                        f"{bond_data['utxo_vout']}"
-                                                    )
-
-                                                # Update cache using tuple key
-                                                offer_key = (from_nick, oid)
-                                                self._store_offer(offer_key, offer, bond_utxo_key)
-
-                                                # Track this peer as "known" even if peerlist didn't
-                                                # return features. This prevents re-triggering new peer
-                                                # logic for every message from this peer.
-                                                if from_nick not in self.peer_features:
-                                                    self.peer_features[from_nick] = {}
-
-                                                logger.debug(
-                                                    f"Updated offer cache: {from_nick} "
-                                                    f"{offer_type_prefix} oid={oid}"
-                                                    + (" (with bond)" if bond_data else "")
-                                                )
-                                            except Exception as e:
-                                                logger.debug(f"Failed to parse offer update: {e}")
-                                        break
+                                    logger.debug(
+                                        f"Updated offer cache: {from_nick} "
+                                        f"{offer.ordertype.value} oid={offer.oid}"
+                                        + (" (with bond)" if bond_data else "")
+                                    )
                     except Exception as e:
                         logger.debug(f"Failed to process PUBMSG: {e}")
 
@@ -1369,6 +1121,113 @@ class DirectoryClient:
 
         self.running = False
         logger.info(f"Stopped continuous listening on {self.host}:{self.port}")
+
+    def _parse_offer_from_message(
+        self,
+        rest: str,
+        from_nick: str,
+        to_nick: str,
+        msg_type: str | None,
+    ) -> tuple[Offer, dict[str, Any] | None, bool] | None:
+        """
+        Parse an offer from a message's content part.
+
+        Handles all offer types (sw0reloffer, sw0absoffer, swreloffer, swabsoffer),
+        optional fidelity bond proof, and the deprecated !neutrino flag.
+
+        Args:
+            rest: The message content after from_nick!to_nick! (may contain !-separated flags)
+            from_nick: The sender's nick
+            to_nick: The recipient nick (or "PUBLIC")
+            msg_type: The message type value (PUBMSG or PRIVMSG)
+
+        Returns:
+            Tuple of (offer, bond_data, neutrino_compat) if parsing succeeds, None otherwise.
+            bond_data is the parsed fidelity bond dict or None.
+            neutrino_compat is True if the deprecated !neutrino flag was present.
+        """
+        offer_types = ["sw0absoffer", "sw0reloffer", "swabsoffer", "swreloffer"]
+        for offer_type in offer_types:
+            if not rest.startswith(offer_type):
+                continue
+
+            # Split on '!' to extract flags (neutrino, tbond)
+            # Format: sw0reloffer 0 750000 790107726787 500 0.001!neutrino!tbond <proof>
+            rest_parts = rest.split(COMMAND_PREFIX)
+            offer_line = rest_parts[0]
+            bond_data: dict[str, Any] | None = None
+            neutrino_compat = False
+
+            # Parse flags after the offer line
+            for flag_part in rest_parts[1:]:
+                if flag_part.startswith("neutrino"):
+                    # NOTE: !neutrino in offers is deprecated - primary detection is via
+                    # handshake features. Parsing kept for backwards compatibility.
+                    neutrino_compat = True
+                    logger.debug(f"Maker {from_nick} requires neutrino_compat")
+                elif flag_part.startswith("tbond "):
+                    bond_parts = flag_part[6:].split()
+                    if bond_parts:
+                        bond_proof_b64 = bond_parts[0]
+                        # For PRIVMSG, the maker signs with taker's actual nick.
+                        # For PUBMSG/PUBLIC, both nicks are the maker's (self-signed).
+                        is_privmsg = msg_type == MessageType.PRIVMSG.value
+                        taker_nick_for_proof = (
+                            to_nick if (is_privmsg or to_nick != "PUBLIC") else from_nick
+                        )
+                        bond_data = parse_fidelity_bond_proof(
+                            bond_proof_b64, from_nick, taker_nick_for_proof
+                        )
+                        if bond_data:
+                            logger.debug(
+                                f"Parsed fidelity bond from {from_nick}: "
+                                f"txid={bond_data['utxo_txid'][:16]}..., "
+                                f"locktime={bond_data['locktime']}"
+                            )
+
+            offer_parts = offer_line.split()
+            if len(offer_parts) < 6:
+                logger.warning(f"Offer from {from_nick} has {len(offer_parts)} parts, need 6")
+                return None
+
+            try:
+                oid = int(offer_parts[1])
+                minsize = int(offer_parts[2])
+                maxsize = int(offer_parts[3])
+                txfee = int(offer_parts[4])
+                cjfee_str = offer_parts[5]
+
+                if offer_type in ["sw0absoffer", "swabsoffer"]:
+                    cjfee = str(int(cjfee_str))
+                else:
+                    cjfee = str(Decimal(cjfee_str))
+
+                offer = Offer(
+                    counterparty=from_nick,
+                    oid=oid,
+                    ordertype=OfferType(offer_type),
+                    minsize=minsize,
+                    maxsize=maxsize,
+                    txfee=txfee,
+                    cjfee=cjfee,
+                    fidelity_bond_value=0,
+                    fidelity_bond_data=bond_data,
+                    neutrino_compat=neutrino_compat,
+                    features=self.peer_features.get(from_nick, {}),
+                )
+
+                logger.debug(
+                    f"Parsed {offer_type} from {from_nick}: "
+                    f"oid={oid}, size={minsize}-{maxsize}, fee={cjfee}, "
+                    f"has_bond={bond_data is not None}, neutrino_compat={neutrino_compat}"
+                )
+                return offer, bond_data, neutrino_compat
+            except Exception as e:
+                logger.warning(f"Failed to parse {offer_type} from {from_nick}: {e}")
+                return None
+
+        # No offer type matched
+        return None
 
     def _store_offer(
         self,
