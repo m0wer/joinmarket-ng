@@ -5,6 +5,7 @@ Tests cover:
 - format_utxo_line() output formatting
 - select_utxos_interactive() behavior in non-TTY environments
 - Single UTXO auto-selection
+- Frozen/locked UTXO unselectability
 """
 
 from __future__ import annotations
@@ -62,6 +63,23 @@ def sample_utxos() -> list[UTXOInfo]:
             locktime=1893456000,
         ),
     ]
+
+
+@pytest.fixture
+def frozen_utxo() -> UTXOInfo:
+    """Create a frozen UTXO for testing."""
+    utxo = UTXOInfo(
+        txid="e" * 64,
+        vout=0,
+        value=75_000,
+        address="bcrt1frozen",
+        confirmations=50,
+        scriptpubkey="0014" + "ee" * 20,
+        path="m/84'/0'/0'/0/3",
+        mixdepth=0,
+        frozen=True,
+    )
+    return utxo
 
 
 class TestFormatUtxoLine:
@@ -168,3 +186,97 @@ class TestUtxoSorting:
         assert sorted_utxos[0].mixdepth == 0
         assert sorted_utxos[0].value == 500_000  # Highest in mixdepth 0
         assert sorted_utxos[-1].mixdepth == 1  # Mixdepth 1 last
+
+
+class TestFrozenUtxoFormatting:
+    """Tests for frozen UTXO display formatting."""
+
+    def test_frozen_indicator_shown(self, frozen_utxo: UTXOInfo) -> None:
+        """Frozen UTXOs show [FROZEN] in their display line."""
+        line = format_utxo_line(frozen_utxo)
+        assert "[FROZEN]" in line
+
+    def test_frozen_indicator_after_label(self, frozen_utxo: UTXOInfo) -> None:
+        """[FROZEN] is placed after the label, not before it."""
+        frozen_utxo.label = "deposit"
+        line = format_utxo_line(frozen_utxo, max_width=120)
+
+        frozen_pos = line.index("[FROZEN]")
+        label_pos = line.index("(deposit)")
+        assert frozen_pos > label_pos, (
+            f"[FROZEN] at {frozen_pos} should come after (deposit) at {label_pos}: {line}"
+        )
+
+    def test_frozen_indicator_after_fb_indicator(self) -> None:
+        """[FROZEN] is placed after [FB-LOCKED] for frozen fidelity bond UTXOs."""
+        utxo = UTXOInfo(
+            txid="f" * 64,
+            vout=0,
+            value=200_000,
+            address="bcrt1frozenFB",
+            confirmations=500,
+            scriptpubkey="0020" + "ff" * 32,
+            path="m/84'/0'/0'/2/0",
+            mixdepth=0,
+            locktime=1893456000,
+            frozen=True,
+        )
+        line = format_utxo_line(utxo)
+        assert "[FB-LOCKED]" in line
+        assert "[FROZEN]" not in line or line.index("[FROZEN]") > line.index("[FB-LOCKED]")
+
+    def test_unfrozen_no_indicator(self, sample_utxos: list[UTXOInfo]) -> None:
+        """Non-frozen UTXOs do not show [FROZEN]."""
+        line = format_utxo_line(sample_utxos[0])
+        assert "[FROZEN]" not in line
+
+
+class TestFrozenUtxoUnselectability:
+    """Tests for frozen/locked UTXO unselectability in interactive mode."""
+
+    def test_single_frozen_utxo_not_auto_selected(self) -> None:
+        """A single frozen UTXO is not auto-selected in non-TTY mode."""
+        frozen = UTXOInfo(
+            txid="f" * 64,
+            vout=0,
+            value=100_000,
+            address="bcrt1frozen",
+            confirmations=10,
+            scriptpubkey="0014" + "ff" * 20,
+            path="m/84'/0'/0'/0/0",
+            mixdepth=0,
+            frozen=True,
+        )
+        result = select_utxos_interactive([frozen])
+        assert result == []
+
+    def test_single_locked_fb_utxo_not_auto_selected(self) -> None:
+        """A single locked fidelity bond UTXO is not auto-selected in non-TTY mode."""
+        locked_fb = UTXOInfo(
+            txid="f" * 64,
+            vout=0,
+            value=100_000,
+            address="bcrt1locked",
+            confirmations=10,
+            scriptpubkey="0020" + "ff" * 32,
+            path="m/84'/0'/0'/2/0",
+            mixdepth=0,
+            locktime=1893456000,  # Far future
+        )
+        result = select_utxos_interactive([locked_fb])
+        assert result == []
+
+    def test_single_selectable_utxo_auto_selected(self) -> None:
+        """A single non-frozen, non-locked UTXO is auto-selected in non-TTY mode."""
+        normal = UTXOInfo(
+            txid="f" * 64,
+            vout=0,
+            value=100_000,
+            address="bcrt1normal",
+            confirmations=10,
+            scriptpubkey="0014" + "ff" * 20,
+            path="m/84'/0'/0'/0/0",
+            mixdepth=0,
+        )
+        result = select_utxos_interactive([normal])
+        assert result == [normal]

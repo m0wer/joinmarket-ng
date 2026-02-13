@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Frozen UTXO Selector Crash** ([#125](../../issues/125)): Fixed `IndexError: list index out of range` when selecting frozen UTXOs in `jm-wallet send --select-utxos`. Frozen and locked fidelity bond UTXOs are now visible but unselectable in the interactive TUI, shown with `[-]` prefix. Toggle (Space/Tab) and "select all" (`a`) skip unselectable UTXOs. The footer displays selectable count accurately. Single-UTXO auto-selection respects frozen/locked status.
+
+- **Frozen UTXO Display Inconsistencies** ([#126](../../issues/126)): Fixed multiple display issues with frozen UTXOs across commands:
+  - Total Balance line now shows frozen amounts: `Total Balance: 30,200 sats (68,811 frozen)`.
+  - Per-mixdepth balances in simple view show frozen amounts.
+  - `[FROZEN]` tag moved after `(label)` in UTXO selector for consistency with `--extended` view.
+  - `get_fidelity_bond_balance()` now excludes frozen UTXOs.
+  - Taker interactive UTXO selection now shows frozen UTXOs as unselectable (previously they were silently filtered).
+
 ### Changed
 
 - **Tor Connection Timeout Increased to 120s**: Increased the default Tor connection timeout from 30s to 120s across all components (maker, taker, directory client). The previous 30s timeout covered the entire SOCKS5 connection lifecycle (TCP + SOCKS negotiation + Tor circuit building + PoW solving), which is too short when PoW-protected hidden services are under DoS load. The reference JoinMarket implementation effectively has no SOCKS-level timeout (Twisted cancels the 60s timeout after TCP handshake, leaving circuit building with no limit). The new 120s default aligns with Tor's internal circuit timeout. Configurable via `connection_timeout` in the `[tor]` config section.

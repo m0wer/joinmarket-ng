@@ -347,12 +347,16 @@ class WalletService(WalletSyncMixin, CoinSelectionMixin, WalletDisplayMixin):
         return total
 
     async def get_fidelity_bond_balance(self, mixdepth: int) -> int:
-        """Get balance of fidelity bond UTXOs for a mixdepth."""
+        """Get balance of fidelity bond UTXOs for a mixdepth.
+
+        Note:
+            Frozen UTXOs are excluded from balance calculations.
+        """
         if mixdepth not in self.utxo_cache:
             await self.sync_mixdepth(mixdepth)
 
         utxos = self.utxo_cache.get(mixdepth, [])
-        return sum(utxo.value for utxo in utxos if utxo.is_fidelity_bond)
+        return sum(utxo.value for utxo in utxos if utxo.is_fidelity_bond and not utxo.frozen)
 
     # -- Address index management (Group I) ---------------------------------
 

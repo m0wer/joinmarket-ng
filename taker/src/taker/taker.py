@@ -403,12 +403,33 @@ class Taker(TakerMonitoringMixin):
                 from jmwallet.utxo_selector import select_utxos_interactive
 
                 try:
-                    # Get all eligible UTXOs for selection
-                    available_utxos = self.wallet.get_all_utxos(
-                        mixdepth, self.config.taker_utxo_age
-                    )
+                    # Get ALL UTXOs including frozen ones for display in the
+                    # interactive selector.  Frozen/locked UTXOs are shown but
+                    # rendered as unselectable ([-]) so the user sees the full
+                    # picture of their wallet.
+                    available_utxos = await self.wallet.get_utxos(mixdepth)
+                    # Also filter by minimum age (confirmations) -- but keep
+                    # frozen ones regardless so they're visible in the TUI.
+                    min_age = self.config.taker_utxo_age
+                    available_utxos = [
+                        u for u in available_utxos if u.confirmations >= min_age or u.frozen
+                    ]
                     if not available_utxos:
-                        logger.error(f"No eligible UTXOs in mixdepth {mixdepth}")
+                        logger.error(f"No UTXOs in mixdepth {mixdepth}")
+                        self.state = TakerState.FAILED
+                        return None
+
+                    # Check that at least some UTXOs are selectable (not frozen/locked)
+                    selectable = [
+                        u
+                        for u in available_utxos
+                        if not u.frozen and not (u.is_fidelity_bond and u.is_locked)
+                    ]
+                    if not selectable:
+                        logger.error(
+                            f"No eligible UTXOs in mixdepth {mixdepth} "
+                            f"(all {len(available_utxos)} UTXOs are frozen or locked)"
+                        )
                         self.state = TakerState.FAILED
                         return None
 

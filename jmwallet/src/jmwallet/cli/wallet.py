@@ -450,11 +450,22 @@ async def _show_wallet_info(
         # Get total balance, separating FB balance
         total_balance = await wallet.get_total_balance(include_fidelity_bonds=False)
         fb_balance = await wallet.get_fidelity_bond_balance(0)  # FB only in mixdepth 0
+        # Calculate total frozen balance across all mixdepths (excluding FB)
+        total_frozen = sum(
+            u.value
+            for utxos_list in wallet.utxo_cache.values()
+            for u in utxos_list
+            if u.frozen and not u.is_fidelity_bond
+        )
+        # Build Total Balance display with optional FB and frozen suffixes
+        suffix_parts: list[str] = []
         if fb_balance > 0:
-            total_with_fb = total_balance + fb_balance
-            print(
-                f"\nTotal Balance: {format_amount(total_with_fb)} ({format_amount(fb_balance)} FB)"
-            )
+            suffix_parts.append(f"{format_amount(fb_balance)} FB")
+        if total_frozen > 0:
+            suffix_parts.append(f"{format_amount(total_frozen)} frozen")
+        display_balance = total_balance + fb_balance
+        if suffix_parts:
+            print(f"\nTotal Balance: {format_amount(display_balance)} ({', '.join(suffix_parts)})")
         else:
             print(f"\nTotal Balance: {format_amount(total_balance)}")
 
@@ -495,14 +506,14 @@ async def _show_wallet_info(
                     if u.frozen and not u.is_fidelity_bond
                 )
                 # Build suffix parts
-                suffix_parts: list[str] = []
+                md_suffix_parts: list[str] = []
                 if md == 0:
                     fb_balance = await wallet.get_fidelity_bond_balance(md)
                     if fb_balance > 0:
-                        suffix_parts.append(f"+{fb_balance:,} FB")
+                        md_suffix_parts.append(f"+{fb_balance:,} FB")
                 if frozen_balance > 0:
-                    suffix_parts.append(f"{frozen_balance:,} frozen")
-                suffix = f" ({', '.join(suffix_parts)})" if suffix_parts else ""
+                    md_suffix_parts.append(f"{frozen_balance:,} frozen")
+                suffix = f" ({', '.join(md_suffix_parts)})" if md_suffix_parts else ""
                 print(f"  Mixdepth {md}: {balance:>15,} sats{suffix}")
 
             print("\nDeposit addresses (next unused):")

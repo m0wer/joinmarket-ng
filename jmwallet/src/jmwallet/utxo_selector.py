@@ -39,18 +39,18 @@ def format_utxo_line(utxo: UTXOInfo, max_width: int = 80) -> str:
         else:
             fb_indicator = " [FB]"
 
-    # Frozen indicator
-    frozen_indicator = " [FROZEN]" if utxo.frozen else ""
-
     # Truncate txid for display
     outpoint = f"{utxo.txid[:8]}...:{utxo.vout}"
 
     # Label/note for UTXO type
     label_str = f" ({utxo.label})" if utxo.label else ""
 
+    # Frozen indicator (placed after label for consistency with --extended view)
+    frozen_indicator = " [FROZEN]" if utxo.frozen else ""
+
     line = (
         f"{md_str:>3} | {amount_str:>18} | {conf_str} | "
-        f"{outpoint}{fb_indicator}{frozen_indicator}{label_str}"
+        f"{outpoint}{fb_indicator}{label_str}{frozen_indicator}"
     )
 
     if len(line) > max_width:
@@ -89,6 +89,11 @@ def _run_selector(
     cursor_pos = 0
     scroll_offset = 0
 
+    # Pre-compute which UTXOs are unselectable (frozen or locked fidelity bonds)
+    unselectable: set[int] = {
+        i for i, u in enumerate(utxos) if u.frozen or (u.is_fidelity_bond and u.is_locked)
+    }
+
     while True:
         stdscr.clear()
         height, width = stdscr.getmaxyx()
@@ -126,8 +131,14 @@ def _run_selector(
             # Format the line
             is_selected = i in selected
             is_cursor = i == cursor_pos
+            is_unselectable = i in unselectable
 
-            prefix = "[x] " if is_selected else "[ ] "
+            if is_unselectable:
+                prefix = "[-] "
+            elif is_selected:
+                prefix = "[x] "
+            else:
+                prefix = "[ ] "
             line = prefix + format_utxo_line(utxo, width - 5)
 
             # Apply colors
@@ -156,7 +167,8 @@ def _run_selector(
         # Footer with selection summary
         total_selected = sum(utxos[i].value for i in selected)
         total_str = format_amount(total_selected)
-        footer_line1 = f" Selected: {len(selected)}/{len(utxos)} UTXOs | Total: {total_str} "
+        selectable_count = len(utxos) - len(unselectable)
+        footer_line1 = f" Selected: {len(selected)}/{selectable_count} UTXOs | Total: {total_str} "
 
         if target_amount > 0:
             remaining = target_amount - total_selected
@@ -190,18 +202,20 @@ def _run_selector(
         if key == ord("\n") or key == curses.KEY_ENTER:  # Enter
             if selected:
                 return [utxos[i] for i in sorted(selected)]
-            # If nothing selected but there's only one UTXO, select it
-            if len(utxos) == 1:
-                return [utxos[0]]
+            # If nothing selected but there's only one selectable UTXO, select it
+            if selectable_count == 1:
+                selectable_idx = next(i for i in range(len(utxos)) if i not in unselectable)
+                return [utxos[selectable_idx]]
             # Otherwise require explicit selection
             continue
 
         if key == ord("\t") or key == ord(" "):  # Tab or Space to toggle
-            if cursor_pos in selected:
-                selected.discard(cursor_pos)
-            else:
-                selected.add(cursor_pos)
-            # Move cursor down after selection
+            if cursor_pos not in unselectable:
+                if cursor_pos in selected:
+                    selected.discard(cursor_pos)
+                else:
+                    selected.add(cursor_pos)
+            # Move cursor down after toggle attempt
             if cursor_pos < len(utxos) - 1:
                 cursor_pos += 1
 
@@ -223,8 +237,8 @@ def _run_selector(
         elif key == ord("G"):  # Go to bottom
             cursor_pos = len(utxos) - 1
 
-        elif key == ord("a"):  # Select all (skip frozen UTXOs)
-            selected = {i for i, u in enumerate(utxos) if not u.frozen}
+        elif key == ord("a"):  # Select all (skip unselectable UTXOs)
+            selected = {i for i in range(len(utxos)) if i not in unselectable}
 
         elif key == ord("n"):  # Deselect all
             selected = set()
@@ -261,8 +275,11 @@ def select_utxos_interactive(
 
     # For multiple UTXOs, we need a terminal
     if not sys.stdin.isatty() or not sys.stdout.isatty():
-        # If only one UTXO and no terminal, auto-select it
+        # If only one UTXO and no terminal, auto-select it (only if selectable)
         if len(utxos) == 1:
+            utxo = utxos[0]
+            if utxo.frozen or (utxo.is_fidelity_bond and utxo.is_locked):
+                return []
             return utxos
         raise RuntimeError("Interactive UTXO selection requires a terminal")
 
