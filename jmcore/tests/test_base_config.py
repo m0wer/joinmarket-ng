@@ -152,6 +152,23 @@ class TestWalletConfig:
         with pytest.raises(ValidationError):
             WalletConfig(mnemonic="test " * 12, gap_limit=5)
 
+    def test_connection_timeout_default(self):
+        """Test that connection_timeout defaults to 120s (matches Tor circuit timeout)."""
+        config = WalletConfig(mnemonic="test " * 12)
+        assert config.connection_timeout == 120.0
+
+    def test_connection_timeout_custom(self):
+        """Test that connection_timeout can be customized."""
+        config = WalletConfig(mnemonic="test " * 12, connection_timeout=60.0)
+        assert config.connection_timeout == 60.0
+
+    def test_connection_timeout_validation(self):
+        """Test that connection_timeout must be > 0."""
+        with pytest.raises(ValidationError):
+            WalletConfig(mnemonic="test " * 12, connection_timeout=0.0)
+        with pytest.raises(ValidationError):
+            WalletConfig(mnemonic="test " * 12, connection_timeout=-1.0)
+
 
 class TestDirectoryServerConfig:
     def test_default_values(self):

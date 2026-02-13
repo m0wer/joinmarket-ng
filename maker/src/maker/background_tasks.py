@@ -231,6 +231,7 @@ class BackgroundTasksMixin:
                 location=location,
                 socks_host=self.config.socks_host,
                 socks_port=self.config.socks_port,
+                timeout=self.config.connection_timeout,
                 neutrino_compat=neutrino_compat,
             )
 

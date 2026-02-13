@@ -18,6 +18,13 @@
 # socks_host = "127.0.0.1"
 # socks_port = 9050
 
+# Connection timeout for Tor SOCKS5 connections (seconds).
+# Covers TCP handshake, SOCKS5 negotiation, Tor circuit building, and PoW solving.
+# Under PoW defense (DoS attack), Tor clients solve proof-of-work challenges that
+# can take significantly longer than normal circuit establishment (~5-15s).
+# Default 120s matches Tor's internal circuit timeout.
+# connection_timeout = 120.0
+
 # Control port settings (for hidden services)
 # control_enabled = true
 # control_host = "127.0.0.1"  # Defaults to socks_host if not set
@@ -282,7 +289,7 @@
 
 # Connection settings
 # max_message_size = 2097152   # 2MB
-# connection_timeout = 30.0     # Seconds
+# connection_timeout = 120.0   # Seconds (covers Tor circuit + PoW solving)
 
 # Uptime tracking
 # uptime_grace_period = 60     # Seconds

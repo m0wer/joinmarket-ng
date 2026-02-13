@@ -59,6 +59,7 @@ class MultiDirectoryClient:
         nick_identity: NickIdentity,
         socks_host: str = "127.0.0.1",
         socks_port: int = 9050,
+        connection_timeout: float = 120.0,
         neutrino_compat: bool = False,
         on_nick_leave: Any | None = None,
         prefer_direct_connections: bool = True,
@@ -70,6 +71,7 @@ class MultiDirectoryClient:
         self.nick = nick_identity.nick
         self.socks_host = socks_host
         self.socks_port = socks_port
+        self.connection_timeout = connection_timeout
         self.neutrino_compat = neutrino_compat
         self.clients: dict[str, DirectoryClient] = {}
         self.on_nick_leave = on_nick_leave
@@ -269,6 +271,7 @@ class MultiDirectoryClient:
                 location=location,
                 socks_host=self.socks_host,
                 socks_port=self.socks_port,
+                timeout=self.connection_timeout,
                 on_message=self._on_peer_message,
                 on_disconnect=self._on_peer_disconnect,
                 on_handshake_complete=self._on_peer_handshake_complete,
@@ -319,6 +322,7 @@ class MultiDirectoryClient:
                     nick_identity=self.nick_identity,
                     socks_host=self.socks_host,
                     socks_port=self.socks_port,
+                    timeout=self.connection_timeout,
                     neutrino_compat=self.neutrino_compat,
                 )
                 await client.connect()

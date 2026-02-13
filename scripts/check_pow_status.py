@@ -23,7 +23,7 @@ from pathlib import Path
 # Add jmcore to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "jmcore" / "src"))
 
-from jmcore.tor_control import TorController
+from jmcore.tor_control import TorControlClient
 
 
 async def check_pow_status(
@@ -37,42 +37,34 @@ async def check_pow_status(
     print(f"{'=' * 60}")
     print(f"Control port: {control_host}:{control_port}")
 
-    controller = TorController()
+    # Resolve cookie path if not provided
+    resolved_cookie: Path | None = None
+    if cookie_path:
+        resolved_cookie = Path(cookie_path)
+    else:
+        common_paths = [
+            Path("/run/tor/control.authcookie"),
+            Path("/var/run/tor/control.authcookie"),
+            Path("/var/lib/tor/control_auth_cookie"),
+            Path.home() / ".tor" / "control_auth_cookie",
+        ]
+        for path in common_paths:
+            if path.exists() and path.stat().st_size > 0:
+                resolved_cookie = path
+                break
+
+    controller = TorControlClient(
+        control_host=control_host,
+        control_port=control_port,
+        cookie_path=resolved_cookie,
+    )
 
     try:
-        await controller.connect(control_host, control_port)
+        await controller.connect()
         print("[OK] Connected to Tor control port")
 
-        # Try to authenticate
-        if cookie_path:
-            await controller.authenticate_cookie(cookie_path)
-        else:
-            # Try common cookie paths (ordered by likelihood on modern Linux systems)
-            common_paths = [
-                Path("/run/tor/control.authcookie"),
-                Path("/var/run/tor/control.authcookie"),
-                Path("/var/lib/tor/control_auth_cookie"),
-                Path.home() / ".tor" / "control_auth_cookie",
-            ]
-            authenticated = False
-            for path in common_paths:
-                # Check that file exists AND has content (non-zero size)
-                if not path.exists() or path.stat().st_size == 0:
-                    continue
-                try:
-                    await controller.authenticate_cookie(str(path))
-                    authenticated = True
-                    print(f"[OK] Authenticated using cookie: {path}")
-                    break
-                except Exception:
-                    continue
-            if not authenticated:
-                print("[WARN] Could not authenticate with cookie, trying no auth...")
-                try:
-                    await controller.authenticate_password("")
-                except Exception as e:
-                    print(f"[ERROR] Authentication failed: {e}")
-                    return
+        await controller.authenticate()
+        print(f"[OK] Authenticated (cookie: {resolved_cookie or 'null auth'})")
 
         # Get Tor version and capabilities
         caps = await controller.get_capabilities()
@@ -107,8 +99,10 @@ async def check_pow_status(
         except Exception as e:
             print(f"Could not get config names: {e}")
 
-        # Check specific PoW config values
+        # Check specific PoW config values (only works for persistent HS in torrc)
         print("\n--- PoW Configuration Values ---")
+        print("(Note: GETCONF only works for persistent HS configured in torrc,")
+        print(" not for ephemeral HS created via ADD_ONION)")
         pow_configs = [
             "HiddenServicePoWDefensesEnabled",
             "HiddenServicePoWQueueRate",
@@ -116,7 +110,6 @@ async def check_pow_status(
         ]
         for config in pow_configs:
             try:
-                # Use GETCONF to get config value
                 responses = await controller._command(f"GETCONF {config}")
                 for status, _, message in responses:
                     if status == "250" and "=" in message:
@@ -124,7 +117,7 @@ async def check_pow_status(
             except Exception:
                 pass
 
-        # Try to get circuit events to see PoW in action
+        # Check circuit events for PoW in action
         print("\n--- Circuit Information ---")
         try:
             circuit_status = await controller.get_info("circuit-status")
@@ -143,20 +136,30 @@ async def check_pow_status(
         except Exception as e:
             print(f"Could not get circuit status: {e}")
 
-        # Check for PoW-related info keys
-        print("\n--- Trying PoW-specific GETINFO keys ---")
-        pow_info_keys = [
-            "hs/pow/suggested-effort",
-            "hs-pow/suggested-effort",
-            "hiddenservice/pow/suggested-effort",
-            "status/hs-pow",
-        ]
-        for key in pow_info_keys:
-            try:
-                value = await controller.get_info(key)
-                print(f"  {key} = {value}")
-            except Exception:
-                pass  # Key not available
+        # Check HS descriptor for pow-params
+        print("\n--- HS Descriptor pow-params ---")
+        try:
+            hs_list = await controller.get_info("onions/current")
+            if hs_list:
+                for onion in hs_list.split("\n"):
+                    onion = onion.strip()
+                    if not onion:
+                        continue
+                    try:
+                        desc = await controller.get_info(f"hs/service/desc/id/{onion}")
+                        pow_lines = [
+                            line
+                            for line in desc.split("\n")
+                            if "pow-params" in line.lower()
+                        ]
+                        if pow_lines:
+                            print(f"  {onion}: {pow_lines[0].strip()}")
+                        else:
+                            print(f"  {onion}: No pow-params in descriptor")
+                    except Exception as e:
+                        print(f"  {onion}: Could not get descriptor: {e}")
+        except Exception:
+            print("  No ephemeral hidden services to check")
 
         print("\n" + "=" * 60)
         print("Summary:")
@@ -173,7 +176,10 @@ async def check_pow_status(
 
         print("\nNote: Tor's PoW defense works at the circuit establishment level.")
         print("Under attack, Tor increases the PoW difficulty automatically.")
-        print("Check 'docker logs <tor-container>' for PoW-related log messages.")
+        print("The only observable effects are:")
+        print("  - HS_POW=v1,<effort> in CIRC events (circuit-status)")
+        print("  - pow-params in HS descriptors (hs/service/desc/id/<addr>)")
+        print("  - Increased connection times for SOCKS clients")
 
     except Exception as e:
         print(f"[ERROR] {e}")

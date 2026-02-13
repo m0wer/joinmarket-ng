@@ -297,6 +297,7 @@ def build_maker_config(
         directory_servers=dir_servers,
         socks_host=effective_socks_host,
         socks_port=effective_socks_port,
+        connection_timeout=settings.tor.connection_timeout,
         mixdepth_count=settings.wallet.mixdepth_count,
         gap_limit=settings.wallet.gap_limit,
         dust_threshold=settings.wallet.dust_threshold,

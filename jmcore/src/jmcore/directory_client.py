@@ -157,7 +157,7 @@ class DirectoryClient:
         location: str = "NOT-SERVING-ONION",
         socks_host: str = "127.0.0.1",
         socks_port: int = 9050,
-        timeout: float = 30.0,
+        timeout: float = 120.0,
         max_message_size: int = 2097152,
         on_disconnect: Callable[[], None] | None = None,
         neutrino_compat: bool = False,
@@ -174,7 +174,7 @@ class DirectoryClient:
             location: Our location string (onion address or NOT-SERVING-ONION)
             socks_host: SOCKS proxy host for Tor
             socks_port: SOCKS proxy port for Tor
-            timeout: Connection timeout in seconds
+            timeout: Connection timeout in seconds (covers SOCKS + Tor circuit + PoW)
             max_message_size: Maximum message size in bytes
             on_disconnect: Callback when connection drops
             neutrino_compat: Advertise support for Neutrino-compatible UTXO metadata

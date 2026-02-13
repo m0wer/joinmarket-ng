@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Tor Connection Timeout Increased to 120s**: Increased the default Tor connection timeout from 30s to 120s across all components (maker, taker, directory client). The previous 30s timeout covered the entire SOCKS5 connection lifecycle (TCP + SOCKS negotiation + Tor circuit building + PoW solving), which is too short when PoW-protected hidden services are under DoS load. The reference JoinMarket implementation effectively has no SOCKS-level timeout (Twisted cancels the 60s timeout after TCP handshake, leaving circuit building with no limit). The new 120s default aligns with Tor's internal circuit timeout. Configurable via `connection_timeout` in the `[tor]` config section.
+
 ### Added
 
 - **Periodic Summary Notifications**: Makers now receive daily summary notifications with CoinJoin statistics (requests, successes, failures, earnings, volume). Enabled by default with `notify_summary = true` and 24-hour interval. To disable, set `notify_summary = false` in config.toml `[notifications]` section. Configurable interval via `summary_interval_hours` (1-168). Respects existing privacy settings (`include_amounts`). Added `get_history_stats_for_period()` for time-filtered history stats.

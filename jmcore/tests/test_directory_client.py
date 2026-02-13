@@ -8,6 +8,23 @@ from jmcore.directory_client import DirectoryClient, MessageType
 from jmcore.protocol import FEATURE_PEERLIST_FEATURES
 
 
+def test_directory_client_default_timeout():
+    """Test that DirectoryClient default timeout is 120s (matches Tor circuit timeout).
+
+    The timeout covers the entire SOCKS5 connection lifecycle including
+    Tor circuit building and PoW solving. Under PoW defense, Tor clients
+    solve proof-of-work challenges that can take significantly longer.
+    """
+    client = DirectoryClient("host", 1234, "mainnet")
+    assert client.timeout == 120.0
+
+
+def test_directory_client_custom_timeout():
+    """Test that DirectoryClient accepts custom timeout."""
+    client = DirectoryClient("host", 1234, "mainnet", timeout=60.0)
+    assert client.timeout == 60.0
+
+
 @pytest.mark.asyncio
 async def test_get_peerlist_with_features_logs_correctly():
     """Test that get_peerlist_with_features logs the correct message."""

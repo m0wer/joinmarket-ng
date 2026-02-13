@@ -166,8 +166,20 @@ async def connect_via_tor(
     socks_host: str = "127.0.0.1",
     socks_port: int = 9050,
     max_message_size: int = 2097152,  # 2MB
-    timeout: float = 30.0,
+    timeout: float = 120.0,
 ) -> TCPConnection:
+    """
+    Connect to an onion address via Tor SOCKS5 proxy.
+
+    The timeout covers the entire SOCKS5 connection lifecycle including
+    TCP handshake to the proxy, SOCKS5 negotiation, Tor circuit building,
+    and PoW solving (if the destination has Tor PoW defense enabled).
+
+    Under normal conditions, Tor circuit establishment takes 5-15 seconds.
+    With PoW defense active (during DoS attacks), the PoW solving can add
+    significant time. Tor's internal circuit timeout is ~120 seconds, so
+    the default matches that.
+    """
     try:
         import socket
 
@@ -335,7 +347,7 @@ class OnionPeer:
         location: str,
         socks_host: str = "127.0.0.1",
         socks_port: int = 9050,
-        timeout: float = 30.0,
+        timeout: float = 120.0,
         max_message_size: int = 2097152,
         on_message: Callable[[str, bytes], Coroutine[Any, Any, None]] | None = None,
         on_disconnect: Callable[[str], Coroutine[Any, Any, None]] | None = None,
@@ -350,7 +362,7 @@ class OnionPeer:
             location: Peer's onion address (host:port)
             socks_host: SOCKS proxy host for Tor
             socks_port: SOCKS proxy port for Tor
-            timeout: Connection timeout in seconds
+            timeout: Connection timeout in seconds (covers SOCKS + Tor circuit + PoW)
             max_message_size: Maximum message size in bytes
             on_message: Callback when message received (nick, data)
             on_disconnect: Callback when peer disconnects (nick)

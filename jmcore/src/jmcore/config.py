@@ -193,6 +193,17 @@ class WalletConfig(BaseModel):
     # Tor/SOCKS configuration
     socks_host: str = Field(default="127.0.0.1", description="Tor SOCKS5 proxy host")
     socks_port: int = Field(default=9050, ge=1, le=65535, description="Tor SOCKS5 proxy port")
+    connection_timeout: float = Field(
+        default=120.0,
+        gt=0.0,
+        description=(
+            "Timeout in seconds for Tor SOCKS5 connections. Covers TCP handshake, "
+            "SOCKS5 negotiation, Tor circuit building, and PoW solving. "
+            "Default 120s matches Tor's internal circuit timeout. "
+            "Under PoW defense (DoS attack), connections may take significantly "
+            "longer than normal (~5-15s)."
+        ),
+    )
 
     # HD wallet structure
     mixdepth_count: int = Field(

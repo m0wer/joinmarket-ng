@@ -113,6 +113,17 @@ class TorSettings(BaseModel):
         description="Target host for Tor hidden service (usually container name in Docker)",
     )
 
+    # Connection timeout
+    connection_timeout: float = Field(
+        default=120.0,
+        gt=0.0,
+        description=(
+            "Timeout in seconds for Tor SOCKS5 connections. Covers TCP handshake, "
+            "SOCKS5 negotiation, Tor circuit building, and PoW solving. "
+            "Default 120s matches Tor's internal circuit timeout."
+        ),
+    )
+
 
 class BitcoinSettings(BaseModel):
     """Bitcoin backend configuration."""
@@ -589,9 +600,12 @@ class OrderbookWatcherSettings(BaseModel):
         description="Maximum message size in bytes (2MB default)",
     )
     connection_timeout: float = Field(
-        default=30.0,
+        default=120.0,
         gt=0.0,
-        description="Connection timeout in seconds",
+        description=(
+            "Timeout in seconds for Tor SOCKS5 connections. Covers TCP handshake, "
+            "SOCKS5 negotiation, Tor circuit building, and PoW solving."
+        ),
     )
 
 

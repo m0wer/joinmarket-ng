@@ -140,6 +140,21 @@ class TestTakerConfig:
         with pytest.raises(ValidationError):
             TakerConfig(mnemonic=sample_mnemonic, rescan_interval_sec=30)
 
+    def test_connection_timeout_default(self, sample_mnemonic: str) -> None:
+        """Test that connection_timeout defaults to 120s (matches Tor circuit timeout).
+
+        The timeout covers the entire SOCKS5 connection lifecycle including
+        Tor circuit building and PoW solving. Under PoW defense, connections
+        can take much longer than the ~5-15s normal circuit establishment.
+        """
+        config = TakerConfig(mnemonic=sample_mnemonic)
+        assert config.connection_timeout == 120.0
+
+    def test_connection_timeout_inherited_from_wallet_config(self, sample_mnemonic: str) -> None:
+        """Test that TakerConfig inherits connection_timeout from WalletConfig."""
+        config = TakerConfig(mnemonic=sample_mnemonic, connection_timeout=90.0)
+        assert config.connection_timeout == 90.0
+
     def test_fee_rate_default_is_none(self, sample_mnemonic: str) -> None:
         """Test that fee_rate defaults to None (use estimation)."""
         config = TakerConfig(mnemonic=sample_mnemonic)

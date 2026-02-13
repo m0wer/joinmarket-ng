@@ -105,6 +105,7 @@ class Taker(TakerMonitoringMixin):
             nick_identity=self.nick_identity,
             socks_host=config.socks_host,
             socks_port=config.socks_port,
+            connection_timeout=config.connection_timeout,
             neutrino_compat=neutrino_compat,
         )
 

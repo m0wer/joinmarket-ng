@@ -174,6 +174,29 @@ class TestOnionPeerBasic:
         assert not peer.is_connected()
         assert peer.can_connect()
 
+    def test_peer_default_timeout(self):
+        """Test OnionPeer default timeout is 120s (matches Tor circuit timeout).
+
+        The timeout covers the entire SOCKS5 connection lifecycle including
+        Tor circuit building and PoW solving. Under PoW defense, Tor clients
+        solve proof-of-work challenges that can take significantly longer
+        than normal circuit establishment.
+        """
+        peer = OnionPeer(
+            nick="J5test",
+            location="test.onion:5222",
+        )
+        assert peer.timeout == 120.0
+
+    def test_peer_custom_timeout(self):
+        """Test OnionPeer accepts custom timeout."""
+        peer = OnionPeer(
+            nick="J5test",
+            location="test.onion:5222",
+            timeout=60.0,
+        )
+        assert peer.timeout == 60.0
+
     def test_peer_not_serving_onion(self):
         """Test OnionPeer with NOT-SERVING-ONION location."""
         peer = OnionPeer(
