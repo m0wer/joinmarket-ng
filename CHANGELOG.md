@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-02-14
+
 ### Fixed
 
 - **Orderbook Watcher: Inflated Fidelity Bond Count**: The "Fidelity Bonds" stat and per-directory bond counts were counting offers-with-bonds instead of unique bonds (by UTXO). Makers with dual offers (relative + absolute) backed by the same bond were counted twice. The frontend now uses the already-deduplicated `fidelitybonds` array for the total count, and the backend deduplicates by UTXO key per directory.
@@ -909,7 +911,8 @@ Releases prior to these changes (including 0.13.5, 0.13.6, and 0.13.7) cannot be
 - Pre-built image support for directory server compose.
 - Tor configuration instructions.
 
-[Unreleased]: ../../compare/0.14.0...HEAD
+[Unreleased]: ../../compare/0.15.0...HEAD
+[0.15.0]: ../../compare/0.14.0...0.15.0
 [0.14.0]: ../../compare/0.13.12...0.14.0
 [0.13.12]: ../../compare/0.13.11...0.13.12
 [0.13.11]: ../../compare/0.13.10...0.13.11
